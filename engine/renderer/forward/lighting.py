@@ -243,7 +243,7 @@ class LightingMixin:
         cookies = getattr(table, 'light_cookie', None)
         ids = cookies[slots] if cookies is not None and len(slots) else None
         if ids is None or not ids.any():
-            self._bind_cookie_placeholder()
+            self._cookie_array_bound = False
             return None
         array = self._light_cookies
         if array is None:
@@ -252,26 +252,32 @@ class LightingMixin:
             array = self._light_cookies = CookieArray(
                 gl, size=COOKIE_SIZE_LOW_POWER if self.lowpower_mode else COOKIE_SIZE)
         layers = array.layers(ids)
-        if not array.bind(shaders.COOKIE_TEXTURE_UNIT):
-            self._bind_cookie_placeholder()     # no image could be read
+        # False when no image could be read: the placeholder stands in.
+        self._cookie_array_bound = array.bind(shaders.COOKIE_TEXTURE_UNIT)
         return layers
 
     def _bind_cookie_placeholder(self):
         """A complete 1x1 array on the cookie unit while there is no cookie
-        array to bind (engine.light_cookies.bind_placeholder). Once per
-        frame's light packing: nothing else binds that unit."""
+        array bound (engine.light_cookies.bind_placeholder)."""
         from engine.light_cookies import bind_placeholder
         cache = self.__dict__.setdefault('_cookie_gl_cache', {})
         bind_placeholder(gl, shaders.COOKIE_TEXTURE_UNIT, cache)
 
     def _bind_light_cookies(self, uniforms):
-        """Point a lighting program's cookie sampler at its own unit.
+        """Point a lighting program's cookie sampler at its own unit, with a
+        complete texture there.
 
         Like the shadow samplers: a sampler2DArray left on unit 0 would share
-        it with the diffuse sampler2D and fail the draw. Program state, so it
-        is set once per program. The array itself is bound to that unit when
-        the light UBO is packed, and only while some light has a cookie.
+        it with the diffuse sampler2D and fail the draw, and one whose unit
+        holds nothing usable may be refused at draw time (macOS: "unloadable
+        ... using zero texture"). The cookie array is bound to the unit when
+        the light UBO is packed, while some light has a cookie; otherwise the
+        placeholder is bound here, beside the shadow samplers, not by the
+        packing (which stays free of texture work). The sampler's unit is
+        program state, set once per program.
         """
+        if not getattr(self, '_cookie_array_bound', False):
+            self._bind_cookie_placeholder()
         if uniforms.cookie_unit:
             return
         loc = uniforms['fioCookies']
