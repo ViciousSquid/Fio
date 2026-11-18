@@ -309,3 +309,44 @@ def test_an_effect_is_harmless_unless_given_a_blast(fio_session, clock):
     player.pos = glm.vec3(60.0, player.pos.y, 400.0)
     logic.io_manager._execute_input("mine", "Explode", "", "test")
     assert logic.player_runtime.player_health == 75             # its own blast
+
+
+def _hits(session, prop, start, direction):
+    logic = session.logic
+    before = logic.explosion_runtime.damage_taken.get(id(prop), 0.0)
+    weapon = SimpleNamespace(damage=1, range=4000.0, mode="hitscan")
+    logic.combat_runtime._fire_rays(weapon, glm.vec3(*start), [glm.normalize(glm.vec3(*direction))])
+    return logic.explosion_runtime.damage_taken.get(id(prop), 0.0) > before
+
+
+def test_a_shot_anywhere_on_the_barrel_hits_it(fio_session, clock):
+    """Not only at its middle: its edges and top and bottom too."""
+    session = _play(fio_session, clock, [_barrel("b1", 0.0, 0.0, explosive_health=9999)])
+    barrel = _named(session, "b1")
+    lo, hi = session.logic.explosion_runtime.box(barrel)
+    for x in (lo[0] + 2.0, 0.0, hi[0] - 2.0):
+        for y in (lo[1] + 2.0, (lo[1] + hi[1]) * 0.5, hi[1] - 2.0):
+            assert _hits(session, barrel, (x, y, 300.0), (0.0, 0.0, -1.0)), (x, y)
+    assert not _hits(session, barrel, (hi[0] + 4.0, 30.0, 300.0), (0.0, 0.0, -1.0))
+    assert not _hits(session, barrel, (0.0, hi[1] + 4.0, 300.0), (0.0, 0.0, -1.0))
+
+
+def test_a_barrel_lying_on_its_side_is_hit_along_its_whole_length(fio_session, clock):
+    """Knocked over (physics writes its rotation), a barrel is a long low
+    shape: a shot at either end hits it, a shot where it no longer stands
+    passes by."""
+    lying = _barrel("b1", 0.0, 0.0, explosive_health=9999, rotation=[90.0, 0.0, 0.0])
+    lying.pos = [0.0, 23.0, 0.0]            # its round side on the floor
+    session = _play(fio_session, clock, [lying])
+    barrel = _named(session, "b1")
+    ex = session.logic.explosion_runtime
+    lo, hi = ex.box(barrel)
+    # Turned by 90 degrees about X, the drum's height lies along +Z.
+    assert hi[2] - lo[2] > 60.0 and hi[1] - lo[1] < 50.0
+    middle = (lo[1] + hi[1]) * 0.5
+    for z in (lo[2] + 3.0, (lo[2] + hi[2]) * 0.5, hi[2] - 3.0):
+        assert _hits(session, barrel, (300.0, middle, z), (-1.0, 0.0, 0.0)), z
+    # Above where it lies, though an upright barrel would be there.
+    assert not _hits(session, barrel, (300.0, hi[1] + 15.0, 10.0), (-1.0, 0.0, 0.0))
+    assert ex.point_hit(0.0, middle, hi[2] - 3.0) is barrel
+    assert ex.point_hit(0.0, hi[1] + 15.0, 10.0) is None

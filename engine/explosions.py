@@ -17,6 +17,7 @@ when it ends, with no outputs fired.
 
 from __future__ import annotations
 
+import math
 import time
 
 from .effect_entity import EFFECT_EXPLOSION
@@ -37,6 +38,38 @@ def returns_after_explosion(props) -> bool:
     """Whether an Effect that is not an EXPLOSION goes back to its own type
     once it has exploded (the default) rather than staying one."""
     return _flag(props.get('return_after_explosion', True))
+
+
+def _turn(rotation):
+    """The rotation ``[x, y, z]`` degrees a model is drawn with, as three
+    rows (Y, then X, then Z, as the renderer applies them), or None for none."""
+    try:
+        rx, ry, rz = (float(rotation[0]), float(rotation[1]), float(rotation[2]))
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not (rx or ry or rz):
+        return None
+    cx, sx = math.cos(math.radians(rx)), math.sin(math.radians(rx))
+    cy, sy = math.cos(math.radians(ry)), math.sin(math.radians(ry))
+    cz, sz = math.cos(math.radians(rz)), math.sin(math.radians(rz))
+    y = ((cy, 0.0, sy), (0.0, 1.0, 0.0), (-sy, 0.0, cy))
+    x = ((1.0, 0.0, 0.0), (0.0, cx, -sx), (0.0, sx, cx))
+    z = ((cz, -sz, 0.0), (sz, cz, 0.0), (0.0, 0.0, 1.0))
+
+    def mul(a, b):
+        return tuple(tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+                     for i in range(3))
+    return mul(mul(y, x), z)
+
+
+def _rotate(turn, v):
+    return tuple(turn[i][0] * v[0] + turn[i][1] * v[1] + turn[i][2] * v[2]
+                 for i in range(3))
+
+
+def _rotate_back(turn, v):
+    return tuple(turn[0][i] * v[0] + turn[1][i] * v[1] + turn[2][i] * v[2]
+                 for i in range(3))
 
 
 def _position(thing):
@@ -333,9 +366,12 @@ class ExplosionRuntime:
             cached = self._explosives = (key, standing)
         return cached[1]
 
-    def box(self, prop):
-        """*prop*'s world box ``(lo, hi)`` (its model's bounds, scaled; the
-        rotation is not applied: a barrel is round)."""
+    def _model_box(self, prop):
+        """*prop*'s model as the renderer places it: ``(lo, hi, scale, pos,
+        turn)`` -- its bounds in model space, its scale, its position, and its
+        rotation as three rows (None when it is not turned). The renderer's
+        order: turn by Y, then X, then Z (degrees ``rotation`` [x, y, z]),
+        after scaling; a toppled barrel's ``rotation`` is written by physics."""
         props = prop.properties
         path = props.get('model_path', '')
         if path not in self._bounds:
@@ -344,13 +380,42 @@ class ExplosionRuntime:
         scale = props.get('scale', 1.0)
         if isinstance(scale, (int, float)):
             scale = (scale, scale, scale)
-        x, y, z = _position(prop)
+        scale = tuple(float(v) or 1.0 for v in scale[:3])
         if bounds:
-            lo, hi = bounds
+            lo, hi = (tuple(float(v) for v in bounds[0]),
+                      tuple(float(v) for v in bounds[1]))
+        else:
+            lo, hi = (-32.0, 0.0, -32.0), (32.0, 64.0, 32.0)
+        return lo, hi, scale, _position(prop), _turn(props.get('rotation'))
+
+    def box(self, prop):
+        """*prop*'s world box ``(lo, hi)``: around its model's bounds, scaled
+        and turned as it is drawn (a barrel lying on its side is a long low
+        box, not an upright one)."""
+        lo, hi, scale, (x, y, z), turn = self._model_box(prop)
+        if turn is None:
             return ((x + lo[0] * scale[0], y + lo[1] * scale[1], z + lo[2] * scale[2]),
                     (x + hi[0] * scale[0], y + hi[1] * scale[1], z + hi[2] * scale[2]))
-        half = 32.0 * float(scale[0])
-        return ((x - half, y, z - half), (x + half, y + 64.0 * float(scale[1]), z + half))
+        corners = [_rotate(turn, (cx * scale[0], cy * scale[1], cz * scale[2]))
+                   for cx in (lo[0], hi[0]) for cy in (lo[1], hi[1]) for cz in (lo[2], hi[2])]
+        return (tuple(min(c[i] for c in corners) + (x, y, z)[i] for i in range(3)),
+                tuple(max(c[i] for c in corners) + (x, y, z)[i] for i in range(3)))
+
+    def _to_model(self, prop, point, direction=None):
+        """*point* (and *direction*) in *prop*'s model space, with its bounds:
+        ``(lo, hi, point, direction)``. A distance along a ray is the same in
+        both spaces."""
+        lo, hi, scale, pos, turn = self._model_box(prop)
+        rel = tuple(float(point[i]) - pos[i] for i in range(3))
+        if turn is not None:
+            rel = _rotate_back(turn, rel)
+        local = tuple(rel[i] / scale[i] for i in range(3))
+        if direction is None:
+            return lo, hi, local, None
+        d = tuple(float(direction[i]) for i in range(3))
+        if turn is not None:
+            d = _rotate_back(turn, d)
+        return lo, hi, local, tuple(d[i] / scale[i] for i in range(3))
 
     def centre(self, prop):
         lo, hi = self.box(prop)
@@ -360,24 +425,23 @@ class ExplosionRuntime:
 
     def trace(self, origin, direction, reach):
         """The nearest explosive Prop a ray meets within *reach*:
-        ``(prop, distance)``, or None."""
+        ``(prop, distance)``, or None. Against each model's own box, turned
+        as it is drawn: the whole barrel is hit, standing or lying."""
         standing = self.explosives()
         if not standing:
             return None
-        ox, oy, oz = float(origin[0]), float(origin[1]), float(origin[2])
-        dx, dy, dz = float(direction[0]), float(direction[1]), float(direction[2])
         best = None
         for prop in standing:
-            lo, hi = self.box(prop)
+            lo, hi, o, d = self._to_model(prop, origin, direction)
             t0, t1 = 0.0, float(reach)
-            for o, d, a, b in ((ox, dx, lo[0], hi[0]), (oy, dy, lo[1], hi[1]),
-                               (oz, dz, lo[2], hi[2])):
-                if abs(d) < 1e-9:
-                    if o < a or o > b:
+            for axis in range(3):
+                if abs(d[axis]) < 1e-12:
+                    if o[axis] < lo[axis] or o[axis] > hi[axis]:
                         t0 = t1 + 1.0
                         break
                     continue
-                n, f = (a - o) / d, (b - o) / d
+                n = (lo[axis] - o[axis]) / d[axis]
+                f = (hi[axis] - o[axis]) / d[axis]
                 if n > f:
                     n, f = f, n
                 t0, t1 = max(t0, n), min(t1, f)
@@ -388,13 +452,14 @@ class ExplosionRuntime:
         return best
 
     def point_hit(self, x, y, z):
-        """The explosive Prop whose box holds the point, or None."""
+        """The explosive Prop whose model box (turned as it is drawn) holds
+        the point, or None."""
         standing = self.explosives()
         if not standing:
             return None
         for prop in standing:
-            lo, hi = self.box(prop)
-            if lo[0] <= x <= hi[0] and lo[1] <= y <= hi[1] and lo[2] <= z <= hi[2]:
+            lo, hi, p, _d = self._to_model(prop, (x, y, z))
+            if all(lo[i] <= p[i] <= hi[i] for i in range(3)):
                 return prop
         return None
 
