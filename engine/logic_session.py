@@ -249,7 +249,15 @@ class LogicSession:
             if self.physics_enabled:
                 # Whichever physics is selected (engine.physics.registry):
                 # the engine drives it through the contract and nothing else.
-                self.physics_world = create_physics(self.spatial_grid)
+                try:
+                    self.physics_world = create_physics(self.spatial_grid)
+                except (KeyError, TypeError) as exc:
+                    # A selected physics that cannot run here (gone, or not
+                    # satisfying the contract): play on with Fio's own.
+                    from .physics import DEFAULT_PHYSICS
+                    print(f"[Physics] {exc}; using {DEFAULT_PHYSICS}")
+                    self.physics_world = create_physics(
+                        self.spatial_grid, DEFAULT_PHYSICS)
                 self.physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
             else:
                 # Switched off: no engine, and nothing of one kept loaded.

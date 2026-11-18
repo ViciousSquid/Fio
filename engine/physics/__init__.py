@@ -11,6 +11,9 @@ package exports:
   :func:`world_gravity`, and :data:`GAME_RULES` / :func:`physics_rules`
 * bookkeeping for a solver that does not keep it: :class:`SupportGraph`,
   :class:`CellTracker`
+* the contract's own version, :data:`PHYSICS_CONTRACT_VERSION`, and the
+  checks the registry makes of what a factory returns:
+  :func:`missing_members`, :func:`contract_compatible`
 * the registry: :func:`register_physics`, :func:`create_physics`,
   :func:`select_physics`, :func:`available_physics`, :data:`DEFAULT_PHYSICS`
 
@@ -27,7 +30,9 @@ and helpers from :mod:`engine.physics.soma`.
 from .api import (
     BODY_BRUSH, BODY_PROPERTIES, CRUSH_DAMAGE, GAME_RULES, HEAVY_MASS,
     NO_PHYSICS, PHYSICS_EVENTS, PUSH_SCALE, SV_GRAVITY, WORLD_QUERIES, Body,
-    NoPhysics, Physics, physics_rules, restitution, world_gravity)
+    NoPhysics, Physics, PHYSICS_CONTRACT_VERSION, PHYSICS_CONTRACT_VERSION_INFO,
+    contract_compatible, missing_members, physics_rules, restitution,
+    world_gravity)
 from .bookkeeping import CellTracker, SupportGraph
 from .registry import (
     DEFAULT_PHYSICS, available_physics, create_physics, physics_factory,
@@ -39,6 +44,8 @@ __all__ = [
     'SV_GRAVITY', 'HEAVY_MASS', 'CRUSH_DAMAGE', 'world_gravity',
     'PUSH_SCALE', 'restitution', 'GAME_RULES', 'physics_rules',
     'SupportGraph', 'CellTracker',
+    'PHYSICS_CONTRACT_VERSION', 'PHYSICS_CONTRACT_VERSION_INFO',
+    'missing_members', 'contract_compatible',
     'DEFAULT_PHYSICS', 'register_physics', 'create_physics', 'select_physics',
     'selected_physics', 'available_physics', 'physics_factory',
     'unload_physics',

@@ -67,14 +67,30 @@ def create_physics(spatial_grid, name=None):
     """Create the physics registered under *name* (default: the selected one)
     over *spatial_grid*, the session's populated grid.
 
-    Raises KeyError for an unknown name.
+    What the factory returns is checked against the contract before the
+    engine drives it: every member of :class:`~engine.physics.api.Physics`
+    is there (``missing_members``), and it was not written for a newer or
+    another major contract version (``contract_compatible``).
+
+    Raises KeyError for an unknown name, TypeError for an object that does
+    not satisfy the contract.
     """
+    from .api import contract_compatible, missing_members
     if name is None:
         name = selected_physics()
     factory = physics_factory(name)
     if factory is None:
         raise KeyError(f"no physics registered as {name!r}")
-    return factory(spatial_grid)
+    physics = factory(spatial_grid)
+    missing = missing_members(physics)
+    if missing:
+        raise TypeError(
+            f"physics {name!r} does not satisfy the physics contract: "
+            f"missing or not callable: {', '.join(missing)}")
+    reason = contract_compatible(physics)
+    if reason is not None:
+        raise TypeError(f"physics {name!r} cannot run here: {reason}")
+    return physics
 
 
 def unload_physics():

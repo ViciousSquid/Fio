@@ -413,6 +413,8 @@ class Soma:
     PUSH_SCALE = api.PUSH_SCALE
     #: Every one of the contract's game rules (:data:`engine.physics.GAME_RULES`).
     rules = frozenset(api.GAME_RULES)
+    #: The physics contract Soma is written against.
+    contract_version = api.PHYSICS_CONTRACT_VERSION
     #: A rebound slower than this (units per second) is not a bounce: the
     #: body settles instead of chattering on the floor.
     MIN_BOUNCE_SPEED = 60.0

@@ -60,6 +60,31 @@ and tested without NumPy, PyGLM or a running session.
 from typing import (Any, Callable, Iterable, Mapping, Optional, Protocol,
                     Sequence, Tuple, runtime_checkable)
 
+#: The version of this contract, apart from the plugin API's (which is
+#: plugins.api.API_VERSION). A physics may say which it was written against
+#: with a ``contract_version`` attribute; the registry refuses one written
+#: for a newer contract or another major version, and -- while the major is
+#: 0, when a minor version may change what there is -- another minor
+#: version (contract_compatible). 0.9 is the contract with the world as
+#: shapes (solid_shapes, shape_pose, world_version, prepare_mesh,
+#: mesh_columns), the mesh keys of BODY_BRUSH, PUSH_SCALE, restitution,
+#: GAME_RULES / physics_rules and engine.physics.bookkeeping; 1.0 is to
+#: follow with fuller support for an adapter over a general solver (Bullet).
+PHYSICS_CONTRACT_VERSION = "0.9.0"
+
+
+def _version_info(value) -> Tuple[int, ...]:
+    parts = []
+    for piece in str(value).strip().split('.')[:3]:
+        digits = ''.join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+PHYSICS_CONTRACT_VERSION_INFO = _version_info(PHYSICS_CONTRACT_VERSION)
+
 #: Quake 2's sv_gravity, in units per second squared, pulling down: the
 #: world's gravity until something changes it.
 SV_GRAVITY = 800.0
@@ -446,6 +471,48 @@ def _nothing(*args, **kwargs):
 
 #: The one :class:`NoPhysics`.
 NO_PHYSICS = NoPhysics()
+
+
+def missing_members(physics: Any) -> list:
+    """The members of :class:`Physics` *physics* lacks, sorted: an attribute
+    it does not have, or a method it has that cannot be called. Empty for
+    an object that satisfies the contract."""
+    import typing
+    names = (typing.get_protocol_members(Physics)
+             if hasattr(typing, 'get_protocol_members')
+             else [n for n in vars(Physics) if not n.startswith('_')]
+             + list(getattr(Physics, '__annotations__', {})))
+    missing = []
+    for name in sorted(set(names)):
+        try:
+            value = getattr(physics, name)
+        except AttributeError:
+            missing.append(name)
+            continue
+        except Exception:
+            continue                    # a property that raised: it is there
+        if callable(getattr(Physics, name, None)) and not callable(value):
+            missing.append(name)
+    return missing
+
+
+def contract_compatible(physics: Any) -> Optional[str]:
+    """Why *physics* cannot run on this contract, or None when it can.
+
+    One that does not say (no ``contract_version``) is taken as written for
+    this one. One written for a newer version, or another major version --
+    or, while the major is 0, another minor version -- is refused: it may
+    rely on what is not here, or on what has changed."""
+    declared = getattr(physics, 'contract_version', None)
+    if declared is None or callable(declared):
+        return None
+    wanted = _version_info(declared)
+    have = PHYSICS_CONTRACT_VERSION_INFO
+    if (wanted[0] != have[0] or wanted > have
+            or (have[0] == 0 and wanted[1] != have[1])):
+        return ("written for physics contract %s; this Fio has %s"
+                % (declared, PHYSICS_CONTRACT_VERSION))
+    return None
 
 
 def world_gravity(world: Optional[Physics] = None) -> float:
