@@ -414,14 +414,19 @@ class DecalsMixin:
             return 0
         self._decal_image_names = {layer: names[layer] for layer in self._decal_image_index}
         self._decal_image_side = side
-        stacked = np.ascontiguousarray(np.stack(data), dtype=np.uint8)
         texture = int(gl.glGenTextures(1))
         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
         gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
-        gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_RGBA8, side, side, len(data), 0,
-                        gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, stacked)
-        gl.glGenerateMipmap(gl.GL_TEXTURE_2D_ARRAY)
+        # Every level from _mip_chain, as _update_sign_layers rewrites a
+        # sign's layer: a sign updated in place is then the same texels as
+        # the array made afresh, whatever filter the driver's
+        # glGenerateMipmap would have used.
+        for level, stacked in enumerate(zip(*(_mip_chain(layer) for layer in data))):
+            stacked = np.ascontiguousarray(np.stack(stacked), dtype=np.uint8)
+            edge = stacked.shape[1]
+            gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, level, gl.GL_RGBA8, edge, edge, len(data),
+                            0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, stacked)
         for pname, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR),
                              (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
                              (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
