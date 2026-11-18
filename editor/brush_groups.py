@@ -8,9 +8,9 @@ entities or both. Grouped objects move together:
 
 * in the editor, a move or a rotation of one member carries the others
   (:func:`with_mates` widens the set a drag moves);
-* in Play, a brush member that is a mover or a door carries the brushes that
-  are not (``engine.logic_groups``) -- a door and the glass set into it.
-  Entities are not carried in Play: their grouping is an editor one.
+* in Play, a brush member that is a mover or a door carries the other
+  members, brushes and entities alike (``engine.logic_groups``) -- a door
+  and the glass set into it, a lift and the lights and props on it.
 
 Every helper here takes a mixed list of brush dicts and ``Thing`` objects
 (:func:`scene_objects` gives the whole scene's, brushes first). Anything else

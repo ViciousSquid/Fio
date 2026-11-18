@@ -204,3 +204,111 @@ def test_a_player_standing_on_a_carried_brush_is_carried(fio_session, monkeypatc
         "the player was left behind by the deck they stand on")
     assert player.ground_object is deck
     session.stop_play()
+
+
+# ---------------------------------------------------------------------------
+# Entities in a group ride its mover or door too
+# ---------------------------------------------------------------------------
+
+def _lamp(name="lamp", pos=(40, 150, 0), group="lift", **props):
+    properties = {"type": "light", "name": name, "id": "light-" + name,
+                  "colour": [255, 200, 150]}
+    if group is not None:
+        properties["brush_group"] = group
+    properties.update(props)
+    return {"type": "light", "pos": list(pos), "properties": properties}
+
+
+def _with_things(level, *things):
+    level["things"].extend(things)
+    return level
+
+
+def _thing(session, name):
+    return next(t for t in session.state.things if t.properties.get("name") == name)
+
+
+def test_a_grouped_entity_rides_its_group_s_mover(fio_session, monkeypatch):
+    session = fio_session(_with_things(_level(_mover()), _lamp()))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    lift, lamp = _brush(session, "lift"), _thing(session, "lamp")
+    session.start_play()
+    session.step(20)
+
+    moved = _centre(lift)
+    assert moved[1] > 101.0, "the mover should have risen"
+    assert list(lamp.pos) == pytest.approx(
+        [moved[0] + 40.0, moved[1] + 50.0, moved[2]]), (
+        "the grouped entity did not keep its place on the mover")
+    session.stop_play()
+    assert list(lamp.pos) == pytest.approx([40.0, 150.0, 0.0]), (
+        "stopping play did not put the entity back where it was authored")
+    assert "_group_home" not in lamp.properties
+
+
+def test_an_entity_in_no_group_or_another_group_stays_put(fio_session, monkeypatch):
+    session = fio_session(_with_things(
+        _level(_mover()),
+        _lamp("loose", pos=(-40, 150, 0), group=None),
+        _lamp("other", pos=(0, 150, 40), group="elsewhere")))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    session.start_play()
+    session.step(20)
+    assert _centre(_brush(session, "lift"))[1] > 101.0
+    assert list(_thing(session, "loose").pos) == pytest.approx([-40.0, 150.0, 0.0])
+    assert list(_thing(session, "other").pos) == pytest.approx([0.0, 150.0, 40.0])
+    session.stop_play()
+
+
+def test_a_grouped_entity_orbits_with_a_rotating_mover(fio_session, monkeypatch):
+    session = fio_session(_with_things(
+        _level(_mover(rotate=True, rot_axis=[0, 1, 0], speed=90.0, distance=0.0)),
+        _lamp(pos=(40, 130, 0))))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    lift, lamp = _brush(session, "lift"), _thing(session, "lamp")
+    session.start_play()
+    session.step(20)
+
+    spin = brush_placement.runtime_spin(lift)
+    assert spin is not None and abs(float(spin[3])) > 1.0, "the mover should have turned"
+    centre = _centre(lift)
+    turn = brush_placement.rotation_matrix(spin[:3], float(spin[3]))
+    expected = [centre[i] + turn[i][0] * 40.0 + turn[i][1] * 30.0 for i in range(3)]
+    assert list(lamp.pos) == pytest.approx(expected, abs=1e-3), (
+        "the grouped entity did not turn about the mover's centre")
+    radius = math.hypot(lamp.pos[0] - centre[0], lamp.pos[2] - centre[2])
+    assert radius == pytest.approx(40.0, abs=1e-3)
+    session.stop_play()
+    assert list(lamp.pos) == pytest.approx([40.0, 130.0, 0.0])
+
+
+def test_a_grouped_entity_rides_a_door(fio_session, monkeypatch):
+    door = {"id": "door", "name": "door", "pos": [0, 64, 0], "size": [128, 128, 16],
+            "is_door": True, "door_direction": "up", "door_distance": 120.0,
+            "door_speed": 200.0, "brush_group": "front door"}
+    session = fio_session(_with_things(
+        _level(door), _lamp(pos=(0, 140, 20), group="front door")))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    door, lamp = _brush(session, "door"), _thing(session, "lamp")
+    session.start_play()
+    session.step(2)
+    runtime = session.logic.mover_runtime
+    index = next(i for i, b in runtime.doors if b is door)
+    runtime._trigger_door_open(index, door)
+    session.step(30)
+
+    opened = _centre(door)
+    assert opened[1] > 100.0, "the door should have opened"
+    assert list(lamp.pos) == pytest.approx([opened[0], opened[1] + 76.0, opened[2] + 20.0]), (
+        "the grouped entity was left behind by its door")
+    session.stop_play()
+    assert list(lamp.pos) == pytest.approx([0.0, 140.0, 20.0])
+
+
+def test_an_entity_parented_to_a_mover_is_left_to_its_parent(fio_session, monkeypatch):
+    from engine.logic_groups import carried_entities
+    session = fio_session(_with_things(
+        _level(_mover()), _lamp(parent_mover="lift"), _lamp("rider", pos=(0, 150, 40))))
+    names = sorted(t.properties["name"] for t, _l in carried_entities(
+        session.state.brushes, session.state.things))
+    assert names == ["rider"]

@@ -1,4 +1,5 @@
-"""Brush groups in Play: grouped brushes ride the group's mover or door.
+"""Brush groups in Play: grouped brushes and entities ride the group's mover
+or door.
 
 Brushes sharing a ``brush_group`` name are attached to one another (the
 editor moves them together: ``editor.brush_groups``). In Play the member
@@ -20,6 +21,13 @@ standing on a follower is carried with it, as one on the mover itself is.
 What play writes into a follower's dict is put back when play stops
 (:func:`detach`); ``group_follower`` marks one in a saved game, so loading
 it does not mistake the follower for a mover of its own.
+
+Entities in a group (``brush_group`` in their properties) are carried the
+same way: each tick the leader has moved, an entity is placed at its
+authored offset from the leader, turned by the leader's spin about the
+leader's centre. Its position is all that is carried (an entity's facing is
+its own). An entity parented to a mover (``parent_mover``) follows that
+mover instead. Where an entity was authored is put back when play stops.
 """
 
 from __future__ import annotations
@@ -32,6 +40,8 @@ GROUP_KEY = 'brush_group'
 FOLLOWER_KEY = 'group_follower'
 #: What a follower's own values were before play (runtime-only: not saved).
 _RESTORE_KEY = '_group_restore'
+#: Where a carried entity was before play (runtime-only: not saved).
+ENTITY_HOME_KEY = '_group_home'
 _MISSING = object()
 
 
@@ -55,21 +65,65 @@ def _follower_values(leader):
     }
 
 
+def _group_name(props):
+    return str(props.get(GROUP_KEY) or '').strip() if isinstance(props, dict) else ''
+
+
+def _brushes_by_group(brushes):
+    by_group = {}
+    for brush in brushes:
+        name = _group_name(brush)
+        if name:
+            by_group.setdefault(name, []).append(brush)
+    return by_group
+
+
+def _leader_of(chosen):
+    leaders = [b for b in chosen if _is_leader(b)]
+    if not leaders:
+        return None
+    # A door first: a door with a mover's flag too still opens as a door.
+    return next((b for b in leaders if b.get('is_door')), leaders[0])
+
+
+def leaders(brushes):
+    """``{group name: leader brush}`` for every group that has a mover or a
+    door among its brushes."""
+    found = {}
+    for name, chosen in _brushes_by_group(brushes).items():
+        leader = _leader_of(chosen)
+        if leader is not None:
+            found[name] = leader
+    return found
+
+
+def carried_entities(brushes, things):
+    """``[(entity, leader)]``: every entity in a group whose brushes have a
+    leader, except one parented to a mover (``parent_mover``: that mover
+    carries it)."""
+    by_name = leaders(brushes)
+    if not by_name:
+        return []
+    links = []
+    for thing in things:
+        props = getattr(thing, 'properties', None)
+        name = _group_name(props)
+        if not name or name not in by_name or props.get('parent_mover'):
+            continue
+        if getattr(thing, 'pos', None) is None:
+            continue
+        links.append((thing, by_name[name]))
+    return links
+
+
 def attach(brushes):
     """Make every grouped brush that does not move a follower of its group's
     leader. Returns ``[(follower, leader)]``. Safe to call again."""
-    by_group = {}
-    for brush in brushes:
-        name = str(brush.get(GROUP_KEY) or '').strip()
-        if name:
-            by_group.setdefault(name, []).append(brush)
     links = []
-    for chosen in by_group.values():
-        leaders = [b for b in chosen if _is_leader(b)]
-        if not leaders:
+    for chosen in _brushes_by_group(brushes).values():
+        leader = _leader_of(chosen)
+        if leader is None:
             continue
-        # A door first: a door with a mover's flag too still opens as a door.
-        leader = next((b for b in leaders if b.get('is_door')), leaders[0])
         for brush in chosen:
             if _is_leader(brush):
                 continue
@@ -103,24 +157,47 @@ class LogicGroups:
     def __init__(self, logic):
         self.logic = logic
         #: One entry per leader: [leader, [(follower, offset from the
-        #: leader's authored centre)], where it was last seen (centre, angle)]
+        #: leader's authored centre)], where it was last seen (centre, angle),
+        #: [(entity, offset from the leader's authored centre)]]
         self._links = []
+        self._entities = []
 
     def attach(self):
-        """Before the mover rows are built: enter the followers as movers."""
-        links = attach(self.logic.editor_state.brushes)
+        """Before the mover rows are built: enter the followers as movers,
+        and note the entities each leader carries."""
+        state = self.logic.editor_state
+        links = attach(state.brushes)
         by_leader = {}
+
+        def entry_for(leader):
+            return by_leader.setdefault(id(leader), [leader, [], None, []])
+
         for follower, leader in links:
             home = brush_placement.authored_box(follower)
             lead = brush_placement.authored_box(leader)
-            entry = by_leader.setdefault(id(leader), [leader, [], None])
-            entry[1].append((follower, (
+            entry_for(leader)[1].append((follower, (
                 home[0] - lead[0], home[1] - lead[1], home[2] - lead[2])))
+        entities = carried_entities(state.brushes, getattr(state, 'things', ()) or ())
+        self._entities = []
+        for thing, leader in entities:
+            props = thing.properties
+            if ENTITY_HOME_KEY not in props:
+                props[ENTITY_HOME_KEY] = [float(v) for v in thing.pos[:3]]
+            home = props[ENTITY_HOME_KEY]
+            lead = brush_placement.authored_box(leader)
+            entry_for(leader)[3].append((thing, (
+                home[0] - lead[0], home[1] - lead[1], home[2] - lead[2])))
+            self._entities.append(thing)
         self._links = list(by_leader.values())
-        return bool(links)
+        return bool(links or entities)
 
     def detach(self):
         self._links = []
+        for thing in self._entities:
+            home = thing.properties.pop(ENTITY_HOME_KEY, None)
+            if home is not None:
+                thing.pos = list(home)
+        self._entities = []
         detach(self.logic.editor_state.brushes)
 
     def update(self):
@@ -132,7 +209,7 @@ class LogicGroups:
         player = self.logic.player_runtime.player
         ground = getattr(player, 'ground_object', None) if player else None
         for entry in self._links:
-            leader, followers, seen = entry
+            leader, followers, seen, entities = entry
             now = table.position_of(leader)
             spin = brush_placement.runtime_spin(leader)
             angle = float(spin[3]) if spin is not None else 0.0
@@ -141,15 +218,21 @@ class LogicGroups:
                 continue                # the leader is still: so is its group
             entry[2] = key
             turn = brush_placement.rotation_matrix(spin[:3], angle) if angle else None
-            for follower, offset in followers:
+
+            def carried(offset):
                 dx, dy, dz = offset
                 if turn is not None:
                     dx, dy, dz = (
                         turn[0][0] * offset[0] + turn[0][1] * offset[1] + turn[0][2] * offset[2],
                         turn[1][0] * offset[0] + turn[1][1] * offset[1] + turn[1][2] * offset[2],
                         turn[2][0] * offset[0] + turn[2][1] * offset[1] + turn[2][2] * offset[2])
-                x, y, z = now[0] + dx, now[1] + dy, now[2] + dz
+                return now[0] + dx, now[1] + dy, now[2] + dz
+
+            for follower, offset in followers:
+                x, y, z = carried(offset)
                 if follower is ground:
                     was = table.position_of(follower)
                     player.pos += glm.vec3(x - was[0], y - was[1], z - was[2])
                 table.restore_placement(follower, (x, y, z), angle)
+            for thing, offset in entities:
+                thing.pos = [float(v) for v in carried(offset)]
