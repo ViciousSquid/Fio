@@ -246,7 +246,10 @@ def test_editor_mode_still_reaches_super_key_handlers():
     release = _key_handler_source("keyReleaseEvent")
     assert "super().keyPressEvent(event)" in press
     assert "super().keyReleaseEvent(event)" in release
-    assert "self.update_views()" in release
+    # Releasing a key repaints the views without resetting them: update_views()
+    # calls reset_state() on every 2D view and would end a drag in progress.
+    assert "self.refresh_views()" in release
+    assert "self.update_views()" not in release
 
 
 def _simulate(play_mode, auto_repeat):

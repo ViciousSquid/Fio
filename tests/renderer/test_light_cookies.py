@@ -112,18 +112,12 @@ def test_an_ordinary_frame_loads_nothing():
 
 
 def test_the_cookie_array_skips_unreadable_images():
-    calls = []
-
-    class FakeGL:
-        def __getattr__(self, name):
-            if name.startswith('GL_'):
-                return 0
-            return lambda *a, **k: calls.append(name) or 1
-
-    array = light_cookies.CookieArray(FakeGL(), read=lambda path: None, size=8)
+    # No GL context at all: an image that cannot be read must never reach
+    # the upload, so any GL call here would fail on None.
+    array = light_cookies.CookieArray(None, read=lambda path: None, size=8)
     missing = intern_cookie('assets/textures/cookies/missing.png')
     assert array.layers([0, missing]).tolist() == [0, 0]
-    assert array.texture is None and not calls
+    assert array.texture is None
 
 
 def test_cookie_images_are_packaged_with_the_map():
