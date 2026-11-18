@@ -454,6 +454,71 @@ class QtGameView(QOpenGLWidget):
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
 
+    #: Turning the camera this fast (radians a second) pushes the lens drops
+    #: as hard as they are pushed (engine.lens_water's motion of 1).
+    LENS_TURN_FOR_FULL_PUSH = 4.0
+
+    def _draw_lens_water(self, render_state, splitscreen):
+        """Advance and draw the water on the camera's lens (engine.lens_water).
+
+        When the player's eye comes up out of the water -- from deep water,
+        or standing up after crouching under -- the lens is splashed, and the
+        drops run off and dry: gone within LENS_WATER_SECONDS, always. Waist deep
+        with the eye above the water, the bottom half of the lens has drops;
+        shallower, none. Under water there are none. Purely visual, by real time, on this thread;
+        nothing at all is done while the lens is dry and the eye is not under.
+        """
+        lens = getattr(self, '_lens_water', None)
+        if lens is None:
+            from engine.lens_water import LensWater
+            from engine.renderer.core.lens_water_gl import LensWaterPass
+            lens = self._lens_water = LensWater()
+            self._lens_pass = LensWaterPass()
+            self._lens_was_under = False
+            self._lens_clock = None
+            self._lens_look = None
+        if not self.play_mode or render_state is None:
+            if lens.active:
+                lens.clear()
+            self._lens_was_under = False
+            self._lens_clock = None
+            self._lens_look = None
+            return
+        under = bool(getattr(render_state, 'player_underwater', False))
+        if under:
+            if lens.active:
+                lens.submerged()
+        elif self._lens_was_under:
+            lens.surfaced()
+        self._lens_was_under = under
+        now = time.perf_counter()
+        dt = 0.0 if self._lens_clock is None else now - self._lens_clock
+        # Waist deep, the eye above the water: drops on the bottom half.
+        if getattr(render_state, 'player_wading', False):
+            lens.standing_in_water(dt)
+        look = (float(render_state.player_angle), float(render_state.player_pitch))
+        if not lens.active:
+            self._lens_clock, self._lens_look = now, look
+            return
+        motion = (0.0, 0.0)
+        if self._lens_look is not None and dt > 1e-4:
+            turn = (look[0] - self._lens_look[0] + math.pi) % (2.0 * math.pi) - math.pi
+            nod = look[1] - self._lens_look[1]
+            full = self.LENS_TURN_FOR_FULL_PUSH * dt
+            # Turning right lowers the angle; looking up raises the pitch and
+            # moves the view up the screen (y down).
+            motion = (-turn / full, -nod / full)
+        self._lens_clock, self._lens_look = now, look
+        lens.update(dt, motion)
+        drops = lens.frame()
+        if not drops:
+            return
+        ratio = self.devicePixelRatioF()
+        width = max(1, int(self.width() * ratio))
+        height = max(1, int(self.height() * ratio))
+        viewport = (0, 0, width // 2, height) if splitscreen else (0, 0, width, height)
+        self._lens_pass.draw(drops, viewport)
+
     def _clear_play_mode_hint(self):
         self._play_mode_hint = ""
         self._cached_hint_text = None
@@ -1220,6 +1285,10 @@ class QtGameView(QOpenGLWidget):
             _pmgr.emit("render.post_scene", viewport=self, renderer=self.renderer,
                        projection=self.projection_matrix, view=self.view_matrix,
                        camera_pos=camera_pos, play_mode=self.play_mode)
+
+        # Water on the lens after coming up out of the water: over the whole
+        # world, under the HUD.
+        self._draw_lens_water(render_state, _splitscreen)
 
         restore_default_pixel_store()
         # The native renderer may leave viewport/scissor/depth state from a
