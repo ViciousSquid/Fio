@@ -1,8 +1,15 @@
 """The one and only Effect entity class.
 
 Effect is a core world primitive: one authored object that describes both a
-procedural visual effect and its emitted dynamic light. FIRE, ORB, EXPLOSION and CUSTOM are behaviours of this same primitive; there is no second explosion
-system.
+procedural visual effect and its emitted dynamic light. FIRE, ORB, EXPLOSION,
+CUSTOM and PARTICLES are behaviours of this same primitive; there is no second
+explosion system and no separate particle entity.
+
+Any Effect may also carry an optional particle *emitter* (``emitter``, one of
+:data:`EMITTER_PRESETS`): FIRE + SMOKE is one entity with a flame, its smoke
+and its light. PARTICLES is the emitter alone -- no GIF flame -- and its
+width/height are the emitter's extent. Particles are stateless: the renderer
+derives every particle from (seed, index, time) in the vertex shader.
 
 The class contains authored data plus non-journaled compatibility mirrors.
 Live simulation runtime is owned by EffectStore; EntityTable projects that dense
@@ -25,8 +32,26 @@ EFFECT_FIRE = "FIRE"
 EFFECT_ORB = "ORB"
 EFFECT_EXPLOSION = "EXPLOSION"
 EFFECT_CUSTOM = "CUSTOM"
-EFFECT_TYPES = (EFFECT_FIRE, EFFECT_ORB, EFFECT_EXPLOSION, EFFECT_CUSTOM)
-EFFECT_ANIMATED_TYPES = (EFFECT_FIRE, EFFECT_ORB, EFFECT_CUSTOM)
+EFFECT_PARTICLES = "PARTICLES"
+EFFECT_TYPES = (
+    EFFECT_FIRE, EFFECT_ORB, EFFECT_EXPLOSION, EFFECT_CUSTOM, EFFECT_PARTICLES,
+)
+EFFECT_ANIMATED_TYPES = (
+    EFFECT_FIRE, EFFECT_ORB, EFFECT_CUSTOM, EFFECT_PARTICLES,
+)
+
+#: Particle emitter presets. The index is the preset id the renderer uses
+#: (EntityTable.effect_emitter, the shader's preset table); NONE is 0.
+EMITTER_NONE = "NONE"
+EMITTER_PRESETS = ("NONE", "SMOKE", "STEAM", "SPARKS", "SPLASH", "MIST")
+EMITTER_IDS = {name: index for index, name in enumerate(EMITTER_PRESETS)}
+#: Particles per emitter at emitter_rate 1.0 (the shader's N).
+EMITTER_MAX_PARTICLES = 48
+EMITTER_SCALE_RANGE = (0.1, 8.0)
+
+#: What a PARTICLES Effect starts as when the map does not say otherwise.
+PARTICLES_DEFAULT_EMITTER = "SMOKE"
+PARTICLES_DEFAULT_SIZE = (32.0, 8.0)
 EFFECT_ORB_LIGHT_COLOUR = [74, 155, 255]
 EFFECT_FIRE_TEXTURES = tuple(
     f"assets/textures/effects/fire{i:02d}.gif" for i in range(1, 6)
@@ -52,7 +77,43 @@ EFFECT_DEFAULTS = {
     "light_radius": 128.0,
     "light_intensity": 2.5,
     "light_colour": [255, 165, 70],
+    "emitter": EMITTER_NONE,
+    "emitter_rate": 1.0,
+    "emitter_scale": 1.0,
+    "emitter_tint": [255, 255, 255],
 }
+
+
+def _clamped_float(value, default, lo, hi):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if number != number:            # NaN
+        return float(default)
+    return max(lo, min(hi, number))
+
+
+def normalise_emitter(value) -> str:
+    """An authored emitter preset name, or NONE when it is not one."""
+    name = str(value if value is not None else EMITTER_NONE).strip().upper()
+    return name if name in EMITTER_IDS else EMITTER_NONE
+
+
+def normalise_tint(value, default=(255, 255, 255)):
+    """An RGB 0..255 integer triple, or *default* when *value* is not one."""
+    try:
+        rgb = [int(round(float(c))) for c in list(value)[:3]]
+        if len(rgb) != 3:
+            raise ValueError
+    except (TypeError, ValueError):
+        return list(default)
+    return [max(0, min(255, c)) for c in rgb]
+
+
+def emitter_id(props) -> int:
+    """The dense preset id of an Effect's emitter (0 = none)."""
+    return EMITTER_IDS[normalise_emitter(props.get("emitter", EMITTER_NONE))]
 
 
 def _seed_from_id(value: object) -> int:
@@ -65,7 +126,7 @@ def _seed_from_id(value: object) -> int:
 
 
 class Effect(_ThingBase):
-    """Procedural FIRE/ORB/EXPLOSION effect with intrinsic dynamic light.
+    """Procedural FIRE/ORB/EXPLOSION/PARTICLES effect with intrinsic light.
 
     properties['type'] remains 'effect' because it is the map entity token.
     The authored behaviour selector is properties['effect_type'].
@@ -110,6 +171,26 @@ class Effect(_ThingBase):
             if "height" not in supplied_properties:
                 self.properties["height"] = 32.0
             self.properties["light_colour"] = list(EFFECT_ORB_LIGHT_COLOUR)
+        elif effect_type == EFFECT_PARTICLES:
+            # The emitter alone: width/height are its extent, it has no
+            # light unless asked for one, and it emits something.
+            if "width" not in supplied_properties:
+                self.properties["width"] = PARTICLES_DEFAULT_SIZE[0]
+            if "height" not in supplied_properties:
+                self.properties["height"] = PARTICLES_DEFAULT_SIZE[1]
+            if "light_enabled" not in supplied_properties:
+                self.properties["light_enabled"] = False
+            if "emitter" not in supplied_properties:
+                self.properties["emitter"] = PARTICLES_DEFAULT_EMITTER
+
+        self.properties["emitter"] = normalise_emitter(
+            self.properties.get("emitter"))
+        self.properties["emitter_rate"] = _clamped_float(
+            self.properties.get("emitter_rate"), 1.0, 0.0, 1.0)
+        self.properties["emitter_scale"] = _clamped_float(
+            self.properties.get("emitter_scale"), 1.0, *EMITTER_SCALE_RANGE)
+        self.properties["emitter_tint"] = normalise_tint(
+            self.properties.get("emitter_tint"))
 
         fire_texture = str(
             self.properties.get("fire_texture", EFFECT_FIRE_TEXTURES[0])

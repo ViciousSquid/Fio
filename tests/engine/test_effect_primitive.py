@@ -414,7 +414,7 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
 
     assert get_input_names("effect") == [
         "SetType", "SetFireTexture", "SetOrbTexture",
-        "SetCustomGif", "SetLoop",
+        "SetCustomGif", "SetLoop", "SetEmitter",
         "Hide", "Show", "ToggleVisibility", "Explode",
     ]
     assert get_output_names("effect") == ["OnChanged"]
@@ -583,7 +583,7 @@ def test_effect_explode_io_plays_once_and_can_be_retriggered():
 
     assert get_input_names("effect") == [
         "SetType", "SetFireTexture", "SetOrbTexture",
-        "SetCustomGif", "SetLoop",
+        "SetCustomGif", "SetLoop", "SetEmitter",
         "Hide", "Show", "ToggleVisibility", "Explode",
     ]
 

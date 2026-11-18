@@ -14,6 +14,7 @@ from OpenGL.raw.GL.VERSION.GL_2_0 import (
 
 from engine import change_detection, render_table
 from engine.render_keys import KeyLayout, sort_into_runs
+from engine.shaders import PARTICLES_PER_EMITTER
 
 # The render key every brush pass sorts by. Two fields, because two things
 # cannot vary inside one draw: the bound texture, and which of the cube's six
@@ -587,7 +588,6 @@ class InstancingMixin:
             (2, 4, 12),
             (3, 4, 28),
             (4, 4, 44),
-            (5, 1, 60),
         ):
             gl.glVertexAttribPointer(
                 location, size, gl.GL_FLOAT, gl.GL_FALSE,
@@ -597,6 +597,53 @@ class InstancingMixin:
             gl.glVertexAttribDivisor(location, 1)
         gl.glBindVertexArray(0)
         self._effect_instance_vao = vao
+        return vao
+
+    def _ensure_particle_instance_buffer(self, count):
+        """Grow the emitter instance VBO and its staging array to *count*
+        emitter rows (each feeds PARTICLES_PER_EMITTER particle instances)."""
+        if self._particle_instance_vbo is None:
+            self._particle_instance_vbo = gl.glGenBuffers(1)
+        if count <= self._particle_instance_capacity:
+            return
+        capacity = max(count, 32, self._particle_instance_capacity * 2)
+        self._particle_instance_capacity = capacity
+        self._particle_instance_data = np.empty(
+            (capacity, self.PARTICLE_INSTANCE_FLOATS), dtype=np.float32
+        )
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._particle_instance_vbo)
+        gl.glBufferData(
+            gl.GL_ARRAY_BUFFER,
+            self._particle_instance_data.nbytes,
+            None,
+            gl.GL_DYNAMIC_DRAW,
+        )
+        # The buffer was reallocated: what it held is gone.
+        self._particle_uploaded = None
+
+    def _ensure_particle_instance_vao(self):
+        """The billboard quad plus the emitter rows, each row stepping once
+        per PARTICLES_PER_EMITTER instances: one row is one emitter, and
+        gl_InstanceID % PARTICLES_PER_EMITTER is the particle."""
+        if self._particle_instance_vao is not None:
+            return self._particle_instance_vao
+        self._ensure_particle_instance_buffer(1)
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._particle_instance_vbo)
+        stride = self.PARTICLE_INSTANCE_FLOATS * 4
+        for location in range(1, 6):
+            gl.glVertexAttribPointer(
+                location, 4, gl.GL_FLOAT, gl.GL_FALSE,
+                stride, ctypes.c_void_p((location - 1) * 16)
+            )
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, PARTICLES_PER_EMITTER)
+        gl.glBindVertexArray(0)
+        self._particle_instance_vao = vao
         return vao
 
     def _ensure_model_instance_buffer(self, count):

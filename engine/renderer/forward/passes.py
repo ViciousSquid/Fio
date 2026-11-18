@@ -14,6 +14,8 @@ import OpenGL.GL as gl
 
 from engine import render_table
 from engine import shaders
+from engine.effect_table import FAMILY_EXPLOSION, FAMILY_PARTICLES
+from engine.entity_table import _CLOCK_ORIGIN
 from engine.render_keys import runs_in_order, sort_into_runs
 from ..api import WATER_QUALITIES
 from ..core.terrain_gl import TerrainGL
@@ -1713,7 +1715,8 @@ class PassesMixin:
         self, projection, view, table, slots, hidden=None,
         play_mode=True, editor_time=0.0, camera_pos=None,
     ):
-        """Draw FIRE/ORB as animated billboards and EXPLOSION through its existing shader."""
+        """Draw FIRE/ORB as animated billboards, EXPLOSION through its
+        existing shader, then every Effect's particle emitter."""
         if not len(slots):
             return 0
 
@@ -1728,11 +1731,21 @@ class PassesMixin:
             projection, view, table, slots, hidden=None, camera_pos=camera_pos
         )
 
+        explosion_count = self._draw_explosions_instanced(
+            projection, view, table, slots, camera_pos)
+        particle_count = self.draw_particles_instanced(
+            projection, view, table, slots, play_mode=play_mode,
+            camera_pos=camera_pos)
+        return fire_count + explosion_count + particle_count
+
+    def _draw_explosions_instanced(self, projection, view, table, slots,
+                                   camera_pos):
+        """Draw the live EXPLOSION Effects among *slots*; their count."""
         explosion = table.effect_type[slots] == 1
         alive = table.effect_alive[slots]
         slots = slots[explosion & alive]
         if not len(slots) or 'effect_instanced' not in self.shaders:
-            return fire_count
+            return 0
 
         count = len(slots)
         if len(self._effect_order_scratch) < count:
@@ -1814,7 +1827,185 @@ class PassesMixin:
             gl.glEnable(gl.GL_CULL_FACE)
         if not blend_was:
             gl.glDisable(gl.GL_BLEND)
-        return fire_count + count
+        return count
+
+    # --------------------------------------------------------------------------
+    # Particle emitters
+    # --------------------------------------------------------------------------
+    #: The largest a particle may be drawn, as a fraction of the view's height.
+    PARTICLE_MAX_SCREEN = 0.35
+    #: View depth over which particles fade in from nothing at the camera.
+    PARTICLE_NEAR_FADE = (4.0, 32.0)
+    #: How far above a FIRE/ORB/CUSTOM's centre its emitter sits, as a
+    #: fraction of the Effect's height (the flame card is centred there).
+    PARTICLE_HOST_LIFT = 0.25
+    #: The same for an EXPLOSION, whose card grows upward from its base.
+    PARTICLE_BURST_LIFT = 0.6
+    #: A burst is drawn for this multiple of its preset's particle life after
+    #: the trigger (the shader staggers spawns by up to 15% of it).
+    PARTICLE_BURST_WINDOW = 1.2
+
+    _PARTICLE_PRESET_TABLE = shaders.particle_preset_table()
+    _PARTICLE_PRESET_LIVES = shaders.particle_preset_lives()
+
+    @timed_pass('particles')
+    def draw_particles_instanced(
+        self, projection, view, table, slots, play_mode=True, camera_pos=None,
+    ):
+        """Draw every emitter among the Effect *slots* in one instanced draw.
+
+        No particle has CPU state: each emitter is one row of 20 floats that
+        feeds ``PARTICLES_PER_EMITTER`` instances, and particle.vert works
+        out each particle from (seed, index, time). The rows are built with
+        numpy and uploaded only when one of them, or the back-to-front order,
+        changes; the clock is a uniform. Returns the emitters drawn.
+        """
+        if not len(slots) or 'particle_instanced' not in self.shaders:
+            return 0
+        slots = slots[table.effect_emitter[slots] != 0]
+        if not len(slots):
+            return 0
+
+        now = time.perf_counter()
+        family = table.effect_type[slots]
+        burst = family == FAMILY_EXPLOSION
+        if burst.any():
+            # A looping emitter draws while its Effect is alive (always, for
+            # all but EXPLOSION). A burst plays from its trigger until its
+            # particles have all died -- past the explosion's own lifetime --
+            # and in the editor shows only as a frozen Preview.
+            if play_mode:
+                lives = self._PARTICLE_PRESET_LIVES[table.effect_emitter[slots]]
+                since = now - table.effect_spawn_time[slots]
+                burst_live = (table.effect_active[slots] & (since >= 0.0)
+                              & (since < lives * self.PARTICLE_BURST_WINDOW))
+            else:
+                burst_live = table.effect_alive[slots]
+            keep = np.where(burst, burst_live, table.effect_alive[slots])
+        else:
+            keep = table.effect_alive[slots]
+        if not keep.all():
+            slots, family, burst = slots[keep], family[keep], burst[keep]
+        count = len(slots)
+        if not count:
+            return 0
+
+        if camera_pos is not None and count > 1:
+            # Back to front by distance across the floor, as the other
+            # effect passes sort.
+            cx, _, cz = self._camera_xyz(camera_pos)
+            dx = table.pos[slots, 0] - cx
+            dz = table.pos[slots, 2] - cz
+            order = np.argsort(-(dx * dx + dz * dz), kind='stable')
+            slots, family, burst = slots[order], family[order], burst[order]
+
+        vao = self._ensure_particle_instance_vao()
+        self._ensure_particle_instance_buffer(count)
+        data = self._particle_instance_data[:count]
+        params = table.effect_emitter_params[slots]
+        wrap = shaders.PARTICLE_TIME_WRAP
+        data[:, 0:3] = table.pos[slots]
+        data[:, 3] = table.effect_seed[slots]
+        data[:, 4] = table.effect_emitter[slots]
+        data[:, 5] = np.rint(params[:, 0] * shaders.PARTICLES_PER_EMITTER)
+        data[:, 6] = params[:, 1]
+        # 0 loops, 1 a burst, 2 a burst frozen for the editor's Preview.
+        data[:, 7] = np.where(
+            burst,
+            np.where(table.effect_preview[slots] & (not play_mode), 2.0, 1.0),
+            0.0)
+        data[:, 8:10] = params[:, 2:4]
+        # Playback start on the wrapped render clock (0 for a looping
+        # Effect, which runs on the shared clock origin).
+        data[:, 10] = np.mod(table.effect_spawn_time[slots] - _CLOCK_ORIGIN, wrap)
+        data[:, 11] = np.where(
+            family == FAMILY_PARTICLES, 0.0,
+            np.where(burst, self.PARTICLE_BURST_LIFT, self.PARTICLE_HOST_LIFT))
+        data[:, 12:15] = table.effect_emitter_tint[slots]
+        data[:, 15] = table.effect_light_enabled[slots]
+        data[:, 16:19] = table.effect_light_color[slots]
+        data[:, 19] = 0.0
+
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._particle_instance_vbo)
+        uploaded = self._particle_uploaded
+        if (uploaded is None or uploaded.shape != data.shape
+                or not np.array_equal(uploaded, data)):
+            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+            self._particle_uploaded = data.copy()
+
+        shader = self.shaders['particle_instanced']
+        uniforms = self.uniforms['particle_instanced']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_env_uniforms('particle_instanced')
+        if self._particle_presets_sent != shader:
+            table_rows = self._PARTICLE_PRESET_TABLE
+            gl.glUniform4fv(uniforms['uPresets'], len(table_rows), table_rows)
+            self._particle_presets_sent = shader
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniform1f(uniforms['uTime'], float((now - _CLOCK_ORIGIN) % wrap))
+        gl.glUniform1f(uniforms['uMaxScreen'], self.PARTICLE_MAX_SCREEN)
+        gl.glUniform2f(uniforms['uNearFade'], *self.PARTICLE_NEAR_FADE)
+
+        prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
+        # Soft particles read the opaque depth: the decal pass's copy when it
+        # made one this frame, else a copy made now. Perspective only.
+        perspective = abs(float(projection[2][3])) > 0.5
+        soft = perspective and (
+            getattr(self, '_scene_depth_current', False)
+            or self._capture_scene_depth())
+        # Consumed: a later frame (or a pass outside render_scene) copies
+        # its own unless the decal pass has again.
+        self._scene_depth_current = False
+        unit = self._water_depth_texture_unit
+        gl.glUniform1i(uniforms['uSoft'], 1 if soft else 0)
+        gl.glUniform1i(uniforms['uSceneDepth'], unit)
+        if soft:
+            gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
+            viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+            gl.glUniform4f(uniforms['uViewport'], float(viewport[0]),
+                           float(viewport[1]), float(max(int(viewport[2]), 1)),
+                           float(max(int(viewport[3]), 1)))
+            gl.glUniform2f(uniforms['uDepthParams'], float(projection[3][2]),
+                           float(projection[2][2]))
+
+        # Blended premultiplied, tested against depth but writing none,
+        # both faces; every piece of state is put back as it was.
+        blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
+        cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
+        depth_test_was = bool(gl.glIsEnabled(gl.GL_DEPTH_TEST))
+        depth_mask_was = bool(gl.glGetBooleanv(gl.GL_DEPTH_WRITEMASK))
+        blend_func = tuple(int(gl.glGetIntegerv(name)) for name in (
+            gl.GL_BLEND_SRC_RGB, gl.GL_BLEND_DST_RGB,
+            gl.GL_BLEND_SRC_ALPHA, gl.GL_BLEND_DST_ALPHA))
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_ONE, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthMask(gl.GL_FALSE)
+        try:
+            gl.glBindVertexArray(vao)
+            gl.glDrawArraysInstanced(
+                gl.GL_TRIANGLE_STRIP, 0, 4,
+                count * shaders.PARTICLES_PER_EMITTER)
+            self.render_stats.draw_calls += 1
+            self.render_stats.batched_draws += 1
+        finally:
+            gl.glBindVertexArray(0)
+            gl.glBlendFuncSeparate(*blend_func)
+            if not blend_was:
+                gl.glDisable(gl.GL_BLEND)
+            if cull_was:
+                gl.glEnable(gl.GL_CULL_FACE)
+            if not depth_test_was:
+                gl.glDisable(gl.GL_DEPTH_TEST)
+            gl.glDepthMask(gl.GL_TRUE if depth_mask_was else gl.GL_FALSE)
+            gl.glActiveTexture(prev_active_texture)
+        return count
 
     @timed_pass('fire effects')
     def draw_fire_effects_instanced(
@@ -1833,7 +2024,9 @@ class PassesMixin:
 
         effect_types = table.effect_type[slots]
         alive = table.effect_alive[slots]
-        animated = (effect_types != 1) & alive
+        # EXPLOSION has its own shader; PARTICLES is an emitter alone.
+        animated = ((effect_types != 1) & (effect_types != FAMILY_PARTICLES)
+                    & alive)
         slots = slots[animated]
         effect_types = effect_types[animated]
         if not len(slots):
@@ -2507,6 +2700,7 @@ class PassesMixin:
                 gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
             self._water_depth_size = (width, height)
         gl.glCopyTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
+        self._scene_depth_copies = getattr(self, '_scene_depth_copies', 0) + 1
         return True
 
     @timed_pass('glass')
