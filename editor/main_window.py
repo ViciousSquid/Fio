@@ -2458,6 +2458,10 @@ class MainWindow(QMainWindow):
             self.view_3d.show_glasses = self.config.getboolean(
                 'Display', 'show_glasses', fallback=True
             )
+            # So is whether a hidden light lights the editor.
+            self.view_3d.hide_hidden_lights = self.config.getboolean(
+                'Display', 'hide_hidden_lights', fallback=False)
+            self.update_views()
             # So is player 1's choice of glasses (Settings > Appearance).
             self.view_3d.player1_glasses = normalize_glasses(self.config.get(
                 'Appearance', 'glasses', fallback=DEFAULT_GLASSES

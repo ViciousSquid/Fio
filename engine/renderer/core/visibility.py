@@ -235,7 +235,10 @@ class VisibilityMixin:
         if table is None or not hasattr(table, 'light_color'):
             raise RuntimeError("dense EntityTable is required for light rendering")
         hidden = config.get('thing_hidden')
-        if not config.get('play_mode', False):
+        if not (config.get('play_mode', False)
+                or config.get('hide_hidden_lights', False)):
+            # Editing: a light hidden with H still lights, unless the
+            # editor's "Hidden lights give no light" setting is on.
             hidden = None
         elif hidden is not None:
             hidden = np.asarray(hidden)

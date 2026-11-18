@@ -255,6 +255,10 @@ class QtGameView(QOpenGLWidget):
         self.show_glasses = self.editor.config.getboolean(
             'Display', 'show_glasses', fallback=True
         )
+        #: Settings > Editor > 3D View: a light hidden with H gives no light
+        #: in the editor while it is hidden.
+        self.hide_hidden_lights = self.editor.config.getboolean(
+            'Display', 'hide_hidden_lights', fallback=False)
         # The glasses player 1 wears (Settings > Appearance); player 2
         # always wears the default pair.
         self.player1_glasses = normalize_glasses(self.editor.config.get(
@@ -961,6 +965,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["show_glasses"] = bool(self.show_glasses)
+        self._render_config["hide_hidden_lights"] = bool(self.hide_hidden_lights)
         from engine.glasses import world_glasses
         self.logic_thread.player_runtime.glasses_style = normalize_glasses(self.player1_glasses)
         (_glass_positions, _glass_sprites, _spectator_positions, _spectator_sprites,
