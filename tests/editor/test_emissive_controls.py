@@ -1,8 +1,7 @@
 """The Emissive controls are the same wherever something can glow.
 
-A decal, a Glow brush and water each get the Emissive checkbox with two
-numeric fields -- Light Intensity and Light Radius -- so the amount of light
-is always there to set, and always set the same way.
+A decal, a Glow brush and water each get the Emissive checkbox. Light Intensity
+and Light Radius are available only while Emissive is enabled.
 """
 import pytest
 from PyQt5.QtWidgets import QCheckBox, QDoubleSpinBox, QLabel, QSlider
@@ -18,7 +17,8 @@ def _controls(editor, prefix):
 
 
 def _labels(editor):
-    return {label.text() for label in editor.findChildren(QLabel)}
+    return {label.text() for label in editor.findChildren(QLabel)
+            if not label.isHidden()}
 
 
 def _select(main_window, obj):
@@ -55,12 +55,41 @@ def test_every_emissive_thing_has_the_same_numeric_controls(main_window):
         assert not isinstance(intensity, QSlider)
         seen[prefix] = ((intensity.minimum(), intensity.maximum(), intensity.decimals()),
                         (radius.minimum(), radius.maximum(), radius.decimals()))
-        assert {"Light Intensity:", "Light Radius:"} <= _labels(editor), (
-            prefix, sorted(_labels(editor)))
+        assert intensity.isHidden() and radius.isHidden(), prefix
+        assert {"Light Intensity:", "Light Radius:"}.isdisjoint(_labels(editor)), (
+            prefix + ": light controls should be hidden while Emissive is off")
+
+        checkbox.setChecked(True)
+        assert not intensity.isHidden() and not radius.isHidden(), prefix
+        assert {"Light Intensity:", "Light Radius:"} <= _labels(editor), prefix
         assert "Emissive Intensity:" not in _labels(editor), (
             prefix + ": a second, differently named amount field")
 
+        checkbox.setChecked(False)
+        assert intensity.isHidden() and radius.isHidden(), prefix
+        assert {"Light Intensity:", "Light Radius:"}.isdisjoint(_labels(editor)), prefix
+
     assert len(set(seen.values())) == 1, f"the controls differ: {seen}"
+
+
+def test_decal_width_and_height_are_adjacent(main_window):
+    from PyQt5.QtWidgets import QFormLayout
+    from editor.things import Decal
+
+    decal = Decal(pos=[0, 0, 0], properties={'id': 'd-dimensions'})
+    editor = _select(main_window, decal)
+
+    for form in editor.findChildren(QFormLayout):
+        labels = []
+        for row in range(form.rowCount()):
+            item = form.itemAt(row, QFormLayout.LabelRole)
+            widget = item.widget() if item is not None else None
+            labels.append(widget.text() if isinstance(widget, QLabel) else '')
+        if 'Width:' in labels and 'Height:' in labels:
+            assert labels.index('Height:') == labels.index('Width:') + 1
+            break
+    else:
+        pytest.fail("The decal Width and Height rows were not found together")
 
 
 def test_the_amount_fields_write_the_properties_the_light_reads(main_window):
