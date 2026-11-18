@@ -15,7 +15,8 @@ from engine.asset_archives import (ASSET_CATEGORIES, _entries, user_pack_entries
 ASSET_KEYS = {'texture', 'texture_path', 'sprite_2d', 'custom_idle', 'custom_shoot',
               'custom_dead', 'model_path', 'mesh', 'sound_file', 'sound', 'audio',
               'sprite_path', 'collect_custom_sprite', 'world_sprite', 'hud_sprite',
-              'muzzle_flash', 'fire_texture', 'orb_texture', 'custom_gif', 'sky_image'}
+              'muzzle_flash', 'fire_texture', 'orb_texture', 'custom_gif', 'sky_image',
+              'cookie_texture'}
 
 
 def map_assets(node):

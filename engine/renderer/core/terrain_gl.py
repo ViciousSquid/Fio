@@ -807,6 +807,7 @@ class TerrainGL:
         # raise GL_INVALID_OPERATION.
         names = self.UNIFORM_NAMES + tuple(frame.appearance) + tuple(env_uniforms or ())
         names += tuple(f'shadowMaps[{i}]' for i in range(shaders.MAX_SHADOW_LIGHTS))
+        names += ('fioCookies',)
         for name in names:
             if name not in u:
                 u[name] = gl.glGetUniformLocation(prog, name)
@@ -873,6 +874,12 @@ class TerrainGL:
             gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
             gl.glUniform1i(loc, shadow_unit_base + i)
         gl.glActiveTexture(gl.GL_TEXTURE0)
+        # The light-cookie array (engine.light_cookies) on its own unit, for
+        # the same reason; the renderer binds the array there when a light
+        # has a cookie, and nothing is sampled when none has.
+        loc = u.get('fioCookies', -1)
+        if loc is not None and loc != -1:
+            gl.glUniform1i(loc, shaders.COOKIE_TEXTURE_UNIT)
 
         lod_level_loc = u.get('lod_level', -1)
         slots = table.live_slots()

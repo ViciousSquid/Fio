@@ -83,8 +83,13 @@ class PlayerWorld:
         # layers are the renderer's.
         from engine import decal_textures
         decal_textures.use_source(decal_source(package))
+        # The map's visgroups travel with it: I/O can target a group by name
+        # (engine.io_groups). Nothing is filtered from view in Play.
+        from engine.view_filters import ViewFilters
+        view_filters = ViewFilters()
+        view_filters.load_level_data(data)
         self.state = WorldState(data, brushes=[], things=[], world_epoch=0,
-                                item_definitions=definitions, view_filters={})
+                                item_definitions=definitions, view_filters=view_filters)
         self.game_state = ThreadedGameState()
         self.logic = LogicThread(self.game_state, self.state, threaded_ai=False)
         self.logic.package = package

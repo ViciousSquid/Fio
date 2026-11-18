@@ -443,6 +443,45 @@ class SceneHierarchy(QWidget):
                 for column in (0, 1):
                     item.setBackground(column, background)
 
+    def group_names_of(self, objects):
+        """The groups -- visgroups, then brush groups -- any of *objects* is
+        in, by name, without repeats."""
+        filters = self.main_window.state.view_filters
+        names = []
+        for obj in objects:
+            for group in filters.visgroups_of(obj):
+                if group.name not in names:
+                    names.append(group.name)
+        for obj in objects:
+            name = brush_groups.group_of(obj) if isinstance(obj, dict) else ''
+            if name and name not in names:
+                names.append(name)
+        return names
+
+    def select_group(self, name):
+        """Select every member of the group called *name* -- what an I/O
+        connection targeting that name reaches (engine.io_groups)."""
+        from engine.io_groups import group_members
+        main_window = self.main_window
+        members = group_members(main_window.state, name) or []
+        main_window.set_selected_objects(members)
+        main_window.update_views()
+        return members
+
+    def _add_select_group_actions(self, menu, objects):
+        """"Select Group 'name'" for each group the clicked objects are in."""
+        actions = []
+        for name in self.group_names_of(objects):
+            action = menu.addAction("Select Group '%s'" % name)
+            action.setToolTip(
+                "Select every member of this group. An I/O connection whose "
+                "target is '%s' sends its input to all of them; members "
+                "without that input ignore it." % name)
+            action.triggered.connect(
+                lambda _checked=False, n=name: self.select_group(n))
+            actions.append(action)
+        return actions
+
     def _add_visgroup_menu(self, menu, objects):
         """The Visgroup submenu: put the clicked objects in a visgroup, take
         them out, or manage visgroups in Visgroups & Cordon."""
@@ -955,6 +994,7 @@ class SceneHierarchy(QWidget):
             focus_action.triggered.connect(
                 lambda _checked=False, targets=list(focus_targets):
                 self.focus_on(targets))
+            self._add_select_group_actions(menu, focus_targets)
             self._add_visgroup_menu(menu, focus_targets)
             self._add_group_action(menu, [o for o in focus_targets if isinstance(o, dict)])
             menu.addSeparator()

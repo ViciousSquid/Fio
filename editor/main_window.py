@@ -6214,9 +6214,11 @@ class MainWindow(QMainWindow):
                                 "The I/O system is unavailable in this build.")
             return
 
+        from editor.io_system import resolve_group_target
         validation = validate_all_scene_connections(
             self.state.brushes,
             self.state.things,
+            find_group=lambda name: resolve_group_target(self.state, name),
         )
 
         problems = validation['problems']

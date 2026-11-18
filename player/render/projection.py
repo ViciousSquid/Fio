@@ -51,7 +51,9 @@ def lights(table, eye, limit=MAX_LIGHTS, *, player_position=None, cutscene=False
     return [dict(pos=table.pos[i], color=table.light_color[i],
                  intensity=float(table.light_params[i, 0]), radius=float(table.light_params[i, 1]),
                  casts_shadows=bool(table.light_casts_shadows[i]),
-                 size=float(table.light_size[i])) for i in candidates[:limit]]
+                 size=float(table.light_size[i]),
+                 cookie=int(table.light_cookie[i]),
+                 cookie_floor=float(table.light_cookie_floor[i])) for i in candidates[:limit]]
 
 
 def effect_image(table, row):

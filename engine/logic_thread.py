@@ -232,6 +232,7 @@ class LogicThread(threading.Thread):
             self.io_manager.set_logic_thread(self)
             self.io_manager.set_entity_finder(self.world_runtime.find_entity_by_name)
             self.io_manager.set_entity_finder_by_id(self.world_runtime.find_entity_by_id)
+            self.io_manager.set_group_finder(self.world_runtime.find_group_members)
             self.io_manager.set_game_state(self.game_state)
             register_all_input_handlers(self.io_manager)
 

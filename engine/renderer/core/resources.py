@@ -54,7 +54,8 @@ def texture_cache_key(subfolder, name):
 
 # ---------- Utility classes ----------
 class UniformCache:
-    __slots__ = ('program', '_cache', 'shadow_slots', 'env', 'active_lights')
+    __slots__ = ('program', '_cache', 'shadow_slots', 'env', 'active_lights',
+                 'cookie_unit')
     def __init__(self, shader_program):
         self.program = shader_program
         self._cache = {}
@@ -67,6 +68,9 @@ class UniformCache:
         # The shadowMaps[i] slots this program samples, once their sampler
         # units are assigned (see Renderer._bind_shadow_maps); None before.
         self.shadow_slots = None
+        # Whether the program's light-cookie sampler has its unit (see
+        # Renderer._bind_light_cookies).
+        self.cookie_unit = False
     def __getitem__(self, name):
         loc = self._cache.get(name)
         if loc is None:

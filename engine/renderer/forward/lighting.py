@@ -182,8 +182,11 @@ class LightingMixin:
         weights = (1.0,) * count
         if fade is not None and fade[0] is table:
             weights = tuple(float(fade[1].get(slot, 1.0)) for slot in active_lights)
+        # indices.z: the light's cookie layer + 1, or 0 (no image is sampled).
+        cookie_layers = self._cookie_layers(table, active_lights)
         key = ('dense', id(table), table.generation, count,
-               tuple(active_lights.tolist()), weights)
+               tuple(active_lights.tolist()), weights,
+               None if cookie_layers is None else tuple(cookie_layers.tolist()))
         if self._light_ubo_key == key:
             return
 
@@ -213,6 +216,10 @@ class LightingMixin:
         )
 
         active['indices'][:, 0] = shadow_indices
+        if cookie_layers is not None:
+            active['indices'][:, 2] = cookie_layers
+            # w: how bright a cookie light's image stays in its own shadow.
+            active['params'][:, 3] = table.light_cookie_floor[active_lights]
 
         # Respecify the whole store rather than sub-updating it: earlier draws
         # still queued against the old contents would otherwise make the
@@ -226,6 +233,43 @@ class LightingMixin:
             gl.GL_DYNAMIC_DRAW,
         )
         self._light_ubo_key = key
+
+    def _cookie_layers(self, table, slots):
+        """``layer + 1`` of each light's cookie in the shared array, 0 where
+        it has none; None when no light in *slots* has one (the common case:
+        one ``any`` over an int column, and nothing else happens). With a
+        cookie in play the array is bound to its unit here, once per lit
+        pass -- never per light or per draw."""
+        cookies = getattr(table, 'light_cookie', None)
+        if cookies is None or not len(slots):
+            return None
+        ids = cookies[slots]
+        if not ids.any():
+            return None
+        array = self._light_cookies
+        if array is None:
+            from engine.light_cookies import (
+                COOKIE_SIZE, COOKIE_SIZE_LOW_POWER, CookieArray)
+            array = self._light_cookies = CookieArray(
+                gl, size=COOKIE_SIZE_LOW_POWER if self.lowpower_mode else COOKIE_SIZE)
+        layers = array.layers(ids)
+        array.bind(shaders.COOKIE_TEXTURE_UNIT)
+        return layers
+
+    def _bind_light_cookies(self, uniforms):
+        """Point a lighting program's cookie sampler at its own unit.
+
+        Like the shadow samplers: a sampler2DArray left on unit 0 would share
+        it with the diffuse sampler2D and fail the draw. Program state, so it
+        is set once per program. The array itself is bound to that unit when
+        the light UBO is packed, and only while some light has a cookie.
+        """
+        if uniforms.cookie_unit:
+            return
+        loc = uniforms['fioCookies']
+        if loc != -1:
+            gl.glUniform1i(loc, shaders.COOKIE_TEXTURE_UNIT)
+        uniforms.cookie_unit = True
 
     # --------------------------------------------------------------------------
     # Light upload
@@ -265,6 +309,7 @@ class LightingMixin:
                            'lit_brush_instanced', 'geo_textured', 'geo_batched',
                            'terrain'):
             self._bind_shadow_maps(self.uniforms[shader_name])
+            self._bind_light_cookies(self.uniforms[shader_name])
 
     # --------------------------------------------------------------------------
     # Depth cube-map shadow mapping

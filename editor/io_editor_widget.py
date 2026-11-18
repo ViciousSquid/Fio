@@ -21,6 +21,7 @@ try:
         get_input_names, get_connections, add_connection, remove_connection,
         get_entity_type_for_io, IO_REGISTRY,
         validate_connection, PROBLEM_UNKNOWN_INPUT, PROBLEM_UNKNOWN_OUTPUT,
+        GroupTarget, resolve_group_target, group_input_names,
     )
     IO_AVAILABLE = True
 except ImportError:
@@ -31,6 +32,15 @@ except ImportError:
 
     PROBLEM_UNKNOWN_INPUT = 'unknown_input'
     PROBLEM_UNKNOWN_OUTPUT = 'unknown_output'
+
+    class GroupTarget:          # never constructed without the I/O system
+        pass
+
+    def resolve_group_target(state, name):
+        return None
+
+    def group_input_names(members):
+        return []
 
 
 # ── Random name generator for unnamed entities ──
@@ -265,6 +275,8 @@ class IOConnectionDialog(QDialog):
                 name = thing.properties.get('name', '')
                 if name:
                     names.append(name)
+            from engine.io_groups import group_names
+            names += [n for n in group_names(self.editor_state) if n not in names]
         return names
     
     
@@ -303,6 +315,11 @@ class IOConnectionDialog(QDialog):
         if target_type:
             inputs = get_input_names(target_type)
             self.input_combo.addItems(inputs)
+        elif target_entity is None:
+            # A group: every input some member accepts (the others ignore it).
+            group = resolve_group_target(self.editor_state, target_name)
+            if group is not None:
+                self.input_combo.addItems(group_input_names(group.members))
     
     def _show_target_dropdown(self):
         """Show a menu with all door/mover brushes and all entities (things) in the level.
@@ -362,6 +379,24 @@ class IOConnectionDialog(QDialog):
                 action.triggered.connect(partial(self._set_target_from_entity, entity))
                 menu.addAction(action)
 
+        # Groups: one connection reaches every member (engine.io_groups).
+        from engine.io_groups import group_names
+        groups = group_names(self.editor_state) if self.editor_state else []
+        if groups:
+            if has_items:
+                menu.addSeparator()
+            has_items = True
+            menu.addSection("GROUPS")
+            from functools import partial
+            for name in sorted(groups, key=str.lower):
+                group = resolve_group_target(self.editor_state, name)
+                count = len(group.members) if group is not None else 0
+                action = QAction(f"{name}  [group: {count}]", self)
+                action.setToolTip("Sends the input to every member; members "
+                                  "without that input ignore it")
+                action.triggered.connect(partial(self._set_target_group, name))
+                menu.addAction(action)
+
         if not has_items:
             no_action = QAction("No door/mover brushes or entities in level", self)
             no_action.setEnabled(False)
@@ -371,6 +406,13 @@ class IOConnectionDialog(QDialog):
         sender = self.sender()
         if sender:
             menu.exec_(sender.mapToGlobal(sender.rect().bottomLeft()))
+
+    def _set_target_group(self, name):
+        """Target the group called *name*: by name, with no entity id."""
+        self._picked_entity = None
+        self.target_edit.setText(name)
+        self.target_edit.editingFinished.emit()
+        self._update_input_options(name)
 
     def _set_target_from_entity(self, entity):
         """Set the target from an entity reference, auto-naming if unnamed.
@@ -724,7 +766,12 @@ class IOEditorWidget(QWidget):
             # Identity-addressed display: prefer resolving the target by its
             # stable UUID so a renamed target still shows its *current* name.
             resolved = self._resolve_connection_target(conn)
-            if resolved is not None:
+            if isinstance(resolved, GroupTarget):
+                target_item = QTableWidgetItem(conn.target_name)
+                target_item.setToolTip(
+                    "Group: %d member(s) receive this input; members without "
+                    "it ignore it" % len(resolved.members))
+            elif resolved is not None:
                 current_name = self._entity_display_name(resolved)
                 target_item = QTableWidgetItem(current_name or conn.target_name)
                 if getattr(conn, 'target_id', '') and current_name and \
@@ -802,7 +849,10 @@ class IOEditorWidget(QWidget):
                 return ent
         target_name = getattr(conn, 'target_name', '')
         if target_name:
-            return state.find_entity_by_name(target_name)
+            found = state.find_entity_by_name(target_name)
+            if found is None:
+                found = resolve_group_target(state, target_name)
+            return found
         return None
 
     def _update_button_states(self):

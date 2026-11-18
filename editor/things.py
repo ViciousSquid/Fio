@@ -546,6 +546,9 @@ class Light(Thing):
     'show_radius',
     'casts_shadows',
     'shadow_map_size',
+    'cookie_enabled',
+    'cookie_texture',
+    'cookie_shadow_floor',
     )
 
     def __init__(self, pos=None, properties=None):
@@ -557,6 +560,12 @@ class Light(Thing):
         self.properties.setdefault('state', 'on')
         self.properties.setdefault('show_radius', False)
         self.properties.setdefault('casts_shadows', False)
+        # Projected image (engine.light_cookies): explicit opt-in, and
+        # independent of casts_shadows. With both, the image stays visible in
+        # the light's own shadow at cookie_shadow_floor brightness.
+        self.properties.setdefault('cookie_enabled', False)
+        self.properties.setdefault('cookie_texture', '')
+        self.properties.setdefault('cookie_shadow_floor', 0.15)
 
         # Parenting: attach this light to a mover brush by name.
         # When parent_mover is non-empty the logic thread moves this

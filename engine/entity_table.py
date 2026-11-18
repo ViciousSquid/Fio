@@ -81,6 +81,7 @@ import numpy as np
 
 from . import change_detection
 from .change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, is_tracked
+from .light_cookies import cookie_of, cookie_shadow_floor
 from .portal_transform import basis_from_rotation
 from .render_table import _can_adopt
 from .entity_models import model_path, model_rotation, model_scale
@@ -664,6 +665,13 @@ _COLUMNS = (
     #: Effect and decal), half its length for an emissive brush, whose light
     #: fades in over that distance (shaders.LIGHT_SOURCE_SIZE_GLSL).
     ('light_size', (), np.float32, 0.0),
+    #: The light's projected image (engine.light_cookies): its interned id,
+    #: 0 for every light that has none -- the default, and anything but a
+    #: Light whose ``cookie_enabled`` is true and ``cookie_texture`` is set.
+    ('light_cookie', (), np.int32, 0),
+    #: A cookie light's visibility in its own shadow never drops below this
+    #: (``cookie_shadow_floor``, 0..1); unused without a cookie.
+    ('light_cookie_floor', (), np.float32, 0.0),
     #: Portal topology/render columns. Target links are resolved to integer
     #: entity slots at reconcile.
     ('portal_target_slot', (), np.int32, -1),
@@ -1343,6 +1351,7 @@ class EntityTable:
             self.light_enabled[rows] = on
             self.light_size[rows] = sizes
             self.light_casts_shadows[rows] = False
+            self.light_cookie[rows] = 0
             self.hidden[rows] = False
             self.class_bits[rows] = 0
             slots = np.concatenate(
@@ -1617,6 +1626,7 @@ class EntityTable:
                 props, 'light_enabled', True
             )
             self.light_casts_shadows[slot] = False
+            self.light_cookie[slot] = 0
         else:
             if (self._effect_published is not None
                     and (self.effect_slots == slot).any()):
@@ -1671,6 +1681,7 @@ class EntityTable:
             # A hidden decal paints nothing, in the editor too: nor does it glow.
             self.light_enabled[slot] = not self.hidden[slot]
             self.light_casts_shadows[slot] = False
+            self.light_cookie[slot] = 0
         elif (self.class_bits[slot] & (ENT_LIGHT | ENT_EFFECT)) == ENT_LIGHT:
             self.light_color[slot] = _light_color_of(thing)
             self.light_params[slot] = (_light_float(thing, 'intensity', 1.0),
@@ -1678,12 +1689,19 @@ class EntityTable:
             self.light_enabled[slot] = _light_bool(thing, 'state', True)
             self.light_casts_shadows[slot] = _light_bool(
                 thing, 'casts_shadows', False)
+            # Independent of shadows: a cookie light that casts them darkens
+            # its image in its own shadow, down to this floor.
+            self.light_cookie[slot] = cookie_of(_light_props(thing))
+            self.light_cookie_floor[slot] = (
+                cookie_shadow_floor(_light_props(thing))
+                if self.light_cookie[slot] else 0.0)
         elif not (self.class_bits[slot] & ENT_EFFECT):
             # A reused slot must not keep its previous occupant's light.
             self.light_color[slot] = 0.0
             self.light_params[slot] = 0.0
             self.light_enabled[slot] = False
             self.light_casts_shadows[slot] = False
+            self.light_cookie[slot] = 0
 
         if offset is not None:
             self.light_offset[slot] = offset

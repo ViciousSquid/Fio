@@ -286,6 +286,10 @@ class IOManager:
         # Entity lookup function - set by logic_thread
         self._find_entity: Optional[Callable] = None
         self._find_entity_by_id: Optional[Callable] = None
+        # finder(name) -> the members of the group called *name* (a list,
+        # possibly empty) or None when there is no such group. See
+        # set_group_finder.
+        self._find_group: Optional[Callable] = None
         
         self._logic_thread = None
         self._game_state = None
@@ -388,6 +392,18 @@ class IOManager:
         finder(entity_id: str) -> entity or None
         """
         self._find_entity_by_id = finder
+
+    def set_group_finder(self, finder: Callable):
+        """
+        Set the function used to find a *group* by name.
+        finder(name: str) -> list of member entities, or None for no group.
+
+        A connection whose target names no entity but names a group (a
+        visgroup, or a brush group) delivers its input to every member, in
+        order. A member that does not accept the input ignores it, as any
+        entity does.
+        """
+        self._find_group = finder
     
     def register_input_handler(self, entity_type: str, input_name: str, 
                                 handler: Callable):
@@ -578,10 +594,25 @@ class IOManager:
         # Fallback to name lookup (legacy maps or missing ID)
         if target is None:
             target = self._find_entity(target_name)
+        if target is None and target_name and self._find_group:
+            # No entity by that name: a group of that name receives the input
+            # -- every member, each exactly as if it had been the target.
+            members = self._find_group(target_name)
+            if members is not None:
+                for member in list(members):
+                    # '' : the member's own name in loop reports.
+                    self._deliver_input(member, '', input_name, parameter,
+                                        source_entity, source_id, activator_id)
+                return
         if target is None:
             debug_log("Error", f"I/O: Target '{target_name}' (id={target_id}) not found!")
             return
+        self._deliver_input(target, target_name, input_name, parameter,
+                            source_entity, source_id, activator_id)
 
+    def _deliver_input(self, target, target_name, input_name, parameter,
+                       source_entity, source_id, activator_id):
+        """Run *input_name* on the resolved entity *target*."""
         if not io_enabled(target):
             return
         
@@ -1521,6 +1552,37 @@ def _io_names_lower(names):
     return {n.lower() for n in names}
 
 
+class GroupTarget:
+    """A connection's target that names a group (engine.io_groups): every
+    member receives the input; one without it ignores it."""
+
+    __slots__ = ('name', 'members')
+
+    def __init__(self, name, members):
+        self.name = name
+        self.members = list(members)
+
+
+def resolve_group_target(state, name):
+    """The :class:`GroupTarget` called *name* in *state* (an editor or world
+    state), or None when no group has that name."""
+    from engine.io_groups import group_members
+    members = group_members(state, name)
+    return None if members is None else GroupTarget(name, members)
+
+
+def group_input_names(members):
+    """Every input some member of a group accepts, first-seen order: what a
+    connection targeting the group may call."""
+    names, seen = [], set()
+    for member in members:
+        for name in get_input_names(get_entity_type_for_io(member) or ''):
+            if name.lower() not in seen:
+                seen.add(name.lower())
+                names.append(name)
+    return names
+
+
 def validate_connection(conn, entity, target, source_type=None):
     """Problems with one connection, as ``[(code, message), ...]``.
 
@@ -1551,6 +1613,19 @@ def validate_connection(conn, entity, target, source_type=None):
         problems.append((
             PROBLEM_MISSING_TARGET,
             "targets '%s', which is not in this map" % (target_name or '<unnamed>',)))
+    elif isinstance(target, GroupTarget):
+        # A group is judged only when every member's type is known: then the
+        # input must be one at least one member accepts.
+        types = [get_entity_type_for_io(m) for m in target.members]
+        if types and all(is_registered_type(t) for t in types):
+            accepted = set(IOManager.GENERIC_INPUTS)
+            for t in types:
+                accepted |= _io_names_lower(get_input_names(t))
+            if input_name.lower() not in accepted:
+                problems.append((
+                    PROBLEM_UNKNOWN_INPUT,
+                    "calls '%s', which no member of group '%s' accepts"
+                    % (input_name, target.name)))
     else:
         target_type = get_entity_type_for_io(target)
         if is_registered_type(target_type):
@@ -1643,7 +1718,8 @@ def audit_io_coverage(io_manager):
     }
 
 
-def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=None):
+def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=None,
+                               find_group=None):
     """Every problem in a whole map, as ``[(entity, connection, code, message)]``.
 
     Resolution follows the runtime's own rule — id first, name second — so what
@@ -1667,13 +1743,24 @@ def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=No
         find_by_id = find_by_id or by_id.get
         find_by_name = find_by_name or by_name.get
 
+    if find_group is None:
+        # Brush groups live on the brushes; visgroups need the caller's state.
+        from types import SimpleNamespace
+        scene = SimpleNamespace(brushes=brushes, things=things)
+        find_group = lambda name: resolve_group_target(scene, name)
+
     def _resolve(conn):
         target_id = getattr(conn, 'target_id', '')
         if target_id:
             found = find_by_id(target_id)
             if found is not None:
                 return found
-        return find_by_name(getattr(conn, 'target_name', '') or '')
+        name = getattr(conn, 'target_name', '') or ''
+        found = find_by_name(name)
+        if found is None and name:
+            # As the runtime does: a name no entity has may be a group's.
+            found = find_group(name)
+        return found
 
     report = []
     for entity in list(brushes) + list(things):
@@ -1685,7 +1772,7 @@ def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=No
     return report
 
 def validate_all_scene_connections(
-        brushes, things, find_by_id=None, find_by_name=None):
+        brushes, things, find_by_id=None, find_by_name=None, find_group=None):
     """Validate every authored graph connection in the scene.
 
     This covers both graph systems currently used by Fio:
@@ -1707,6 +1794,7 @@ def validate_all_scene_connections(
         things,
         find_by_id=find_by_id,
         find_by_name=find_by_name,
+        find_group=find_group,
     )
 
     io_count = sum(

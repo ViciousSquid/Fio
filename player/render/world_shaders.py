@@ -64,6 +64,8 @@ assert _dropped == 1, "the shared light block changed shape"
 # A light's source size (an emissive brush) rides in the indices' second
 # component, as a whole number of world units.
 _fragment = re.sub(r"lights\[([^]]+)\]\.params\.z", r"float(lights[\1].indices.y)", _fragment)
+# A cookie light's shadow floor rides in the fourth, in thousandths.
+_fragment = re.sub(r"lights\[([^]]+)\]\.params\.w", r"(float(lights[\1].indices.w) * 0.001)", _fragment)
 for _old, _new in (('.position.xyz','.position_radius.xyz'),
                   ('.color.xyz','.color_intensity.xyz'),
                   ('.params.x','.color_intensity.w'), ('.params.y','.position_radius.w')):

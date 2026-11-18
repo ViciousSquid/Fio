@@ -343,6 +343,13 @@ class GLESRenderer:
             self.shadows.invalidate()
         from .assets import Images
         self._images = Images(self._scene.get('package'), self._embedded)
+        if self.light_buffer:
+            # Cookie images come from the played package, as textures do.
+            package = self._scene.get('package')
+            self.light_buffer.forget_cookies()
+            self.light_buffer.read = (
+                lambda path, package=package, embedded=self._embedded:
+                embedded.get(path) or (package.read_asset(path) if package else None))
         world = self._scene.get('world')
         data = world.render_map() if world else self._scene['map']
         self._lights = extract_lights(data)

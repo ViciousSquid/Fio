@@ -176,6 +176,7 @@ def extract_lights(map_data: dict, limit: int = 8) -> List[Dict]:
     Matches the ``lit`` shader's ``Light`` struct (shadowIndex is set to -1 by
     the renderer since shadow cube-maps are a later milestone).
     """
+    from engine.light_cookies import cookie_of, cookie_shadow_floor
     lights: List[Dict] = []
     for thing in map_data.get("things", []):
         if not isinstance(thing, dict):
@@ -196,6 +197,8 @@ def extract_lights(map_data: dict, limit: int = 8) -> List[Dict]:
             "color": color,
             "intensity": float(props.get("intensity", 1.0)),
             "radius": float(props.get("radius", 512.0)),
+            "cookie": cookie_of(props),
+            "cookie_floor": cookie_shadow_floor(props),
         })
         if len(lights) >= limit:
             break

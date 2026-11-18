@@ -297,6 +297,27 @@ def test_the_scene_hierarchy_visgroup_menu(main_window):
     _MENUS.clear()
 
 
+def test_the_scene_hierarchy_selects_a_whole_group(main_window):
+    """Right-click a light in a group: "Select Group 'name'" selects every
+    member -- what an I/O connection targeting that name reaches."""
+    from PyQt5.QtWidgets import QMenu
+    state = main_window.state
+    lamps = [make_thing(Light, "lamp%d" % i, (i * 64, 0, 0)) for i in range(3)]
+    loner = make_thing(Light, "loner", (0, 0, 300))
+    state.things.extend(lamps + [loner])
+    state.view_filters.add_visgroup("hall lights", lamps)
+
+    parent = QMenu()
+    _MENUS.append(parent)
+    actions = main_window.scene_hierarchy._add_select_group_actions(parent, [lamps[1]])
+    assert [a.text() for a in actions] == ["Select Group 'hall lights'"]
+    actions[0].trigger()
+    assert list(state.selected_objects) == lamps
+
+    assert main_window.scene_hierarchy._add_select_group_actions(parent, [loner]) == []
+    _MENUS.clear()
+
+
 def test_view_menu_visgroups_cordon_follows_the_window(main_window):
     action = main_window.visgroups_view_action
     assert action.text() == "Visgroups / Cordon" and action.isCheckable()

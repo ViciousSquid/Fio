@@ -184,6 +184,98 @@ float fioSourceFade(float size, highp vec3 toLight) {
 """
 
 
+#: The texture unit of the shared light-cookie array (engine.light_cookies).
+#: Above every unit a fragment stage already uses (0..15: diffuse, terrain,
+#: shadow cube-maps, heights, paint, geometry transforms, panorama); GL 3.3
+#: guarantees 48 combined units and GLES 3.0 32, and the fragment-stage
+#: sampler count stays within 16 because only one more sampler is added.
+COOKIE_TEXTURE_UNIT = 16
+
+#: How many mip levels blurrier a cookie is at the light's radius than at its
+#: centre. Linear in distance / radius: the near image is sharp, the far one
+#: soft but still recognisable (a level is half the resolution).
+COOKIE_SOFTEN_LODS = 3.0
+
+#: Projected-image lighting (engine.light_cookies). ``fioLightColor`` stands
+#: in for a light's colour in every light loop. For an ordinary light --
+#: ``indices.z`` 0, the dynamically uniform branch every fragment of the draw
+#: takes together -- it returns the colour itself and samples nothing.
+#:
+#: A cookie light reads its image along the direction from the light's centre
+#: to the fragment, with an octahedral map (centre = down, corners = up), so
+#: the image stretches with distance as a projection does. The level of
+#: detail is chosen explicitly -- the light loop is non-uniform control flow,
+#: where implicit derivatives are undefined, and the octahedral fold would
+#: give a seam if they were taken there: the pixel's world size (taken once
+#: at the top of main, in uniform flow) over the texel's world size at that
+#: distance picks the level that does not alias, and a distance bias of up to
+#: COOKIE_SOFTEN_LODS levels softens it toward the radius. One textureLod:
+#: the blur is the hardware's trilinear filter over the mip chain.
+LIGHT_COOKIE_GLSL = """
+uniform mediump sampler2DArray fioCookies;
+highp float fioCookiePixel;
+vec2 fioOctahedral(highp vec3 d) {
+    d /= (abs(d.x) + abs(d.y) + abs(d.z));
+    vec2 p = d.xz;
+    if (d.y > 0.0) {
+        vec2 s = vec2(p.x >= 0.0 ? 1.0 : -1.0, p.y >= 0.0 ? 1.0 : -1.0);
+        p = (1.0 - abs(p.yx)) * s;
+    }
+    return p * 0.5 + 0.5;
+}
+vec3 fioLightColor(int i, highp vec3 fragPos) {
+    int layer = lights[i].indices.z;
+    if (layer <= 0) return lights[i].color.xyz;
+    highp vec3 fromLight = fragPos - lights[i].position.xyz;
+    highp float dist = max(length(fromLight), 0.001);
+    vec2 uv = fioOctahedral(fromLight / dist);
+    // An octahedral texel spans about sqrt(4 pi) / size radians.
+    highp float texel = dist * 3.5449 / float(textureSize(fioCookies, 0).x);
+    float lod = log2(max(fioCookiePixel / texel, 1.0))
+              + """ + repr(COOKIE_SOFTEN_LODS) + """ * clamp(dist / max(lights[i].params.y, 1.0), 0.0, 1.0);
+    return lights[i].color.xyz * textureLod(fioCookies, vec3(uv, float(layer - 1)), lod).rgb;
+}
+// A cookie light's own shadow darkens its image but never erases it: its
+// visibility is max(1 - shadow, floor), the floor being the light's
+// cookie_shadow_floor (params.w). Only this light's shadow is involved; an
+// ordinary light's shadow is returned unchanged.
+float fioCookieShadow(int i, float shadow) {
+    if (lights[i].indices.z <= 0) return shadow;
+    return min(shadow, 1.0 - clamp(lights[i].params.w, 0.0, 1.0));
+}
+"""
+
+_COOKIE_MARKER = "\n// <fio light cookies>\n"
+_MAIN_RE = re.compile(r"void\s+main\s*\(\s*(?:void)?\s*\)\s*\{")
+
+
+#: The cookie shadow floor a Light starts with (``cookie_shadow_floor``).
+COOKIE_SHADOW_FLOOR = 0.15
+
+_SHADOW_CALL_RE = re.compile(r"calcPointShadow\(\s*lights\[([^]]+)\]\.shadowIndex\b")
+
+
+def _floor_cookie_shadows(source):
+    """Wrap each light loop's ``calcPointShadow(lights[i].shadowIndex, ...)``
+    in ``fioCookieShadow(i, ...)`` (LIGHT_COOKIE_GLSL)."""
+    out, pos = [], 0
+    for match in _SHADOW_CALL_RE.finditer(source):
+        depth, end = 0, match.start() + len("calcPointShadow")
+        for end in range(end, len(source)):
+            if source[end] == "(":
+                depth += 1
+            elif source[end] == ")":
+                depth -= 1
+                if not depth:
+                    break
+        out.append(source[pos:match.start()])
+        out.append("fioCookieShadow(" + match.group(1) + ", "
+                   + source[match.start():end + 1] + ")")
+        pos = end + 1
+    out.append(source[pos:])
+    return "".join(out)
+
+
 def light_ubo_source(source):
     """Rewrite a legacy Light[] fragment shader to the shared std140 UBO.
 
@@ -208,18 +300,32 @@ def light_ubo_source(source):
         "struct Light {\n"
         "    highp vec4 position;\n"
         "    vec4 color;\n"
-        "    vec4 params;       // x=intensity, y=radius, z=source size\n"
-        "    ivec4 indices;     // x=shadow index\n"
+        "    vec4 params;       // x=intensity, y=radius, z=source size, w=cookie shadow floor\n"
+        "    ivec4 indices;     // x=shadow index, z=cookie layer + 1 (0: none)\n"
         "};\n"
         "layout(std140) uniform FioLightBlock {\n"
         f"    Light lights[{count}];\n"
         "};\n"
         + LIGHT_SOURCE_SIZE_GLSL
+        + _COOKIE_MARKER
     )
-    result = _LIGHT_DECL_RE.sub(block, source, count=1)
+    result = _LIGHT_DECL_RE.sub(lambda _m: block, source, count=1)
 
     result = re.sub(r"lights\[([^]]+)\]\.position\b", r"lights[\1].position.xyz", result)
-    result = re.sub(r"lights\[([^]]+)\]\.color\b", r"lights[\1].color.xyz", result)
+    # A light's colour comes through its cookie (identity without one). The
+    # helper is spliced in after these rewrites, so its own reads stay as
+    # written; it needs the pixel footprint from the top of main().
+    main = _MAIN_RE.search(result)
+    if main is not None:
+        result = _floor_cookie_shadows(result)
+        result = re.sub(r"lights\[([^]]+)\]\.color\b",
+                        r"fioLightColor(\1, " + fragment_position + ")", result)
+        result = (result[:main.end()]
+                  + "\n    fioCookiePixel = max(length(dFdx(" + fragment_position + ")), "
+                  "length(dFdy(" + fragment_position + ")));"
+                  + result[main.end():])
+    else:
+        result = re.sub(r"lights\[([^]]+)\]\.color\b", r"lights[\1].color.xyz", result)
     # A light with a source size (an emissive brush: a tube, not a point)
     # fades in over that distance. Every light loop takes the fragment's
     # offset from the light as ``lights[i].position - FragPos``.
@@ -234,7 +340,7 @@ def light_ubo_source(source):
         r"int(lights[\1].indices.x)",
         result,
     )
-    return result
+    return result.replace(_COOKIE_MARKER, LIGHT_COOKIE_GLSL if main is not None else "")
 
 SHADOW_GLSL = """
 #define MAX_SHADOW_LIGHTS """ + str(MAX_SHADOW_LIGHTS) + """

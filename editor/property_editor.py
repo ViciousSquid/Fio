@@ -208,6 +208,13 @@ def _project_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 
 
+def _truthy(value) -> bool:
+    """A property flag that may be saved as a bool or a "true"/"false" str."""
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
 def _normalise_project_asset_path(path: object) -> str:
     """Return an authored asset path relative to Fio's project root.
 
@@ -3872,6 +3879,46 @@ class PropertyEditor(QWidget):
                 form.addRow("", cb)
                 continue
 
+            # A projected image (engine.light_cookies). Independent of Casts
+            # Shadows: with both, the light's own shadow darkens the image
+            # down to Cookie Shadow Floor rather than erasing it.
+            if isinstance(thing, Light) and key == 'cookie_enabled':
+                cb = _make_checkbox(
+                    "Project Image (Cookie)", _truthy(value),
+                    lambda checked: self.update_object_prop('cookie_enabled', checked),
+                    _Style.CHECKBOX)
+                cb.setToolTip(
+                    "Project the Cookie Image onto everything around the light,\n"
+                    "in every direction (a square, octahedral-mapped image).\n"
+                    "Without Casts Shadows it lights through walls, as any\n"
+                    "non-shadow light does.")
+                self._widgets['light_cookie_enabled'] = cb
+                form.addRow("", cb)
+                continue
+
+            if isinstance(thing, Light) and key == 'cookie_shadow_floor':
+                spin = QDoubleSpinBox()
+                spin.setRange(0.0, 1.0)
+                spin.setSingleStep(0.05)
+                spin.setDecimals(2)
+                try:
+                    spin.setValue(float(value))
+                except (TypeError, ValueError):
+                    spin.setValue(0.15)
+                spin.setToolTip(
+                    "How bright the projected image stays inside this light's\n"
+                    "own shadow (needs Casts Shadows): 0 erases it, 1 ignores\n"
+                    "the shadow. Other lights' shadows never affect it.")
+                spin.valueChanged.connect(
+                    lambda v: self.update_object_prop('cookie_shadow_floor', float(v)))
+                self._widgets['light_cookie_shadow_floor'] = spin
+                form.addRow(QLabel("Cookie Shadow Floor:"), spin)
+                continue
+
+            if isinstance(thing, Light) and key == 'cookie_texture':
+                self.add_cookie_texture_widget(form, thing, str(value or ''))
+                continue
+
             # Light shadow-map size.
             if isinstance(thing, Light) and key == 'shadow_map_size':
                 spin = QSpinBox()
@@ -5640,6 +5687,55 @@ class PropertyEditor(QWidget):
             h.addWidget(le)
             inputs.append(le)
         layout.addRow(key.title() + ":", widget)
+
+    def add_cookie_texture_widget(self, form_layout, thing, value):
+        """The Light's projected image: a square picture from assets/."""
+        widget = QWidget()
+        h = QHBoxLayout(widget)
+        h.setContentsMargins(0, 0, 0, 0)
+        line_edit = QLineEdit(value)
+        line_edit.setReadOnly(True)
+        line_edit.setPlaceholderText("No image")
+        line_edit.setToolTip(
+            "A square image laid out as an octahedral map: its centre lands\n"
+            "straight below the light, its edges on the walls, its corners\n"
+            "on the ceiling. Image right is +X, image top is -Z.")
+        button = QPushButton("Browse...")
+        button.setFixedWidth(80)
+        clear = QPushButton("Clear")
+        clear.setFixedWidth(50)
+
+        def open_dialog():
+            from engine.asset_paths import project_asset_path
+            root = _project_root()
+            start = os.path.join(root, 'assets', 'textures', 'cookies')
+            if not os.path.isdir(start):
+                start = os.path.join(root, 'assets', 'textures')
+            fp, _ = QFileDialog.getOpenFileName(
+                self, "Select Cookie Image", start,
+                "Images (*.png *.jpg *.jpeg *.bmp *.tga)")
+            if not fp:
+                return
+            rel = _normalise_project_asset_path(fp)
+            if project_asset_path(rel) is None:
+                QMessageBox.warning(
+                    self, "Cookie Image",
+                    "Cookie images must be inside the project's assets folder.")
+                return
+            self.update_object_prop('cookie_texture', rel)
+            line_edit.setText(rel)
+
+        def clear_image():
+            self.update_object_prop('cookie_texture', '')
+            line_edit.setText('')
+
+        button.clicked.connect(open_dialog)
+        clear.clicked.connect(clear_image)
+        h.addWidget(line_edit, 1)
+        h.addWidget(button)
+        h.addWidget(clear)
+        self._widgets['light_cookie_texture'] = line_edit
+        form_layout.addRow(QLabel("Cookie Image:"), widget)
 
     def add_sound_file_widget(self, form_layout, thing, key, value):
         widget = QWidget()

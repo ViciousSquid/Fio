@@ -146,6 +146,13 @@ class LogicWorld:
             return self.scan_entity("id", entity_id)
         return self.id_cache.get(entity_id)
 
+    def find_group_members(self, name: str):
+        """The members of the group called *name* (a visgroup or a brush
+        group), or None when there is none -- the I/O system's group targets
+        (engine.io_groups)."""
+        from engine.io_groups import group_members
+        return group_members(self.logic.editor_state, name)
+
     def scan_entity(self, key, value):
         """Search the live editor world outside a play session."""
         logic = self.logic

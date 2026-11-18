@@ -235,6 +235,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._light_ubo_bound = False
         self._light_ubo_dtype = self.LIGHT_UBO_DTYPE
         self._light_ubo_data = np.zeros(self.MAX_LIGHTS, dtype=self._light_ubo_dtype)
+        #: The shared light-cookie texture array (engine.light_cookies),
+        #: created the first time a light with a cookie is uploaded.
+        self._light_cookies = None
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
@@ -1230,6 +1233,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._light_ubo_capacity = 0
             self._light_ubo_key = None
             self._light_ubo_bound = False
+        if self._light_cookies is not None:
+            self._light_cookies.close()
+            self._light_cookies = None
         # Instance streams: one buffer and one vertex array per pass.
         self._release_brush_streams()
         self._slot_transform_caches.clear()
