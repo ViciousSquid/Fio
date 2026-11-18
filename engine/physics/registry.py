@@ -97,9 +97,12 @@ def unload_physics():
                        if m == module_name or m.startswith(module_name + '.')]:
             del sys.modules[loaded]
             dropped.append(loaded)
-    package = sys.modules.get(__name__.rpartition('.')[0])
-    for name in ('Soma', 'PhysicsWorld', 'PhysicsBody', 'quat_from_rotation',
-                 'rotation_from_quat', 'soma'):
-        if package is not None:
-            vars(package).pop(name, None)
+    # The import system set each dropped submodule as an attribute of its
+    # package (``engine.physics.soma``): take it off too, or the package
+    # would keep the module alive.
+    for loaded in dropped:
+        parent, _dot, child = loaded.rpartition('.')
+        package = sys.modules.get(parent)
+        if package is not None and getattr(package, child, None) is not None:
+            vars(package).pop(child, None)
     return dropped

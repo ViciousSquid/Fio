@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from engine import mesh_columns
-from engine.physics.soma import PhysicsWorld
+from engine.physics.soma import Soma
 from engine.spatial_grid import SpatialGrid
 from tests.physics.test_dynamic_bodies import (DRUM_HALF_Y, DRUM_SIZE, _drum_brush,
                                                _floor, _prop, _run)
@@ -59,7 +59,7 @@ def _proxy(shape, at=(0.0, 0.0, 0.0), entity=None):
 def _world(*statics):
     grid = SpatialGrid(cell_size=512.0)
     grid.populate([_floor(), *statics])
-    return PhysicsWorld(grid), grid
+    return Soma(grid), grid
 
 
 def _settle(world, bodies, drum, frames=500):
@@ -205,7 +205,7 @@ def _body_on_ramp(shape, rise, at, **props):
 
     grid = SpatialGrid(cell_size=512.0)
     grid.populate([_floor((0, -50, 0), (4000, 100, 4000)), _ramp(rise)])
-    world = PhysicsWorld(grid)
+    world = Soma(grid)
     prop = _prop(at, **props)
     body = _drum_brush(prop)
     body['_collision_mode'] = shape

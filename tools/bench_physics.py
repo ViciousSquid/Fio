@@ -42,13 +42,13 @@ def level(rng):
 
 
 def build(count, rng, statics):
-    from engine.physics.soma import PhysicsWorld
+    from engine.physics.soma import Soma
     from engine.spatial_grid import SpatialGrid
     from engine.prop_entity import Prop
 
     grid = SpatialGrid(cell_size=512.0)
     grid.populate(statics)
-    world = PhysicsWorld(grid)
+    world = Soma(grid)
     bodies = []
     for _ in range(count):
         prop = Prop(pos=[rng.uniform(-5000, 5000), 0.0, rng.uniform(-5000, 5000)],

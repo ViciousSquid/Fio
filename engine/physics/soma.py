@@ -2871,6 +2871,3 @@ def _float(value, default):
     except (TypeError, ValueError):
         return default
 
-
-#: The name this class had before it was Soma; existing code imports it.
-PhysicsWorld = Soma

@@ -90,3 +90,24 @@ def test_unloading_leaves_the_boundary_and_reloads_on_demand():
     out = subprocess.run([sys.executable, '-c', code], cwd=ROOT,
                          capture_output=True, text=True)
     assert out.returncode == 0 and out.stdout.strip() == 'ok', out.stderr[-2000:]
+
+
+def test_unloading_leaves_no_soma_name_on_the_physics_package():
+    """After unload_physics nothing on engine.physics still points at Soma
+    (not the submodule, not a class), so no stale name pins it while another
+    physics is selected. In a process of its own, as above."""
+    code = (
+        "import sys\n"
+        "import engine.physics as boundary\n"
+        "from engine.physics import create_physics, unload_physics\n"
+        "from engine.spatial_grid import SpatialGrid\n"
+        "create_physics(SpatialGrid())\n"
+        "assert 'soma' in vars(boundary)\n"
+        "unload_physics()\n"
+        "left = [n for n in ('soma', 'Soma', 'PhysicsWorld', 'PhysicsBody')\n"
+        "        if n in vars(boundary)]\n"
+        "assert not left, left\n"
+        "print('ok')\n")
+    out = subprocess.run([sys.executable, '-c', code], cwd=ROOT,
+                         capture_output=True, text=True)
+    assert out.returncode == 0 and out.stdout.strip() == 'ok', out.stderr[-2000:]

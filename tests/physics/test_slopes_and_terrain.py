@@ -9,7 +9,7 @@ way; and gravity pulls along it, against the body's friction.
 import numpy as np
 import pytest
 
-from engine.physics.soma import PhysicsWorld
+from engine.physics.soma import Soma
 from engine.spatial_grid import SpatialGrid
 from engine.terrain import Terrain
 from tests.helpers.runtime import drive, release
@@ -44,7 +44,7 @@ def _world(*brushes, terrain=None):
     grid = SpatialGrid(cell_size=512.0)
     grid.populate(list(brushes))
     grid.set_terrain(terrain)
-    return PhysicsWorld(grid), grid
+    return Soma(grid), grid
 
 
 def _drop(world, prop, frames=400):

@@ -568,3 +568,5 @@ def test_the_physics_package_exports_the_boundary_only():
         with pytest.raises(ImportError):
             exec(f'from engine.physics import {name}', {})
     assert spatial_grid.SpatialGrid and soma.Soma and soma.PhysicsBody
+    assert not hasattr(soma, 'PhysicsWorld'), "Soma has one name"
+

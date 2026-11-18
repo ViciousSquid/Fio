@@ -2,7 +2,7 @@
 
 Collision is Fio's (the player controller's own resolution against the
 spatial grid's colliders) and gravity has one authority, the live
-PhysicsWorld -- the same source Big World and every falling thing use. On
+Soma -- the same source Big World and every falling thing use. On
 top of that the movement rules are Quake 2's: speeds, acceleration and
 friction per frame, the jump and its landing lockout, air stepping, ducking
 and the steepest walkable slope.
@@ -22,7 +22,7 @@ from engine.constants import (                              # noqa: E402
     PM_LAND_TIME, PM_MAXSPEED, PM_STOPSPEED,
 )
 from engine.physics import SV_GRAVITY, world_gravity  # noqa: E402
-from engine.physics.soma import PhysicsWorld                # noqa: E402
+from engine.physics.soma import Soma                # noqa: E402
 from engine.player import Player                            # noqa: E402
 from tests.helpers.worlds import angled_brush, box_brush    # noqa: E402
 
@@ -64,7 +64,7 @@ def feet(p):
 
 def test_the_physics_world_holds_quake_2s_gravity():
     assert SV_GRAVITY == 800.0
-    assert float(PhysicsWorld.GRAVITY) == -800.0
+    assert float(Soma.GRAVITY) == -800.0
     assert world_gravity() == -800.0
 
 

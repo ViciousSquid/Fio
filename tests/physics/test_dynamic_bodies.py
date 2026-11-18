@@ -1,4 +1,4 @@
-"""Engine-level dynamic body physics (engine.physics.soma.PhysicsWorld).
+"""Engine-level dynamic body physics (engine.physics.soma.Soma).
 
 Runs against the real SpatialGrid so the static-cell cache, the batched
 floor query and the push response are exercised exactly as in play mode.
@@ -6,7 +6,7 @@ floor query and the push response are exercised exactly as in play mode.
 import glm
 import pytest
 
-from engine.physics.soma import PhysicsWorld
+from engine.physics.soma import Soma
 from engine.spatial_grid import SpatialGrid
 from engine.player import Player
 from engine.prop_entity import Prop
@@ -25,7 +25,7 @@ def _floor(pos=(0.0, -50.0, 0.0), size=(2000.0, 100.0, 2000.0)):
 def _world(*static_brushes):
     grid = SpatialGrid(cell_size=512.0)
     grid.populate(list(static_brushes) or [_floor()])
-    return PhysicsWorld(grid)
+    return Soma(grid)
 
 
 def _prop(pos=(0.0, 0.0, 0.0), **props):
@@ -191,7 +191,7 @@ def test_the_planes_define_body_shape_relative_to_origin():
     prop = _prop((10.0, 20.0, 30.0))
     brush = _convex_body_brush(prop, [5.0, 20.0, 27.0], [15.0, 30.0, 33.0])
 
-    half, offset = PhysicsWorld._shape_from_brush(prop, brush)
+    half, offset = Soma._shape_from_brush(prop, brush)
 
     assert tuple(half.tolist()) == (5.0, 5.0, 3.0)
     assert tuple(offset.tolist()) == (0.0, 5.0, 0.0)
@@ -283,7 +283,7 @@ def test_a_body_stops_at_the_wall_not_a_step_short_of_it(speed):
     _run(world, 600)
 
     gap = 500.0 - (prop.pos[0] + DRUM_SIZE[0] * 0.5)
-    assert 0.0 < gap <= 2.0 * PhysicsWorld.CONTACT_SKIN
+    assert 0.0 < gap <= 2.0 * Soma.CONTACT_SKIN
     assert world.get_body(prop).velocity[0] == 0.0
 
 
@@ -705,7 +705,7 @@ def test_a_custom_grid_keeps_the_scalar_path():
         def raycast_down(self, x, z, start_y=10000.0):
             return 123.0
 
-    world = PhysicsWorld(TracingGrid(cell_size=512.0))
+    world = Soma(TracingGrid(cell_size=512.0))
     assert world._can_group_floor_queries() is False
 
     prop = _prop(pos=(0.0, 300.0, 0.0))
