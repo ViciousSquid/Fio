@@ -1,12 +1,20 @@
-"""Brush groups: brushes that are attached to one another.
+"""Brush groups: brushes (and entities) that are attached to one another.
 
-A group is every brush carrying the same ``brush_group`` name (saved with the
-map as an ordinary brush key). Grouped brushes move together:
+A group is every object carrying the same ``brush_group`` name: saved with
+the map as an ordinary key -- on a brush dict itself, and in an entity's
+(``Thing``'s) ``properties``, so the map format is unchanged for brushes and
+an entity record simply gains one more property. A group may hold brushes,
+entities or both. Grouped objects move together:
 
 * in the editor, a move or a rotation of one member carries the others
   (:func:`with_mates` widens the set a drag moves);
-* in Play, a member that is a mover or a door carries the members that are
-  not (``engine.logic_groups``) -- a door and the glass set into it.
+* in Play, a brush member that is a mover or a door carries the brushes that
+  are not (``engine.logic_groups``) -- a door and the glass set into it.
+  Entities are not carried in Play: their grouping is an editor one.
+
+Every helper here takes a mixed list of brush dicts and ``Thing`` objects
+(:func:`scene_objects` gives the whole scene's, brushes first). Anything else
+-- ``None``, terrain -- is never in a group.
 
 Qt-free: the hierarchy, the group dialog and the Visgroups window all read
 groups through here.
@@ -26,6 +34,35 @@ PALETTE = (
 MAX_MOVERS_MESSAGE = "Maximum of 1 mover per group"
 
 
+def _props(obj):
+    """The dict *obj*'s group name lives in: a brush is its own; an entity
+    keeps it in its ``properties``. ``None`` for anything that cannot be
+    grouped."""
+    if isinstance(obj, dict):
+        return obj
+    props = getattr(obj, 'properties', None)
+    return props if isinstance(props, dict) else None
+
+
+def is_groupable(obj):
+    """A brush or an entity: something that can be put in a group."""
+    return _props(obj) is not None
+
+
+def scene_objects(state):
+    """Every groupable object in *state*: its brushes, then its entities.
+
+    Brushes first, so a group's colour (by order of appearance) is the one
+    it had before entities could be grouped."""
+    return list(getattr(state, 'brushes', ()) or ()) + list(
+        getattr(state, 'things', ()) or ())
+
+
+def is_hidden(obj):
+    props = _props(obj)
+    return bool(props is not None and props.get('hidden', False))
+
+
 def is_mover(brush):
     """A brush that moves by itself in Play: a mover or a door."""
     return bool(isinstance(brush, dict)
@@ -43,10 +80,11 @@ def too_many_movers(brushes):
 
 
 def group_of(brush):
-    """The name of the group *brush* is in, or ``''``."""
-    if not isinstance(brush, dict):
+    """The name of the group *brush* (a brush or an entity) is in, or ``''``."""
+    props = _props(brush)
+    if props is None:
         return ''
-    return str(brush.get(GROUP_KEY) or '').strip()
+    return str(props.get(GROUP_KEY) or '').strip()
 
 
 def groups(brushes):
@@ -100,10 +138,13 @@ def set_group(brushes, name):
     """Put *brushes* in group *name* (``''`` takes them out of any group)."""
     name = str(name or '').strip()
     for brush in brushes:
+        props = _props(brush)
+        if props is None:
+            continue
         if name:
-            brush[GROUP_KEY] = name
+            props[GROUP_KEY] = name
         else:
-            brush.pop(GROUP_KEY, None)
+            props.pop(GROUP_KEY, None)
 
 
 def rename(brushes, old, new):
@@ -111,8 +152,7 @@ def rename(brushes, old, new):
     new = str(new or '').strip()
     if not new or new == old:
         return False
-    for brush in members(brushes, old):
-        brush[GROUP_KEY] = new
+    set_group(members(brushes, old), new)
     return True
 
 
@@ -137,3 +177,25 @@ def ordered(indexed_brushes):
             placed.add(name)
             result.extend(by_group[name])
     return result
+
+
+def labeller(state, hierarchy=None):
+    """``obj -> str``: how a member is named in group lists -- as the Scene
+    Hierarchy names it (*hierarchy*, when there is one), else by its name or
+    its place in the scene."""
+    brush_index = {id(b): i for i, b in enumerate(getattr(state, 'brushes', ()))}
+    thing_index = {id(t): i for i, t in enumerate(getattr(state, 'things', ()))}
+
+    def label(obj):
+        if isinstance(obj, dict):
+            index = brush_index.get(id(obj), 0)
+            if hierarchy is not None:
+                return hierarchy._get_brush_display_name(obj, index)
+            return obj.get('name') or 'Brush %d' % (index + 1)
+        index = thing_index.get(id(obj), 0)
+        if hierarchy is not None and hasattr(hierarchy, '_get_thing_display_name'):
+            return hierarchy._get_thing_display_name(obj, index)
+        props = getattr(obj, 'properties', None) or {}
+        return props.get('name') or 'Thing %d' % (index + 1)
+
+    return label

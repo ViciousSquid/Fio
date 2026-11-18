@@ -478,28 +478,30 @@ class SceneHierarchy(QWidget):
         return sub
 
     def _add_group_action(self, menu, brushes):
-        """"Add to Group..." for brushes that are in none, "Edit Group..."
-        when one of them already is: both open the group dialog."""
+        """"Add to Group..." for objects (brushes and/or entities) that are in
+        none, "Edit Group..." when one of them already is: both open the
+        group dialog."""
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
         if not brushes:
             return None
         grouped = any(brush_groups.group_of(b) for b in brushes)
         action = menu.addAction("Edit Group..." if grouped else "Add to Group...")
-        action.setToolTip("Grouped brushes are attached: they always move together, "
-                          "in the editor and in Play")
+        action.setToolTip("Grouped objects are attached: they always move together "
+                          "in the editor (and brushes in Play)")
         action.triggered.connect(
             lambda _checked=False, chosen=list(brushes):
             self.main_window.open_brush_group_dialog(chosen))
         if grouped:
             ungroup = menu.addAction("Ungroup")
-            ungroup.setToolTip("Take these brushes out of their group")
+            ungroup.setToolTip("Take these objects out of their group")
             ungroup.triggered.connect(
                 lambda _checked=False, chosen=list(brushes):
                 self.main_window.ungroup_brushes(chosen))
             every = self.main_window.with_group_mates(
                 [b for b in brushes if brush_groups.group_of(b)])
-            hidden = all(b.get('hidden', False) for b in every)
+            hidden = all(brush_groups.is_hidden(b) for b in every)
             toggle = menu.addAction("Show Group" if hidden else "Hide Group")
-            toggle.setToolTip("Show or hide every brush in the group")
+            toggle.setToolTip("Show or hide every object in the group")
             toggle.triggered.connect(
                 lambda _checked=False, chosen=every, hide=not hidden:
                 self.main_window.set_brushes_hidden(chosen, hide))
@@ -521,6 +523,29 @@ class SceneHierarchy(QWidget):
             return f'Trigger {index + 1}'
         # Default brush name
         return f'Brush {index + 1}'
+
+    @staticmethod
+    def _get_thing_display_name(thing_obj, index):
+        """Get display name for an entity: its name, else 'Thing N'."""
+        return thing_obj.name if thing_obj.name else f'Thing {index + 1}'
+
+    @staticmethod
+    def _mark_group_row(item, rows, row, group_colours):
+        """Tint and box *item* (``rows[row]``) in its group's colour: the
+        box's top on a group's first row, its bottom on the last."""
+        group = brush_groups.group_of(rows[row][1])
+        if not group:
+            return
+        colour = group_colours[group]
+        edges = 0
+        if row == 0 or brush_groups.group_of(rows[row - 1][1]) != group:
+            edges |= GROUP_FIRST
+        if row + 1 == len(rows) or brush_groups.group_of(rows[row + 1][1]) != group:
+            edges |= GROUP_LAST
+        item.setData(0, GROUP_COLOUR_ROLE, colour)
+        item.setData(0, GROUP_EDGE_ROLE, edges)
+        item.setBackground(0, group_tint(colour))
+        item.setToolTip(0, "Group: %s" % group)
 
     def _get_sorted_brushes(self):
         """Brushes in the current sort order, each brush group's members
@@ -562,6 +587,11 @@ class SceneHierarchy(QWidget):
         return brushes
 
     def _get_sorted_things(self):
+        """Things in the current sort order, each group's entities kept
+        together (where the group's first entity sorts)."""
+        return brush_groups.ordered(self._sorted_things())
+
+    def _sorted_things(self):
         """Return things in sorted order based on current sort mode."""
         things = list(enumerate(self.main_window.state.things))
         
@@ -678,26 +708,16 @@ class SceneHierarchy(QWidget):
         
         # Add Brushes (sorted; a group's members adjacent, tinted and boxed)
         sorted_brushes = self._get_sorted_brushes()
-        group_colours = brush_groups.colours(self.main_window.state.brushes)
+        # One colour per group across both sections: a group holding brushes
+        # and entities is boxed in the same colour under each header.
+        group_colours = brush_groups.colours(
+            brush_groups.scene_objects(self.main_window.state))
         for row, (i, brush_dict) in enumerate(sorted_brushes):
             item_text = self._get_brush_display_name(brush_dict, i)
             item = QTreeWidgetItem(brushes_header, [item_text, ""])
             item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             item.setData(0, Qt.UserRole, ('brush', i))
-
-            group = brush_groups.group_of(brush_dict)
-            if group:
-                colour = group_colours[group]
-                edges = 0
-                if row == 0 or brush_groups.group_of(sorted_brushes[row - 1][1]) != group:
-                    edges |= GROUP_FIRST
-                if (row + 1 == len(sorted_brushes)
-                        or brush_groups.group_of(sorted_brushes[row + 1][1]) != group):
-                    edges |= GROUP_LAST
-                item.setData(0, GROUP_COLOUR_ROLE, colour)
-                item.setData(0, GROUP_EDGE_ROLE, edges)
-                item.setBackground(0, group_tint(colour))
-                item.setToolTip(0, "Group: %s" % group)
+            self._mark_group_row(item, sorted_brushes, row, group_colours)
             
             if brush_dict.get('hidden', False):
                 item.setForeground(0, QBrush(QColor("#FFAC1C")))
@@ -741,12 +761,14 @@ class SceneHierarchy(QWidget):
         things_header.setFont(0, header_font)
         things_header.setExpanded(True)
         
-        # Add Things (sorted)
-        for i, thing_obj in self._get_sorted_things():
-            item_text = thing_obj.name if thing_obj.name else f'Thing {i+1}'
+        # Add Things (sorted; a group's members adjacent, tinted and boxed)
+        sorted_things = self._get_sorted_things()
+        for row, (i, thing_obj) in enumerate(sorted_things):
+            item_text = self._get_thing_display_name(thing_obj, i)
             item = QTreeWidgetItem(things_header, [item_text, ""])
             item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             item.setData(0, Qt.UserRole, ('thing', i))
+            self._mark_group_row(item, sorted_things, row, group_colours)
             
             # Check if hidden
             if thing_obj.properties.get('hidden', False):
@@ -956,7 +978,7 @@ class SceneHierarchy(QWidget):
                 lambda _checked=False, targets=list(focus_targets):
                 self.focus_on(targets))
             self._add_visgroup_menu(menu, focus_targets)
-            self._add_group_action(menu, [o for o in focus_targets if isinstance(o, dict)])
+            self._add_group_action(menu, focus_targets)
             menu.addSeparator()
 
         # If multiple items of the same type selected, show bulk operations

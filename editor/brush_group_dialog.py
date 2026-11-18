@@ -4,6 +4,9 @@ One dialog for both. It names the group the chosen brushes go in -- a new
 name makes a group, an existing name joins it -- and lists that group's
 members, each of which can be unticked to take it out. When the chosen
 brushes are already grouped, typing a new name renames their group.
+
+"Brushes" here are any groupable objects: brush dicts and entities
+(``Thing``) alike -- see :mod:`editor.brush_groups`.
 """
 
 from PyQt5.QtCore import Qt
@@ -29,7 +32,7 @@ class BrushGroupDialog(QDialog):
         """*chosen*: the brushes the menu was opened on. *display_name*:
         ``brush -> str`` for the member list."""
         super().__init__(parent)
-        self.setWindowTitle("Brush Group")
+        self.setWindowTitle("Group")
         self.setStyleSheet(_STYLE)
         self.resize(340, 380)
         self._brushes = list(all_brushes)
@@ -58,13 +61,13 @@ class BrushGroupDialog(QDialog):
         self.hint.setStyleSheet("color: #aaa;")
         layout.addWidget(self.hint)
 
-        layout.addWidget(QLabel("Brushes in the group (untick to take one out):"))
+        layout.addWidget(QLabel("Members of the group (untick to take one out):"))
         self.member_list = QListWidget()
         layout.addWidget(self.member_list)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.ungroup_btn = QPushButton("Ungroup")
-        self.ungroup_btn.setToolTip("Dissolve this group: its brushes stay, detached")
+        self.ungroup_btn.setToolTip("Dissolve this group: its members stay, detached")
         self.ungroup_btn.clicked.connect(self._ungroup)
         buttons.addButton(self.ungroup_btn, QDialogButtonBox.DestructiveRole)
         buttons.accepted.connect(self.accept)
@@ -100,10 +103,10 @@ class BrushGroupDialog(QDialog):
         elif self.renaming():
             self.hint.setText("Renames group '%s' to '%s'." % (self.editing, name))
         elif name in existing and name != self.editing:
-            self.hint.setText("Adds the selected brushes to group '%s'." % name)
+            self.hint.setText("Adds the selected objects to group '%s'." % name)
         elif name == self.editing:
-            self.hint.setText("Grouped brushes always move together, "
-                              "in the editor and in Play.")
+            self.hint.setText("Grouped objects always move together in the "
+                              "editor; grouped brushes in Play too.")
         else:
             self.hint.setText("Makes a new group '%s'." % name)
         self.member_list.clear()

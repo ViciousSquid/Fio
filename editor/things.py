@@ -524,6 +524,17 @@ class UnresolvedThing(Thing):
     def to_dict(self):
         data = copy.deepcopy(self._record)
         data['pos'] = [float(v) for v in self.pos]
+        # Its brush group is the editor's, not the missing plugin's: it
+        # follows edits as ``pos`` does (editor.brush_groups).
+        group = self.properties.get('brush_group')
+        props = data.get('properties')
+        if group or (isinstance(props, dict) and 'brush_group' in props):
+            if not isinstance(props, dict):
+                props = data['properties'] = {}
+            if group:
+                props['brush_group'] = group
+            else:
+                props.pop('brush_group', None)
         return data
 
     def duplicate(self, existing_names=()):

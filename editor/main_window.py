@@ -2925,9 +2925,10 @@ class MainWindow(QMainWindow):
     # -- brush groups (attached brushes) --------------------------------------
 
     def with_group_mates(self, objects):
-        """*objects* plus the brushes grouped with them: what a move carries."""
+        """*objects* plus the brushes and entities grouped with them: what a
+        move carries."""
         from editor import brush_groups
-        return brush_groups.with_mates(self.state.brushes, objects)
+        return brush_groups.with_mates(brush_groups.scene_objects(self.state), objects)
 
     def movable_with_mates(self, objects):
         """:meth:`with_group_mates`, without the locked ones."""
@@ -2936,9 +2937,10 @@ class MainWindow(QMainWindow):
                         else o.properties.get('lock', False))]
 
     def set_brush_group(self, brushes, name):
-        """Put *brushes* in group *name* ('' ungroups them): one undo step."""
+        """Put *brushes* (brushes and/or entities) in group *name* ('' ungroups
+        them): one undo step."""
         from editor import brush_groups
-        brushes = [b for b in brushes if isinstance(b, dict)]
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
         if not brushes:
             return False
         name = str(name or '').strip()
@@ -2968,21 +2970,28 @@ class MainWindow(QMainWindow):
             return
         self.save_state()
         brush_groups.set_group(brushes, '')
-        for chosen in brush_groups.groups(self.state.brushes).values():
+        for chosen in brush_groups.groups(
+                brush_groups.scene_objects(self.state)).values():
             if len(chosen) == 1:
                 brush_groups.set_group(chosen, '')
         self._brush_groups_changed()
 
     def set_brushes_hidden(self, brushes, hidden):
-        """Hide or show *brushes* (a whole group, from its menu): one undo step."""
+        """Hide or show *brushes* (a whole group, from its menu; entities
+        too): one undo step."""
         from engine.change_journal import touch
-        brushes = [b for b in brushes if isinstance(b, dict)]
+        from engine.spatial import set_live_flag
+        from editor import brush_groups
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
         if not brushes:
             return
         self.save_state()
         for brush in brushes:
-            brush['hidden'] = bool(hidden)
-            touch(brush)
+            if isinstance(brush, dict):
+                brush['hidden'] = bool(hidden)
+                touch(brush)
+            else:
+                set_live_flag(brush, 'hidden', bool(hidden))
         self.mark_as_modified()
         self.update_all_ui()
 
@@ -2992,11 +3001,11 @@ class MainWindow(QMainWindow):
         if not new or new == old:
             return False
         # A name already in use merges the two groups.
-        if not self.brush_group_allowed(
-                brush_groups.members(self.state.brushes, old), new):
+        every = brush_groups.scene_objects(self.state)
+        if not self.brush_group_allowed(brush_groups.members(every, old), new):
             return False
         self.save_state()
-        brush_groups.rename(self.state.brushes, old, new)
+        brush_groups.rename(every, old, new)
         self._brush_groups_changed()
         return True
 
@@ -3009,19 +3018,12 @@ class MainWindow(QMainWindow):
         """Scene Hierarchy > Add to Group... / Edit Group..."""
         from editor import brush_groups
         from editor.brush_group_dialog import BrushGroupDialog
-        brushes = [b for b in brushes if isinstance(b, dict)]
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
         if not brushes:
             return None
-        all_brushes = self.state.brushes
-        index_of = {id(b): i for i, b in enumerate(all_brushes)}
-        hierarchy = getattr(self, 'scene_hierarchy', None)
-
-        def display_name(brush):
-            index = index_of.get(id(brush), 0)
-            if hierarchy is not None:
-                return hierarchy._get_brush_display_name(brush, index)
-            return brush.get('name') or 'Brush %d' % (index + 1)
-
+        all_brushes = brush_groups.scene_objects(self.state)
+        display_name = brush_groups.labeller(
+            self.state, getattr(self, 'scene_hierarchy', None))
         dialog = BrushGroupDialog(self, all_brushes, brushes, display_name)
         if self._run_brush_group_dialog(dialog):
             if not dialog.allowed():
