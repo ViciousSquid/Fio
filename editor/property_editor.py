@@ -1824,6 +1824,7 @@ class PropertyEditor(QWidget):
         emissive_cb.setToolTip(tooltip)
         form.addRow("", emissive_cb)
         self._widgets[prefix + '_emissive_cb'] = emissive_cb
+        emissive_rows = []
         for key, label_text, default, top, tip in (
                 ('emissive_intensity', "Light Intensity:", 1.0, 100.0,
                  "How bright the emitted light is, as a Light's intensity."),
@@ -1840,8 +1841,19 @@ class PropertyEditor(QWidget):
             spin.setToolTip(tip)
             spin.valueChanged.connect(
                 lambda value, k=key: self.update_object_prop(k, float(value)))
-            form.addRow(label_text, spin)
+            label = QLabel(label_text)
+            form.addRow(label, spin)
+            emissive_rows.append((label, spin))
             self._widgets[prefix + '_' + key] = spin
+            self._widgets[prefix + '_' + key + '_label'] = label
+
+        def set_emissive_rows_visible(visible):
+            for label, spin in emissive_rows:
+                label.setVisible(bool(visible))
+                spin.setVisible(bool(visible))
+
+        emissive_cb.toggled.connect(set_emissive_rows_visible)
+        set_emissive_rows_visible(bool(brush.get('emissive', False)))
 
     def _create_water_properties(self, brush):
         group = QGroupBox("Water Properties")
@@ -3695,8 +3707,17 @@ class PropertyEditor(QWidget):
             if property_keys is not None
             else None
         )
+        # Explicit property tuples define the intended UI order (for example,
+        # a decal's Width and Height belong together). Keep alphabetical order
+        # only for legacy/unclassified properties.
+        property_items = (
+            sorted(thing.properties.items())
+            if property_keys is None
+            else ((key, thing.properties[key]) for key in property_keys
+                  if key in thing.properties)
+        )
 
-        for key, value in sorted(thing.properties.items()):
+        for key, value in property_items:
             # Explicit property selection.
             if allowed_keys is not None and key not in allowed_keys:
                 continue
