@@ -44,7 +44,8 @@ def _button(panel, starts):
 
 
 def _check(panel, text):
-    return next(b for b in panel.findChildren(QCheckBox) if b.text() == text)
+    # The newest: a rebuilt panel may still hold the rows it replaced.
+    return [b for b in panel.findChildren(QCheckBox) if b.text() == text][-1]
 
 
 def test_the_effect_panel_offers_play_and_burns_again(editor):
@@ -65,17 +66,35 @@ def test_an_explosion_has_nothing_to_go_back_to(editor):
     assert not burns.isVisibleTo(panel)
 
 
-def test_add_fire_spawner_wires_one_and_then_selects_it(editor):
+def _fires(panel):
+    from PyQt5.QtWidgets import QComboBox
+    return [c for c in panel.findChildren(QComboBox)
+            if c.toolTip() == "Which fire the explosion's fire spawner scatters."][-1]
+
+
+def _select_buttons(panel):
+    return [b for b in panel.findChildren(QPushButton)
+            if b.text().startswith("Select fire spawner")]
+
+
+def test_leaves_flames_behind_wires_a_spawner_and_unticking_removes_it(editor):
     from editor import io_system
     fire = Effect(pos=[10.0, 0.0, 20.0],
                   properties={"name": "torch", "effect_type": "FIRE", "lifetime": 0.5})
     panel = _show(editor, fire)
     count = len(editor.state.things)
-    _button(panel, "+ Add fire spawner").click()
+    flames = _check(panel, "Leaves flames behind")
+    assert not flames.isChecked()
+    # Unticked: no Select button, no Fires row (nor its label).
+    assert not _fires(panel).isVisibleTo(panel)
+    assert not any(b.isVisibleTo(panel) for b in _select_buttons(panel))
+
+    flames.setChecked(True)
     spawners = [t for t in editor.state.things if isinstance(t, LogicSpawner)]
     assert len(editor.state.things) == count + 1 and len(spawners) == 1
     spawner = spawners[0]
     assert spawner.properties["name"] == "torch_fires"
+    assert editor.state.selected_objects != [spawner], "ticking does not select it"
     # At the fire's base (its centre is half its height up), lifted so the
     # spawned fires (placed by their centres) stand on the same floor.
     base = 0.0 - fire.properties["height"] * 0.5
@@ -86,12 +105,21 @@ def test_add_fire_spawner_wires_one_and_then_selects_it(editor):
     assert [(c.output_name, c.input_name, c.target_id) for c in conns] == [
         ("OnExplode", "Spawn", spawner.properties["id"])]
     assert 0.0 < conns[0].delay < 0.5
-    # Again: no second spawner; the one there is selected.
+
     panel = _show(editor, fire)
-    _button(panel, "Select fire spawner").click()
-    assert len(editor.state.things) == count + 1
+    flames = _check(panel, "Leaves flames behind")
+    assert flames.isChecked() and _fires(panel).isVisibleTo(panel)
+    _button(panel, "Select fire spawner (torch_fires)").click()
     assert editor.state.selected_objects == [spawner]
-    # Undo takes it away.
+
+    panel = _show(editor, fire)
+    _check(panel, "Leaves flames behind").setChecked(False)
+    assert not any(isinstance(t, LogicSpawner) for t in editor.state.things)
+    assert io_system.get_connections(fire) == []
+    assert not _fires(panel).isVisibleTo(panel)
+    # Undo brings it back, wired; undo again takes it away.
+    editor.state.undo()
+    assert any(isinstance(t, LogicSpawner) for t in editor.state.things)
     editor.state.undo()
     assert not any(isinstance(t, LogicSpawner) for t in editor.state.things)
 
@@ -115,7 +143,9 @@ def test_the_explosive_section_switches_its_settings_on(editor):
 def test_a_barrels_fire_spawner_stands_its_fires_on_its_floor(editor):
     barrel = Prop(pos=[0.0, 5.0, 0.0], properties={"name": "barrel", "explosive": True})
     panel = _show(editor, barrel)
-    _button(panel, "+ Add fire spawner").click()
+    flames = _check(panel, "Leaves flames behind")
+    assert flames.isEnabled() and not _fires(panel).isVisibleTo(panel)
+    flames.setChecked(True)
     spawner = next(t for t in editor.state.things if isinstance(t, LogicSpawner))
     assert spawner.properties["name"] == "barrel_fires"
     assert spawner.pos[1] == 5.0 + panel.FIRE_SPAWNER_FIRE["height"] * 0.5
@@ -183,22 +213,17 @@ def test_a_barrels_explosion_volume(editor):
 
 
 def test_the_fires_chooser_sets_what_the_spawner_scatters(editor):
-    from PyQt5.QtWidgets import QComboBox
     fire = Effect(properties={"name": "torch", "effect_type": "FIRE"})
     panel = _show(editor, fire)
-
-    def fires(panel):
-        return next(c for c in panel.findChildren(QComboBox)
-                    if c.toolTip() == "Which fire the explosion's fire spawner scatters.")
-    fires(panel).setCurrentIndex(3)                    # before there is a spawner
-    _button(panel, "+ Add fire spawner").click()
+    _check(panel, "Leaves flames behind").setChecked(True)
     spawner = next(t for t in editor.state.things if isinstance(t, LogicSpawner))
+    _fires(panel).setCurrentIndex(3)
     assert spawner.properties["spawn_properties"]["fire_texture"].endswith("fire04.gif")
     panel = _show(editor, fire)
-    assert fires(panel).currentIndex() == 3
-    fires(panel).setCurrentIndex(1)                    # edits the spawner
+    assert _fires(panel).currentIndex() == 3
+    _fires(panel).setCurrentIndex(1)                   # edits the spawner
     assert spawner.properties["spawn_properties"]["fire_texture"].endswith("fire02.gif")
-    assert not fires(panel).itemIcon(0).isNull()       # each shown by a still
+    assert not _fires(panel).itemIcon(0).isNull()      # each shown by a still
 
 
 def test_the_shake_panel(editor):

@@ -1,5 +1,6 @@
 from engine.asset_qt import load_icon
 import json
+from types import SimpleNamespace
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
@@ -3047,13 +3048,7 @@ class PropertyEditor(QWidget):
             lambda on: self.update_object_prop('return_after_explosion', bool(on)))
         form.addRow("", return_check)
 
-        spawner_button = QPushButton()
-        spawner_button.setToolTip(
-            "Add a LogicSpawner that scatters fires around this Effect when it "
-            "explodes (wired to its OnExplode output), to adjust or delete like "
-            "any entity. With one already wired, selects it.")
-        form.addRow("", spawner_button)
-        explosion_fire_combo = self._explosion_fire_row(form, thing)
+        flames = self._leaves_flames_rows(form, thing, "this Effect")
 
         def refresh_explosion_controls():
             kind = str(thing.properties.get('effect_type', 'FIRE')).upper()
@@ -3061,14 +3056,7 @@ class PropertyEditor(QWidget):
             return_check.setText(
                 "Burns again after exploding" if kind == 'FIRE'
                 else "Back to %s after exploding" % kind)
-            linked = self._linked_fire_spawner(thing)
-            spawner_button.setText(
-                "Select fire spawner (%s)" % linked.properties.get('name', '')
-                if linked is not None else "+ Add fire spawner")
-            explosion_fire_combo.refresh()
-
-        spawner_button.clicked.connect(
-            lambda: (self._add_fire_spawner(thing), refresh_explosion_controls()))
+            flames.refresh()
 
         # Particle emitter: optional on every type, the whole of PARTICLES.
         emitter_combo = QComboBox()
@@ -3369,6 +3357,86 @@ class PropertyEditor(QWidget):
         row.addWidget(label)
         return widget, slider
 
+    def _leaves_flames_rows(self, form, thing, what):
+        """The "Leaves flames behind" checkbox and, while it is ticked, the
+        rows it brings: "Select fire spawner" and "Fires:". Ticked means a
+        LogicSpawner is wired to *thing*'s OnExplode: ticking adds and wires
+        one, unticking removes it and its connection. Returns a namespace
+        (``check``, ``select_button``, ``combo``, ``refresh()``)."""
+        check = QCheckBox("Leaves flames behind")
+        check.setToolTip(
+            "When %s explodes, fires are left burning around where it was: a "
+            "LogicSpawner wired to its OnExplode output, added for you (and "
+            "removed again when this is unticked)." % what)
+        form.addRow("", check)
+        select_button = QPushButton()
+        select_button.setToolTip(
+            "Select the LogicSpawner that scatters the fires, to adjust it "
+            "like any entity.")
+        form.addRow("", select_button)
+        combo = self._explosion_fire_row(form, thing)
+
+        def show(widget, visible):
+            widget.setVisible(visible)
+            label = form.labelForField(widget)
+            if label is not None:
+                label.setVisible(visible)
+
+        def refresh():
+            linked = self._linked_fire_spawner(thing)
+            check.blockSignals(True)
+            check.setChecked(linked is not None)
+            check.blockSignals(False)
+            if linked is not None:
+                select_button.setText(
+                    "Select fire spawner (%s)" % linked.properties.get('name', ''))
+            show(select_button, linked is not None)
+            show(combo, linked is not None)
+            combo.refresh()
+
+        def toggled(on):
+            if on:
+                self._add_fire_spawner(thing, select=False)
+            else:
+                self._remove_fire_spawner(thing)
+            refresh()
+
+        def select():
+            linked = self._linked_fire_spawner(thing)
+            if linked is not None:
+                self.editor.set_selected_objects([linked])
+
+        check.toggled.connect(toggled)
+        select_button.clicked.connect(select)
+        refresh()
+        return SimpleNamespace(check=check, select_button=select_button,
+                               combo=combo, refresh=refresh)
+
+    def _remove_fire_spawner(self, thing):
+        """Remove the LogicSpawner *thing*'s OnExplode spawns fires from, and
+        the connection to it. Undoable. Returns whether there was one."""
+        linked = self._linked_fire_spawner(thing)
+        if linked is None:
+            return False
+        state = self.editor.state
+        state.save_state()
+        props = linked.properties
+        for conn in list(_io_system.get_connections(thing)):
+            if (conn.output_name == 'OnExplode' and conn.input_name.lower() == 'spawn'
+                    and ((conn.target_id and conn.target_id == props.get('id'))
+                         or (not conn.target_id
+                             and conn.target_name == props.get('name')))):
+                _io_system.remove_connection(thing, conn)
+        if linked in state.things:
+            state.things.remove(linked)
+        if linked in state.selected_objects:
+            self.editor.set_selected_objects(
+                [o for o in state.selected_objects if o is not linked])
+        state.mark_world_changed([thing])
+        if hasattr(self.editor, 'update_all_ui'):
+            self.editor.update_all_ui()
+        return True
+
     def _explosion_fire_row(self, form, thing):
         """The "Fires:" chooser beside Add fire spawner: which of the five
         FIRE variants the explosion's spawner scatters. With a spawner wired
@@ -3406,15 +3474,16 @@ class PropertyEditor(QWidget):
         refresh()
         return combo
 
-    def _add_fire_spawner(self, thing):
-        """Make (or select) a LogicSpawner that scatters fires around *thing*
-        (an Effect, or an Explosive Prop) when it explodes: placed at it,
-        wired to its OnExplode, spawning one batch partway into the
-        explosion. Undoable like any placement."""
+    def _add_fire_spawner(self, thing, select=True):
+        """Make (or, with *select*, select) a LogicSpawner that scatters fires
+        around *thing* (an Effect, or an Explosive Prop) when it explodes:
+        placed at it, wired to its OnExplode, spawning one batch partway into
+        the explosion. Undoable like any placement."""
         from editor.things import LogicSpawner
         linked = self._linked_fire_spawner(thing)
         if linked is not None:
-            self.editor.set_selected_objects([linked])
+            if select:
+                self.editor.set_selected_objects([linked])
             return linked
         state = self.editor.state
         state.save_state()
@@ -3500,27 +3569,10 @@ class PropertyEditor(QWidget):
         volume_widget, volume_slider = self._explosion_volume_row(thing)
         form.addRow("Volume:", volume_widget)
 
-        spawner_button = QPushButton()
-        spawner_button.setToolTip(
-            "Add a LogicSpawner that scatters fires around this prop when it "
-            "explodes (wired to its OnExplode output), to adjust or delete like "
-            "any entity. With one already wired, selects it.")
-        form.addRow("", spawner_button)
-        fire_combo = self._explosion_fire_row(form, thing)
-
-        def refresh_spawner_button():
-            linked = self._linked_fire_spawner(thing)
-            spawner_button.setText(
-                "Select fire spawner (%s)" % linked.properties.get('name', '')
-                if linked is not None else "+ Add fire spawner")
-            fire_combo.refresh()
-
-        spawner_button.clicked.connect(
-            lambda: (self._add_fire_spawner(thing), refresh_spawner_button()))
-        refresh_spawner_button()
+        flames = self._leaves_flames_rows(form, thing, "this prop")
 
         rows = (health_spin, damage_spin, radius_spin, radius_btn, force_spin,
-                volume_slider, spawner_button, fire_combo)
+                volume_slider, flames.check, flames.select_button, flames.combo)
 
         def refresh():
             on = bool(thing.properties.get('explosive', False))
