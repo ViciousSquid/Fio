@@ -13,8 +13,8 @@ import OpenGL.GL as gl
 
 from engine.constants import RENDER_MODE_LIT
 
-from ..core.diagnostics import timed_pass
-from ..core.resources import UniformCache
+from ...core.diagnostics import timed_pass
+from ...core.resources import UniformCache
 
 #: Distance, world units, over which the colour runs from red to blue.
 DISTANCE_RANGE = 1500.0

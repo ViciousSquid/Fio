@@ -16,7 +16,6 @@ import numpy as np
 import OpenGL.GL as gl
 
 from engine import entity_table as entity_projection
-from engine import render_table
 from engine import shaders
 from engine.constants import (
     PLAYER_HULL_SIZE,
@@ -37,13 +36,17 @@ from .passes import PassesMixin
 from .portals import PortalsMixin
 from .occlusion import OcclusionMixin
 from .decals import DecalsMixin
-from .distance import DistanceMixin
+from .textured import TexturedMixin
+from .solid_lit import SolidLitMixin
+from .wireframe import WireframeMixin
+from .overlay import OverlayMixin
 from .shaders import ShadersMixin
 
 
 
-class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin, DecalsMixin,
-                      DistanceMixin, OcclusionMixin, ShadersMixin, RendererCore):
+class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
+                      PassesMixin, LightingMixin, PortalsMixin, InstancingMixin, DecalsMixin,
+                      OcclusionMixin, ShadersMixin, RendererCore):
     """Fio's forward OpenGL 3.3 renderer, registered as ``"Forward"``.
 
     *config* is the application ConfigParser (or None). *texture_loader*

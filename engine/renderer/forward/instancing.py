@@ -50,6 +50,14 @@ _NO_ROWS = np.empty(0, dtype=np.intp)
 _ALL_ROWS = np.empty(0, dtype=np.intp)
 
 
+# The lit pass's override colours as float32 rows, so they upload through the
+# same per-row path as the table's own colours (same float32 values the tuples
+# converted to). Used by the Solid Lit pass and the Wireframe edges.
+_OVERRIDE_COLOURS = np.array(
+    [_TRIGGER_COLOR, _SELECTED_COLOR, _SUBTRACT_COLOR], dtype=np.float32)
+_TRIGGER_ROW, _SELECTED_ROW, _SUBTRACT_ROW = 0, 1, 2
+
+
 def _pick(value, rows):
     """*value*'s entries for *rows*: a per-row array indexed, a scalar as
     it is."""

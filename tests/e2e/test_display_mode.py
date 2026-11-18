@@ -220,7 +220,7 @@ def test_wireframe_draws_true_brush_edges(fio_session):
 def test_points_is_gone():
     """The Points display mode is removed: its option, its render path."""
     import inspect
-    from engine.renderer.forward import distance
+    from engine.renderer.forward.wireframe import distance
     source = inspect.getsource(distance)
     assert "Points" not in source and "uPoints" not in source
     assert "points" not in inspect.signature(

@@ -70,6 +70,10 @@ def main(argv=None):
     if rows_module is not None:
         import engine.renderer.forward.lighting as lighting
         import engine.renderer.forward.passes as passes
+        import engine.renderer.forward.solid_lit.brushes as solid_lit
+        import engine.renderer.forward.textured.brushes as textured
+        import engine.renderer.forward.wireframe.edges as edges
+        import engine.renderer.forward.overlay.triangles as overlay
         real_rows = rows_module.uniform_rows
 
         def timed_rows(kind, rows):
@@ -82,7 +86,8 @@ def main(argv=None):
                 entry[0] += 1
                 entry[1] += clock() - started
             return timed_upload
-        passes.uniform_rows = lighting.uniform_rows = timed_rows
+        for module in (passes, lighting, solid_lit, textured, edges, overlay):
+            module.uniform_rows = timed_rows
 
     run_map = bench_compare.Bench.run_map
 
