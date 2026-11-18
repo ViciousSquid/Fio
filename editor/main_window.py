@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QDialogButtonBox, QHBoxLayout, QStyle, QStatusBar, QTabWidget
 )
 from PyQt5.QtWidgets import QShortcut
-from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize
+from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize, QPoint
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
 from editor.things import Light, Prop, update_all_counters_from_entities
@@ -358,9 +358,10 @@ class MainWindow(QMainWindow):
         self.tooltip_interval = 30  # Seconds between occasional tooltips
         
         # Timer for occasional tooltips
+        # The occasional-tip timer: tips are no longer toasted (show_tooltip),
+        # so it is kept, stopped, for whatever reads it.
         self.tooltip_timer = QTimer(self)
         self.tooltip_timer.timeout.connect(self._check_occasional_tooltip)
-        self.tooltip_timer.start(10000)  # Check every 10 seconds (tooltip_interval throttles display)
         
         # Track right-click state for camera movement detection
         self.right_mouse_held = False
@@ -699,7 +700,7 @@ class MainWindow(QMainWindow):
             # user saves it, so it opens untitled and unsaved.
             if self._load_level(map_data, None):
                 self._generated_level_marker = (self._undo_top(),)
-                self.show_toast("Generated map loaded – use Save As to keep it")
+                self.show_toast("Generated map loaded (not saved yet)", level='success')
         else:
             # User closed the generator – close the overlay
             self._close_current_overlay()
@@ -1032,7 +1033,14 @@ class MainWindow(QMainWindow):
         # --- Arrow key nudging: works from any widget focus ---
         if event.type() == QEvent.KeyPress:
             key = event.key()
+            if self.is_fit_key(event) and not self._typing_focus():
+                if self.fit_textures():
+                    return True
             if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+                # A face selected in the Surface Inspector takes them first:
+                # arrows nudge its texture, Shift+arrows rotate it.
+                if self._arrow_face_texture(event):
+                    return True
                 # Selected terrain stamps take the arrows while the stamp
                 # brush is active, selected decals while the Decal tool is.
                 if self._nudge_terrain_stamps(event):
@@ -1092,6 +1100,70 @@ class MainWindow(QMainWindow):
         view_3d.update()
         return True
 
+    def _arrow_face_texture(self, event):
+        """The arrow keys on the Surface Inspector's selected face (see
+        :meth:`editor.surface_inspector.SurfaceInspector.arrow_key`). Not in
+        Play, and not while a text or number field has the keyboard, where
+        the arrows are that field's."""
+        if self.view_3d is None or self.view_3d.play_mode:
+            return False
+        if self.selected_face_target() is None or self._typing_focus():
+            return False
+        return self.surface_inspector.arrow_key(event)
+
+    @staticmethod
+    def _typing_focus():
+        """Whether a text or number field has the keyboard (its keys are its
+        own: arrows step it, Shift+5 types a '%')."""
+        from PyQt5.QtWidgets import (QAbstractSpinBox, QComboBox, QLineEdit,
+                                     QPlainTextEdit, QTextEdit)
+        return isinstance(QApplication.focusWidget(), (
+            QAbstractSpinBox, QComboBox, QLineEdit, QPlainTextEdit, QTextEdit))
+
+    @staticmethod
+    def is_fit_key(event):
+        """Shift+5: on most layouts Qt reports it as '%' (Key_Percent), on
+        others as 5 with Shift. No other modifier (macOS's keypad flag aside)."""
+        modifiers = event.modifiers() & ~Qt.KeypadModifier
+        if modifiers & ~Qt.ShiftModifier:
+            return False
+        return (event.key() == Qt.Key_Percent
+                or (event.key() == Qt.Key_5 and bool(modifiers & Qt.ShiftModifier)))
+
+    def fit_textures(self):
+        """Shift+5: Fit -- the texture spans the face (the Surface Inspector's
+        Fit, with its repeat counts) -- on the face selected in the Surface
+        Inspector, or, with none, on every face of every selected brush. The
+        textures themselves are left as they are. Returns whether anything
+        was fitted."""
+        if self.view_3d is None or self.view_3d.play_mode:
+            return False
+        inspector = getattr(self, 'surface_inspector', None)
+        if self.selected_face_target() is not None:
+            inspector._apply_fit()
+            faces = inspector.target_faces()
+            self.show_toast(f"Fit: {faces[0][1]}" if len(faces) == 1
+                            else f"Fit: {len(faces)} faces")
+            return True
+        brushes = [b for b in (self._selected_brushes() or [])
+                   if isinstance(b, dict)]
+        if not brushes:
+            return False
+        repeat = ((inspector.fit_w.value(), inspector.fit_h.value())
+                  if inspector is not None else (1.0, 1.0))
+        self.save_state()
+        for brush in brushes:
+            for face_key in face_texture.face_keys(brush):
+                face_texture.apply_fit(brush, face_key, repeat)
+        self.state.mark_lighting_dirty(brushes)
+        self.unsaved_changes = True
+        self.update_views()
+        if inspector is not None and inspector.isVisible():
+            inspector.refresh_from_face()
+        self.show_toast("Fit: all faces" if len(brushes) == 1
+                        else f"Fit: all faces of {len(brushes)} brushes")
+        return True
+
     def _nudge_decals(self, event):
         """Move the Decal tool's selection with the arrow keys (as stamps)."""
         view_3d = self.view_3d
@@ -1131,48 +1203,33 @@ class MainWindow(QMainWindow):
                 self.asset_browser_dock.raise_()
 
 
-    def show_toast(self, message, is_error=False, duration=None):
-        """Displays a notification"""
-        if self.config.getboolean('Display', 'disable_toasts', fallback=False):
-            return
-        
-        # Set the style based on the message type
-        if is_error:
-            bg = "#8B0000" # Dark Red
-            fg = "white"
-        else:
-            bg = "#2b2b2b"
-            fg = "white"
+    #: Levels a toast can have (editor.debug_console.TOAST_STYLES).
+    TOAST_LEVELS = ('success', 'info', 'warning', 'error')
 
-        self.ui.notification_label.setStyleSheet(f"""
-            background-color: {bg};
-            color: {fg};
-            font-weight: bold;
-            font-size: 14px;
-            padding: 2px 10px;
-            border-radius: 3px;
-        """)
-        
-        self.ui.notification_label.setTextFormat(Qt.PlainText)
-        self.ui.notification_label.setText(message.upper())
-        
-        # Auto-clear timer
-        final_duration = duration if duration is not None else (4000 if is_error else 2500)
-        self._schedule_notification_clear(final_duration)
+    def show_toast(self, message, is_error=False, duration=None, level=None):
+        """Show a toast -- for important things only.
+
+        A toast is shown when it is an error (``is_error``) or names its
+        *level*: ``'success'`` for loads and saves, ``'warning'``,
+        ``'error'`` or ``'info'``. Anything else -- tips, hints, routine
+        feedback ("Grid Size: 32", "Applied to north") -- is not toasted.
+        A toast is a card in the Debug Console only (no pop-up): its level's
+        tint and accent bar, no click-to-filter links, never hidden by a
+        filter. It turns faint after a few seconds and comes back to full
+        colour, with a tiny close button, when hovered or clicked.
+        *duration* is accepted for callers' sake and not used.
+        """
+        level = 'error' if is_error else level
+        if level not in self.TOAST_LEVELS:
+            return None
+        from editor.debug_console import debug_log_toast
+        debug_log_toast(str(message), level)
+        return None
 
     def show_tooltip(self, message, duration=4000, toast_id=None):
-        """Displays teal-styled tooltips in the same area."""
-        # Re-use the toast logic with teal styling
-        self.ui.notification_label.setStyleSheet("""
-            background-color: #2b2b2b;
-            color: white;
-            font-weight: bold;
-            font-size: 14px;
-            padding: 2px 10px;
-            border-radius: 3px;
-        """)
-        self.ui.notification_label.setText(message.upper())
-        self._schedule_notification_clear(duration)
+        """Tips are no longer shown as toasts (only loads, saves, warnings
+        and errors are). Kept so callers and plugins need no change."""
+        return None
 
     def _after(self, delay_ms, callback):
         """Run *callback* once after *delay_ms*, but never after this window.
@@ -1187,24 +1244,6 @@ class MainWindow(QMainWindow):
         timer.timeout.connect(timer.deleteLater)
         timer.start(int(delay_ms))
         return timer
-
-    def _schedule_notification_clear(self, duration_ms):
-        """Clear the notification area *duration_ms* from now (<= 0: never).
-
-        One window-owned timer, restarted by every toast: a timer per toast let
-        an earlier, shorter toast blank a later one early, and a bare lambda
-        could fire on the label after the window was destroyed.
-        """
-        timer = getattr(self, '_notification_clear_timer', None)
-        if timer is None:
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.timeout.connect(self.ui.notification_label.clear)
-            self._notification_clear_timer = timer
-        if duration_ms and duration_ms > 0:
-            timer.start(int(duration_ms))
-        else:
-            timer.stop()
 
     def _show_startup_tooltip(self):
         """Show the camera movement tooltip on startup if not yet learned."""
@@ -1596,23 +1635,39 @@ class MainWindow(QMainWindow):
 
 
     def tint_selected_brush(self):
-        """Open colour picker dialog to tint the selected brush - unified with property editor."""
-        if not isinstance(self.primary_selection(), dict):
+        """The Asset Browser's Tint button: pick the selected brush's colour --
+        the one colour a brush has (:meth:`set_brush_colour`), the same as
+        Appearance > Brush Colour and, for a Glow brush, its Glow Color."""
+        brush = self.primary_selection()
+        if not isinstance(brush, dict):
             self.show_toast("Select a brush first", is_error=True)
             return
-        
-        self.save_state()
-        brush = self.primary_selection()
-        
-        # Get current colour (0.0-1.0 range) and convert to 0-255
-        current = brush.get('colour', [0.8, 0.8, 0.8])
-        current_qcolor = QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255))
-        
-        color = QColorDialog.getColor(current_qcolor, self, "Choose Brush Colour")
+        current = self.brush_colour(brush)
+        color = QColorDialog.getColor(
+            QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255)),
+            self, "Choose Brush Colour")
         if color.isValid():
-            # Store as 0.0-1.0 range
-            brush['colour'] = [color.redF(), color.greenF(), color.blueF()]
-            self.update_all_ui()
+            self.save_state()
+            self.set_brush_colour(brush, [color.redF(), color.greenF(), color.blueF()])
+
+    @staticmethod
+    def brush_colour(brush):
+        """The colour *brush* is drawn (and, a Glow brush, glows) in, 0-1:
+        its tint if one was set (the console's ``tint``), else its colour."""
+        from engine.constants import normalize_color
+        return list(normalize_color(brush.get('tint') or brush.get('colour'),
+                                    default=[0.8, 0.8, 0.8]))
+
+    def set_brush_colour(self, brush, rgb):
+        """Give *brush* colour *rgb* (0-1): the one colour setting a brush
+        has, whichever control sets it -- the Asset Browser's Tint,
+        Appearance > Brush Colour, a Glow brush's Glow Color. A tint left
+        from the console, which would hide it, goes."""
+        brush['colour'] = [float(c) for c in rgb]
+        brush.pop('tint', None)
+        self.state.mark_world_changed([brush])
+        self.mark_as_modified()
+        self.update_all_ui()
 
 
     def add_model_to_scene(self, filepath, rotation, scale):
@@ -2387,6 +2442,10 @@ class MainWindow(QMainWindow):
             self.view_3d.show_glasses = self.config.getboolean(
                 'Display', 'show_glasses', fallback=True
             )
+            # So is whether a hidden light lights the editor.
+            self.view_3d.hide_hidden_lights = self.config.getboolean(
+                'Display', 'hide_hidden_lights', fallback=False)
+            self.update_views()
             # So is player 1's choice of glasses (Settings > Appearance).
             self.view_3d.player1_glasses = normalize_glasses(self.config.get(
                 'Appearance', 'glasses', fallback=DEFAULT_GLASSES
@@ -2569,7 +2628,7 @@ class MainWindow(QMainWindow):
             self.surface_inspector.sync_face_button(active)
         
         if active:
-            self.show_toast("FACE MODE: Select a face to texture (Orange) — Page Up/Down rotates it", duration=3000)
+            self.show_toast("FACE MODE: Select a face to texture (Orange) — Shift+arrows or Page Up/Down rotate it", duration=3000)
             self.set_selected_objects([]) # Deselect current object to clear gizmos and allow clean hover
             
             # Change cursor to indicate mode
@@ -2577,6 +2636,7 @@ class MainWindow(QMainWindow):
         else:
             self.show_toast("FACE MODE: OFF")
             self.view_3d.hovered_face_info = None # Clear highlight
+            self.view_3d._face_hover_key = None
             self.view_3d.setCursor(Qt.ArrowCursor)
             # The panel stays open: it owns the FACE toggle now, and hiding it
             # here would take the button away the moment it was switched off.
@@ -2590,7 +2650,10 @@ class MainWindow(QMainWindow):
             self.show_toast("Select a texture first", is_error=True)
             return
 
-        texture_name = os.path.basename(texture_path)
+        # Relative to assets/textures, so a texture in a subfolder
+        # (textures/decals, textures/Dev) keeps its folder and loads.
+        from editor.face_texture import texture_name as _texture_name
+        texture_name = _texture_name(texture_path)
         self.save_state()
 
         # The face's one material record: a box's per-tag dict, an angled
@@ -2628,10 +2691,31 @@ class MainWindow(QMainWindow):
         """
         delta = 90.0 if steps >= 0 else -90.0
 
+        # --- The Surface Inspector is open on a face: that face is what is
+        # being worked on, so it is what turns -- in Face Mode too, whatever
+        # the cursor happens to be over (and in "Whole brush" scope, every
+        # face it applies to). Before, Face Mode turned the hovered face.
+        inspector = getattr(self, 'surface_inspector', None)
+        target = self.selected_face_target()
+        if target is not None:
+            faces = inspector.target_faces()
+            self.save_state()
+            for brush, face_name in faces:
+                angle = self._bump_face_angle(brush, face_name, delta)
+            self.state.mark_lighting_dirty(
+                list({id(b): b for b, _ in faces}.values()))
+            self.face_texture_target = target
+            self.update_views()
+            inspector.refresh_from_face()
+            if len(faces) == 1:
+                self.show_toast(f"{faces[0][1]}: texture {int(angle)}°")
+            else:
+                self.show_toast(f"Brush textures rotated {int(delta):+d}°")
+            return
+
         # --- Face mode: rotate only the highlighted / last-textured face ---
         if self.view_3d.face_mode_active:
-            target = getattr(self.view_3d, 'hovered_face_info', None) \
-                or self.face_texture_target
+            target = self.view_3d.face_under_cursor() or self.face_texture_target
             if not target:
                 self.show_toast("Hover a face to rotate its texture", is_error=True)
                 return
@@ -2645,25 +2729,8 @@ class MainWindow(QMainWindow):
             self.show_toast(f"{face_name}: texture {int(angle)}°")
             return
 
-        # --- The Surface Inspector is open on one face of the selection:
-        # that face is what is being worked on, so it is what turns. Without
-        # this, Page Up/Down outside face mode turned all six faces together
-        # and two faces could not be given different rotations.
-        selected = self.primary_selection()
-        inspector = getattr(self, 'surface_inspector', None)
-        if (inspector is not None and inspector.isVisible() and inspector.target
-                and inspector.scope_face.isChecked()
-                and inspector.target[0] is selected):
-            brush, face_name = inspector.target
-            self.save_state()
-            angle = self._bump_face_angle(brush, face_name, delta)
-            self.state.mark_lighting_dirty([brush])
-            self.update_views()
-            inspector.refresh_from_face()
-            self.show_toast(f"{face_name}: texture {int(angle)}°")
-            return
-
         # --- Otherwise: rotate every face of the selected brush together ---
+        selected = self.primary_selection()
         if isinstance(selected, dict):
             self.save_state()
             # Every face the brush has: a box's six sides, an angled brush's
@@ -2672,6 +2739,15 @@ class MainWindow(QMainWindow):
                 self._bump_face_angle(selected, face_name, delta)
             self.update_views()
             self.show_toast(f"Brush textures rotated {int(delta):+d}°")
+
+    def selected_face_target(self):
+        """``(brush, face key)`` the open Surface Inspector is bound to, or
+        None (closed, or bound to nothing). The selected face: what its
+        controls and Page Up/Down edit, and what the 3D view highlights."""
+        inspector = getattr(self, 'surface_inspector', None)
+        if inspector is None or not inspector.isVisible() or not inspector.target:
+            return None
+        return inspector.target
 
     def show_surface_inspector(self, brush=None, face_name=None,
                                raise_window=True):
@@ -2742,20 +2818,20 @@ class MainWindow(QMainWindow):
         """Point an open Surface Inspector at something worth editing.
 
         It can be opened with nothing selected, so it binds as soon as there
-        is a brush to bind to.  A panel already pointing into the selection
-        is left alone -- re-binding on every click would undo a face picked
-        from its dropdown -- and so is one whose brush has been deselected,
-        since dropping the target would blank the panel mid-edit.
+        is a brush to bind to. A face it is already bound to stays bound
+        whatever the selection does: it is changed by clicking another face
+        (Face Mode) or picking one from the panel's list, and released by
+        closing the panel -- so adjustments always go to the face that was
+        chosen, never to whatever was selected or hovered since.
         """
         inspector = getattr(self, 'surface_inspector', None)
         if inspector is None or not inspector.isVisible():
             return
+        if inspector.target is not None:
+            return
 
         brushes = self._selected_brushes()
         if not brushes:
-            return
-        target = inspector.target
-        if target is not None and target[0] in brushes:
             return
 
         keys = face_texture.face_keys(brushes[0])
@@ -2833,9 +2909,10 @@ class MainWindow(QMainWindow):
     # -- brush groups (attached brushes) --------------------------------------
 
     def with_group_mates(self, objects):
-        """*objects* plus the brushes grouped with them: what a move carries."""
+        """*objects* plus the brushes and entities grouped with them: what a
+        move carries."""
         from editor import brush_groups
-        return brush_groups.with_mates(self.state.brushes, objects)
+        return brush_groups.with_mates(brush_groups.scene_objects(self.state), objects)
 
     def movable_with_mates(self, objects):
         """:meth:`with_group_mates`, without the locked ones."""
@@ -2844,9 +2921,10 @@ class MainWindow(QMainWindow):
                         else o.properties.get('lock', False))]
 
     def set_brush_group(self, brushes, name):
-        """Put *brushes* in group *name* ('' ungroups them): one undo step."""
+        """Put *brushes* (brushes and/or entities) in group *name* ('' ungroups
+        them): one undo step."""
         from editor import brush_groups
-        brushes = [b for b in brushes if isinstance(b, dict)]
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
         if not brushes:
             return False
         name = str(name or '').strip()
@@ -2861,7 +2939,8 @@ class MainWindow(QMainWindow):
         """Whether *brushes* may join group *name*: a group holds at most
         one mover (or door). Says so when they may not."""
         from editor import brush_groups
-        joined = brush_groups.members(self.state.brushes, name) + list(brushes)
+        joined = brush_groups.members(
+            brush_groups.scene_objects(self.state), name) + list(brushes)
         if brush_groups.too_many_movers(joined):
             self.show_toast(brush_groups.MAX_MOVERS_MESSAGE, is_error=True)
             return False
@@ -2876,21 +2955,28 @@ class MainWindow(QMainWindow):
             return
         self.save_state()
         brush_groups.set_group(brushes, '')
-        for chosen in brush_groups.groups(self.state.brushes).values():
+        for chosen in brush_groups.groups(
+                brush_groups.scene_objects(self.state)).values():
             if len(chosen) == 1:
                 brush_groups.set_group(chosen, '')
         self._brush_groups_changed()
 
     def set_brushes_hidden(self, brushes, hidden):
-        """Hide or show *brushes* (a whole group, from its menu): one undo step."""
+        """Hide or show *brushes* (a whole group, from its menu; entities
+        too): one undo step."""
         from engine.change_journal import touch
-        brushes = [b for b in brushes if isinstance(b, dict)]
+        from engine.spatial import set_live_flag
+        from editor import brush_groups
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
         if not brushes:
             return
         self.save_state()
         for brush in brushes:
-            brush['hidden'] = bool(hidden)
-            touch(brush)
+            if isinstance(brush, dict):
+                brush['hidden'] = bool(hidden)
+                touch(brush)
+            else:
+                set_live_flag(brush, 'hidden', bool(hidden))
         self.mark_as_modified()
         self.update_all_ui()
 
@@ -2900,11 +2986,11 @@ class MainWindow(QMainWindow):
         if not new or new == old:
             return False
         # A name already in use merges the two groups.
-        if not self.brush_group_allowed(
-                brush_groups.members(self.state.brushes, old), new):
+        every = brush_groups.scene_objects(self.state)
+        if not self.brush_group_allowed(brush_groups.members(every, old), new):
             return False
         self.save_state()
-        brush_groups.rename(self.state.brushes, old, new)
+        brush_groups.rename(every, old, new)
         self._brush_groups_changed()
         return True
 
@@ -2917,19 +3003,12 @@ class MainWindow(QMainWindow):
         """Scene Hierarchy > Add to Group... / Edit Group..."""
         from editor import brush_groups
         from editor.brush_group_dialog import BrushGroupDialog
-        brushes = [b for b in brushes if isinstance(b, dict)]
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
         if not brushes:
             return None
-        all_brushes = self.state.brushes
-        index_of = {id(b): i for i, b in enumerate(all_brushes)}
-        hierarchy = getattr(self, 'scene_hierarchy', None)
-
-        def display_name(brush):
-            index = index_of.get(id(brush), 0)
-            if hierarchy is not None:
-                return hierarchy._get_brush_display_name(brush, index)
-            return brush.get('name') or 'Brush %d' % (index + 1)
-
+        all_brushes = brush_groups.scene_objects(self.state)
+        display_name = brush_groups.labeller(
+            self.state, getattr(self, 'scene_hierarchy', None))
         dialog = BrushGroupDialog(self, all_brushes, brushes, display_name)
         if self._run_brush_group_dialog(dialog):
             if not dialog.allowed():
@@ -2967,7 +3046,8 @@ class MainWindow(QMainWindow):
             inspector.hide()
             return
 
-        target = getattr(self.view_3d, 'hovered_face_info', None) \
+        hovered = getattr(self.view_3d, 'face_under_cursor', None)
+        target = (hovered() if hovered is not None else None) \
             or self.face_texture_target
         if target is None:
             brushes = self._selected_brushes()
@@ -3293,7 +3373,14 @@ class MainWindow(QMainWindow):
         for view in [self.view_top, self.view_side, self.view_front, self.view_3d]:
             view.grid_size = snapped_size
         self.view_3d.update_grid()
-        self.update_views()
+        # Repaint without update_views(): it resets each 2D view's state,
+        # which ended a cut or a rotate in progress. The scissor and rotate
+        # tools re-snap to the new grid where they are.
+        for view in (self.view_top, self.view_side, self.view_front):
+            changed = getattr(view, 'grid_size_changed', None)
+            if changed is not None:
+                changed()
+        self.refresh_views()
 
     def set_world_size(self, size):
         snapped_size = self._snap_to_power_of_two(size)
@@ -3718,7 +3805,7 @@ class MainWindow(QMainWindow):
             dialog.dep_label.setText(f"Export successful!\nSaved to: {os.path.basename(output_path)}")
             dialog.export_btn.setText("Done")
             dialog.export_btn.setEnabled(False)
-            self.show_toast(f"Package exported: {os.path.basename(output_path)}")
+            self.show_toast(f"Package exported: {os.path.basename(output_path)}", level='success')
         else:
             dialog.dep_label.setStyleSheet("color: #f44336; font-size: 12px; padding: 4px;")
             dialog.dep_label.setText("Export failed:\n" + "\n".join(errors[:5]))
@@ -4592,7 +4679,10 @@ class MainWindow(QMainWindow):
         # Editor mode key releases below
         if event.key() in self.keys_pressed:
             self.keys_pressed.remove(event.key())
-        self.update_views()
+        # Repaint only: update_views() resets every 2D view's state, so any
+        # key's release -- [ or ] to change the grid among them -- threw
+        # away a half-placed cut and ended a rotate in progress.
+        self.refresh_views()
         super().keyReleaseEvent(event)
 
     def snap_to_grid_enabled(self):
@@ -5159,7 +5249,8 @@ class MainWindow(QMainWindow):
             self.unsaved_changes = False
             self.update_title()
             self.add_recent_file(self.file_path)
-            self.show_toast("Saved (minified)" if getattr(self, "map_minified", False) else "Saved!")
+            self.show_toast("Saved (minified)" if getattr(self, "map_minified", False) else "Saved",
+                            level='success')
         except Exception as e:
             self.show_toast(f"Error saving: {e}", is_error=True)
             print(f"Error saving level: {e}")
@@ -5487,9 +5578,9 @@ class MainWindow(QMainWindow):
             print(f"[MainWindow] Successfully loaded {name}")
             if play_stopped:
                 self.show_toast(f"Loaded {name}; Play stopped: it has no "
-                                f"Player Start", is_error=True)
+                                f"Player Start", level='warning')
             else:
-                self.show_toast(f"Loaded {name}")
+                self.show_toast(f"Loaded {name}", level='success')
 
             # Keep the Logic Graph in sync
             self._refresh_logic_graph()
@@ -5535,7 +5626,8 @@ class MainWindow(QMainWindow):
         path = self._write_autosave()
         if path:
             self.show_toast(
-                f"Unsaved changes kept in maps/{os.path.basename(path)}")
+                f"Unsaved changes kept in maps/{os.path.basename(path)}",
+                level='success')
         else:
             self.show_toast("Could not keep unsaved changes before the "
                             "level change", is_error=True)
@@ -5705,7 +5797,7 @@ class MainWindow(QMainWindow):
                 # Deferred: this runs from __init__, before the window is up,
                 # and a toast shown then is never seen.
                 self._after(0, lambda: self.show_toast(
-                    "Dock layout reset to the new default", duration=4000))
+                    "Dock layout reset to the new default", level='warning'))
             return
 
         if self.config.has_option('Layout', 'state'):
@@ -5829,7 +5921,7 @@ class MainWindow(QMainWindow):
 
             launch_in_editor = self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
             if launch_in_editor:
-                self.show_toast(f"Loaded package: {os.path.basename(file_path)}")
+                self.show_toast(f"Loaded package: {os.path.basename(file_path)}", level='success')
             else:
                 self.enter_kiosk_mode()
 

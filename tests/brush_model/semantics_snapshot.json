@@ -8,7 +8,7 @@
   },
   "inconsistencies": {
    "bcac8b00-8f0e-4012-9823-26a7f996e01a": {
-    "bound_drift": 0.0000485
+    "bound_drift": 4.85e-05
    }
   }
  },
@@ -152,7 +152,7 @@
   },
   "inconsistencies": {
    "1a817c94-928c-4005-88c9-6619876b168c": {
-    "bound_drift": 128
+    "bound_drift": 128.0
    }
   }
  },
@@ -165,11 +165,11 @@
   "inconsistencies": {}
  },
  "_SHOWCASE.json": {
-  "brushes": 87,
+  "brushes": 105,
   "digest": null,
   "encodings": {
-   "box": 69,
-   "convex": 18
+   "box": 78,
+   "convex": 27
   },
   "inconsistencies": {}
  },

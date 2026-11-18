@@ -524,6 +524,17 @@ class UnresolvedThing(Thing):
     def to_dict(self):
         data = copy.deepcopy(self._record)
         data['pos'] = [float(v) for v in self.pos]
+        # Its brush group is the editor's, not the missing plugin's: it
+        # follows edits as ``pos`` does (editor.brush_groups).
+        group = self.properties.get('brush_group')
+        props = data.get('properties')
+        if group or (isinstance(props, dict) and 'brush_group' in props):
+            if not isinstance(props, dict):
+                props = data['properties'] = {}
+            if group:
+                props['brush_group'] = group
+            else:
+                props.pop('brush_group', None)
         return data
 
     def duplicate(self, existing_names=()):
@@ -736,9 +747,12 @@ class Decal(Thing):
                 How bright that light is and how far it reaches, as a
                 Light's intensity and radius. Read only while emissive.
     """
-    #: No icon and no box: what the decal paints is how the editor shows it
-    #: (placed, selected, dragged and nudged with the Decal tool).
+    #: No sprite in the 3D view: what the decal paints is how it shows there
+    #: (placed, selected, dragged and nudged with the Decal tool). The 2D
+    #: views mark it with :data:`ICON_PATH` instead.
     pixmap_path = None
+    #: The 2D views' marker: the Asset Browser's DECAL button icon.
+    ICON_PATH = "assets/decal_button.png"
     #: The Decal tool's selection; selected decals draw tinted.
     editor_selected = False
     EDITOR_PRIMARY_PROPERTIES = (
@@ -773,6 +787,11 @@ class Decal(Thing):
         self.properties.setdefault('emissive', False)
         self.properties.setdefault('emissive_intensity', 1.0)
         self.properties.setdefault('emissive_radius', 256.0)
+
+    def get_icon_pixmap(self):
+        """The 2D views' marker: the same icon as the Asset Browser's DECAL
+        button (``assets/decal_button.png``)."""
+        return self._pixmap_for_path(self.ICON_PATH)
 
     @staticmethod
     def default_texture():
@@ -1515,6 +1534,32 @@ class LogicSpawner(Thing):
         self.properties.setdefault('max_spawn', 0)
         # Extra properties merged into the spawned entity
         self.properties.setdefault('spawn_properties', {})
+        # Entities made by one Spawn, and how far around the spawn point
+        # they are scattered (0: all on it)
+        self.properties.setdefault('spawn_count', 1)
+        self.properties.setdefault('spawn_radius', 0.0)
+
+
+# =============================================================================
+# SHAKE ENTITY
+# =============================================================================
+
+class Shake(Thing):
+    """Shakes the screen when triggered (its Shake input, from any I/O -- a
+    trigger brush's OnTrigger, a button, a timer). Purely visual: the camera
+    view wobbles, dying away over ``duration`` seconds; the player, physics
+    and the world are untouched (engine.shake).
+
+    Properties: ``intensity`` 0..1 (how hard), ``duration`` seconds.
+    """
+    pixmap_path = "assets/sprites/shake.png"
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        from engine.shake import SHAKE_DEFAULTS
+        self.properties['type'] = 'shake'
+        for key, value in SHAKE_DEFAULTS.items():
+            self.properties.setdefault(key, value)
 
 
 # =============================================================================
@@ -2290,6 +2335,7 @@ ENTITY_TYPES = {
     'PathNode': PathNode,
     'LogicCamera': LogicCamera,
     'LogicSpawner': LogicSpawner,
+    'Shake': Shake,
     'Portal': Portal,
     'LogicState': LogicState,
 }
@@ -2306,7 +2352,7 @@ if _effect_class is not None:
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Prop', 'LevelChanger'],
-    'Environment': ['Light', 'Effect', 'Speaker', 'ReflectionProbe', 'Portal', 'Decal'],
+    'Environment': ['Light', 'Effect', 'Speaker', 'ReflectionProbe', 'Portal', 'Decal', 'Shake'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }

@@ -261,7 +261,7 @@ def test_a_game_level_change_to_a_map_without_a_start_is_refused(
     current = _playing_on(window, tmp_path)
     toasts = []
     monkeypatch.setattr(window, "show_toast",
-                        lambda text, is_error=False: toasts.append((text, is_error)))
+                        lambda text, is_error=False, **_: toasts.append((text, is_error)))
     things_before = list(window.state.things)
     dialogs_before = len(modal_dialogs)
     startless = _write_map(tmp_path / "maps" / "startless.json")
@@ -297,7 +297,8 @@ def test_a_user_opening_a_map_without_a_start_in_play_gets_no_dialog(
     _playing_on(window, tmp_path)
     toasts = []
     monkeypatch.setattr(window, "show_toast",
-                        lambda text, is_error=False: toasts.append((text, is_error)))
+                        lambda text, is_error=False, level=None, **_: toasts.append(
+                            (text, 'error' if is_error else level)))
     dialogs_before = len(modal_dialogs)
     startless = _write_map(tmp_path / "maps" / "startless.json")
 
@@ -305,8 +306,9 @@ def test_a_user_opening_a_map_without_a_start_in_play_gets_no_dialog(
 
     assert window.file_path == startless
     assert not window.view_3d.play_mode
+    # A warning: the map loaded, but Play had to stop.
     assert toasts[-1] == ("Loaded startless.json; Play stopped: it has no Player Start",
-                          True)
+                          'warning')
     assert len(modal_dialogs) == dialogs_before
 
 

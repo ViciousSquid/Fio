@@ -106,6 +106,13 @@ class SettingsWindow(QDialog):
         self.click_select_3d_checkbox.setToolTip("Allow selecting brushes/things by clicking in the 3D view (without Shift)")
         view_3d_layout.addWidget(self.click_select_3d_checkbox)
 
+        self.hide_hidden_lights_checkbox = QCheckBox("Hidden lights give no light")
+        self.hide_hidden_lights_checkbox.setToolTip(
+            "When enabled, a light hidden with H stops lighting the 3D view until\n"
+            "it is shown again (Shift+H). Off: a hidden light still lights the\n"
+            "editor, as before. In Play a hidden light never lights.")
+        view_3d_layout.addWidget(self.hide_hidden_lights_checkbox)
+
         self.place_camera_at_player_start_checkbox = QCheckBox("Focus Player_Start on load")
         self.place_camera_at_player_start_checkbox.setToolTip(
             "When enabled, loading a map moves the 3D editor camera to the Player Start location\n"
@@ -188,8 +195,6 @@ class SettingsWindow(QDialog):
         self.always_show_io_debug_checkbox.setToolTip("If enabled, the debug console will open automatically when the app starts.")
         layout.addWidget(self.always_show_io_debug_checkbox)
         
-        self.disable_toasts_checkbox = QCheckBox("Disable Toast Notifications")
-        layout.addWidget(self.disable_toasts_checkbox)
 
         font_layout = QHBoxLayout()
         font_layout.addWidget(QLabel("UI Font Size:"))
@@ -612,6 +617,8 @@ class SettingsWindow(QDialog):
         self.show_caulk_checkbox.setChecked(self.config.getboolean('Display', 'show_caulk', fallback=True))
         self.sync_selection_checkbox.setChecked(self.config.getboolean('Display', 'sync_selection', fallback=True))
         self.click_select_3d_checkbox.setChecked(self.config.getboolean('Display', 'click_select_3d', fallback=False))
+        self.hide_hidden_lights_checkbox.setChecked(
+            self.config.getboolean('Display', 'hide_hidden_lights', fallback=False))
         selection_trans = self.config.getint('Display', 'selection_transparency', fallback=50)
         self.selection_transparency_slider.setValue(selection_trans)
         self.selection_transparency_label.setText(f"{selection_trans}%")
@@ -629,7 +636,6 @@ class SettingsWindow(QDialog):
         self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=True))
         self.always_show_sysmon_checkbox.setChecked(self.config.getboolean('Display', 'always_show_sysmon', fallback=False))
         self.always_show_io_debug_checkbox.setChecked(self.config.getboolean('Display', 'always_show_io_debug', fallback=True))
-        self.disable_toasts_checkbox.setChecked(self.config.getboolean('Display', 'disable_toasts', fallback=False))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
         ui_scale = parse_ui_scale(read_ui_scale_setting(self.config))
         ui_scale_key = 'auto' if ui_scale is None else str(ui_scale)
@@ -740,6 +746,8 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'show_caulk', str(self.show_caulk_checkbox.isChecked()))
         self.config.set('Display', 'sync_selection', str(self.sync_selection_checkbox.isChecked()))
         self.config.set('Display', 'click_select_3d', str(self.click_select_3d_checkbox.isChecked()))
+        self.config.set('Display', 'hide_hidden_lights',
+                        str(self.hide_hidden_lights_checkbox.isChecked()))
         self.config.set('Display', 'selection_transparency', str(self.selection_transparency_slider.value()))
         self.config.set('Display', 'show_connections', str(self.show_connections_checkbox.isChecked()))
         self.config.set('Display', 'locked_not_selectable_2d', str(self.locked_not_selectable_checkbox.isChecked()))
@@ -748,7 +756,6 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'show_fps', str(self.show_fps_checkbox.isChecked()))
         self.config.set('Display', 'always_show_sysmon', str(self.always_show_sysmon_checkbox.isChecked()))
         self.config.set('Display', 'always_show_io_debug', str(self.always_show_io_debug_checkbox.isChecked()))
-        self.config.set('Display', 'disable_toasts', str(self.disable_toasts_checkbox.isChecked()))
         self.config.set('Display', 'font_size', str(self.font_size_spinbox.value()))
         self.config.set('Display', 'ui_scale', self.ui_scale_combo.currentData())
         self.config.set('Display', 'vsync', str(self.vsync_checkbox.isChecked()))

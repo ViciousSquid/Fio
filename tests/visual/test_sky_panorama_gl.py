@@ -175,7 +175,7 @@ def test_the_sky_is_drawn_first_only_where_portal_views_need_it():
     """Behind the world in the editor and in Play; first, over everything, in
     a Play frame that may draw portal views (their empty parts show the sky
     already on screen), in the line and point render modes, and in the
-    Points and Wireframe looks (the sky shows where nothing was hit)."""
+    Wireframe look (the sky shows where nothing was hit)."""
     import json
     import glm
     from editor.editor_state import EditorState
@@ -203,8 +203,7 @@ def test_the_sky_is_drawn_first_only_where_portal_views_need_it():
                     ('play', C.RENDER_MODE_LIT, True, 'Textured'),
                     ('line mode', C.RENDER_MODE_WIREFRAME, False, 'Textured'),
                     ('point mode', C.RENDER_MODE_VERTEX, False, 'Textured'),
-                    ('wireframe look', C.RENDER_MODE_LIT, False, 'Wireframe'),
-                    ('points look', C.RENDER_MODE_LIT, False, 'Points')):
+                    ('wireframe look', C.RENDER_MODE_LIT, False, 'Wireframe')):
                 config = glh.render_config(all_brushes=state.brushes, all_things=state.things,
                                            play_mode=play, render_mode=mode,
                                            brush_display_mode=look)
@@ -220,4 +219,4 @@ def test_the_sky_is_drawn_first_only_where_portal_views_need_it():
     assert renderer._portal_gl_ready is not None
     assert seen == {'editor': [True], 'editor unlit': [True], 'play': [False],
                     'line mode': [False], 'point mode': [False],
-                    'wireframe look': [False], 'points look': [False]}, seen
+                    'wireframe look': [False]}, seen

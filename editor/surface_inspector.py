@@ -132,7 +132,8 @@ class SurfaceInspector(QDialog):
             "Toggle Face Selection Mode\n"
             "Click a face in the 3D view to texture it; drag it to move its "
             "plane\n"
-            "Page Up / Page Down rotates the highlighted face's texture")
+            "Shift+arrows (or Page Up / Page Down) rotate the selected face's texture;\n"
+            "arrows nudge it; Shift+5 fits it")
         self.face_btn.clicked.connect(self._on_face_mode_clicked)
         outer.addWidget(self.face_btn)
 
@@ -516,7 +517,45 @@ class SurfaceInspector(QDialog):
                 handler()
             event.accept()
             return
+        if self.arrow_key(event):
+            event.accept()
+            return
+        is_fit = getattr(self.editor, 'is_fit_key', None)
+        if is_fit is not None and is_fit(event) and self.target:
+            self.editor.fit_textures()
+            event.accept()
+            return
         super().keyPressEvent(event)
+
+    #: Keys that rotate the selected face's texture with Shift held, and the
+    #: way each turns it (Page Up is +1); without Shift they nudge it.
+    ARROW_TURNS = {Qt.Key_Right: 1, Qt.Key_Up: 1, Qt.Key_Left: -1, Qt.Key_Down: -1}
+
+    def arrow_key(self, event):
+        """The arrow keys on the selected face: Shift+arrow rotates its
+        texture 90 degrees (Shift+Right/Up as Page Up, Shift+Left/Down as
+        Page Down -- for keyboards without those keys); a plain arrow nudges
+        it by the Step beside its shift (Left/Right horizontally, Up/Down
+        vertically). Returns whether the key was taken: only arrows, with no
+        modifier but Shift, while a face is selected."""
+        key = event.key()
+        if key not in self.ARROW_TURNS or not self.target:
+            return False
+        # macOS marks the arrow keys as keypad keys.
+        modifiers = event.modifiers() & ~Qt.KeypadModifier
+        if modifiers & ~Qt.ShiftModifier:
+            return False
+        if modifiers & Qt.ShiftModifier:
+            rotate = getattr(self.editor, 'rotate_textures', None)
+            if rotate is not None:
+                rotate(self.ARROW_TURNS[key])
+            return True
+        if key in (Qt.Key_Left, Qt.Key_Right):
+            field, step = self.hshift, self.hshift_step.value()
+        else:
+            field, step = self.vshift, self.vshift_step.value()
+        field.setValue(field.value() + self.ARROW_TURNS[key] * step)
+        return True
 
     def hideEvent(self, event):
         """Closing the panel leaves Face Mode behind with it.
@@ -533,7 +572,14 @@ class SurfaceInspector(QDialog):
             toggle = self.editor.toggle_face_mode
             if toggle is not None:
                 toggle(False)
+        # Closing releases the selected face: reopened, the panel binds to
+        # whatever is chosen then.
+        self.target = None
+        self._close_undo_burst()
         super().hideEvent(event)
+        update = getattr(self.editor, 'update_views', None)
+        if update is not None:
+            update()            # the face's highlight goes with it
 
     def _sync_natural_button(self):
         """Keep the Natural toggle showing the bound face's actual mode."""
@@ -622,7 +668,7 @@ class SurfaceInspector(QDialog):
         if not path:
             self.editor.show_toast("Select a texture first", is_error=True)
             return
-        name = os.path.basename(path)
+        name = ft.texture_name(path)
         self._begin_undo_burst()
         for brush, face_key in self.target_faces():
             ft.set_transform(brush, face_key, texture=name)

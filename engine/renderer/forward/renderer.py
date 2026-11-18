@@ -16,7 +16,6 @@ import numpy as np
 import OpenGL.GL as gl
 
 from engine import entity_table as entity_projection
-from engine import render_table
 from engine import shaders
 from engine.constants import (
     PLAYER_HULL_SIZE,
@@ -37,21 +36,17 @@ from .passes import PassesMixin
 from .portals import PortalsMixin
 from .occlusion import OcclusionMixin
 from .decals import DecalsMixin
-from .distance import DistanceMixin
+from .textured import TexturedMixin
+from .solid_lit import SolidLitMixin
+from .wireframe import WireframeMixin
+from .overlay import OverlayMixin
 from .shaders import ShadersMixin
 
 
 
-def nodraw_brushes(table, slots):
-    """The brushes among *slots* with a ``nodraw`` face: 'Solid Lit' draws
-    them textured, so the faces play will not draw stay plain to see."""
-    if table is None or not len(slots):
-        return np.empty(0, dtype=np.int32)
-    ids = table.tex_name_id[slots]
-    return slots[(ids == render_table.TEX_ID_NODRAW).any(axis=1)]
-
-class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin, DecalsMixin,
-                      DistanceMixin, OcclusionMixin, ShadersMixin, RendererCore):
+class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
+                      PassesMixin, LightingMixin, PortalsMixin, InstancingMixin, DecalsMixin,
+                      OcclusionMixin, ShadersMixin, RendererCore):
     """Fio's forward OpenGL 3.3 renderer, registered as ``"Forward"``.
 
     *config* is the application ConfigParser (or None). *texture_loader*
@@ -197,15 +192,29 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._sprite_warm_seen = {}
         # GPU-instanced EXPLOSION buffer. FIRE uses the ordinary instanced
         # billboard texture path, with one draw per animated texture frame.
+        # Explosion rows hold no time, so they are uploaded only when they
+        # change (_explosion_uploaded: the rows last uploaded, or None).
         self._effect_instance_vbo = None
         self._effect_instance_vao = None
         self._effect_instance_capacity = 0
-        self._effect_instance_data = np.empty((0, 16), dtype=np.float32)
-        self._effect_order_scratch = np.empty(0, dtype=np.int32)
-        self._effect_depth_scratch = np.empty(0, dtype=np.float64)
-        self._effect_depth_aux_scratch = np.empty(0, dtype=np.float64)
-        self._effect_expand_slots_scratch = np.empty(0, dtype=np.int32)
-        self._effect_expand_particle_scratch = np.empty(0, dtype=np.float32)
+        self._effect_instance_data = np.empty(
+            (0, self.EFFECT_INSTANCE_FLOATS), dtype=np.float32)
+        self._explosion_uploaded = None
+        # Stateless particle emitters: one row per emitter, uploaded only when
+        # a row or the draw order changes (draw_particles_instanced).
+        self._particle_instance_vbo = None
+        self._particle_instance_vao = None
+        self._particle_instance_capacity = 0
+        self._particle_instance_data = np.empty(
+            (0, self.PARTICLE_INSTANCE_FLOATS), dtype=np.float32)
+        self._particle_uploaded = None
+        self._particle_presets_sent = None
+        #: The scene depth copy (_capture_scene_depth) holds this frame's
+        #: opaque depth: made by the decal pass, reused by the particles.
+        self._scene_depth_current = False
+        #: Depth copies made so far (_capture_scene_depth), to tell whether
+        #: the decal pass made one.
+        self._scene_depth_copies = 0
         self.effect_custom_frames = {}
         self.effect_custom_cumulative = {}
         # Capacity-stable scratch for the numeric sprite filter. The renderer
@@ -785,7 +794,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         if not self._probe_capture_pass and not self._portal_scene_pass:
             self._update_reflection_probes(config)
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
-        # 'Points' or 'Wireframe': geometry drawn for depth, then coloured by
+        # 'Wireframe': geometry drawn as lines for depth, then coloured by
         # distance in one pass over the frame (draw_distance_pass).
         look = self._distance_look(config, current_mode)
         gl.glEnable(gl.GL_DEPTH_TEST)
@@ -803,9 +812,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # pixel they cover never shades it. It is drawn first, as it always
         # was, in a frame that may draw portal views (their empty parts show
         # the sky already on screen), in the line and point render modes (the
-        # frame's polygon mode is theirs by then) and in the Points and
-        # Wireframe looks (draw_distance_pass leaves the sky where nothing
-        # was hit).
+        # frame's polygon mode is theirs by then) and in the Wireframe look
+        # (draw_distance_pass leaves the sky where nothing was hit).
         portal_table = config.get('entity_table')
         sky_behind = not (
             look or current_mode not in (RENDER_MODE_LIT, RENDER_MODE_UNLIT)
@@ -819,6 +827,9 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # the unlit passes (sprites) and the terrain are not handed a camera.
         self._frame_camera_pos = self._camera_xyz(camera_pos)
         self.render_stats.reset()
+        # Set only by this frame's decal pass (and spent by the particles):
+        # a portal view drawn before it must not read last frame's copy.
+        self._scene_depth_current = False
         self.render_stats.total_brushes = len(config.get('all_brush_slots', ()))
         if not getattr(self, '_portal_scene_pass', False):
             self._stream_calls.clear()
@@ -836,7 +847,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._set_point_size(4.0)
         else:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        if not look:            # Wireframe draws it after; Points never
+        if not look:            # Wireframe draws it after
             self.draw_grid(projection, view, self.grid_indices_count,
                            config.get('play_mode', False), config.get('grid_visible', True))
         # Broad-phase distance cull (main camera pass only): feed the main
@@ -968,8 +979,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
 
         if look:
             # Everything opaque up to draw_distance_pass is drawn for its depth
-            # only -- as surfaces for Points, as lines for Wireframe. Water and
-            # glass are brushes like any other here.
+            # only, as lines. Water and glass are brushes like any other here.
             gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
             opaque_brushes = np.concatenate(
                 (opaque_brushes, glow_brushes, water_brushes, glass_brushes))
@@ -1015,6 +1025,10 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_BLEND)
         brush_display_mode = config.get('brush_display_mode', 'Textured')
+        #: 'Solid Lit': nothing textured -- brushes, models and terrain are
+        #: shaded in their colours, and decals are not drawn.
+        self._solid_look = (current_mode == RENDER_MODE_LIT
+                            and brush_display_mode == 'Solid Lit')
         # Filled modes only: in wireframe and vertex modes the far edges and
         # corners are part of what the editor shows.
         self._opaque_cull_pass = (self.cull_opaque_back_faces and current_mode
@@ -1032,15 +1046,11 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                     self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
                     self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
                 else:
-                    # 'Solid Lit': nodraw brushes keep their texture, so what
-                    # will not be drawn in play stays plain to see; water is
-                    # never textured -- a shaded brush in its colour, drawn
-                    # with the solid ones (see the water pass below).
-                    nodraw = nodraw_brushes(_tbl, opaque_brushes)
+                    # 'Solid Lit': every brush shaded in its colour, no
+                    # textures at all (a nodraw face included); water too --
+                    # a shaded brush drawn with the solid ones (see the
+                    # water pass below).
                     solid = opaque_brushes
-                    if len(nodraw):
-                        solid = opaque_brushes[np.isin(opaque_brushes, nodraw, invert=True)]
-                        self.draw_textured_brushes_optimized(projection, view, camera_pos, nodraw, lights, config, _tbl)
                     if len(water_brushes):
                         solid = np.concatenate((solid, water_brushes))
                     self.draw_lit_brushes_optimized(projection, view, camera_pos, solid, lights, config, table=_tbl)
@@ -1097,8 +1107,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         if look:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
             gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-            if not self.draw_distance_pass(projection, view, camera_pos,
-                                           points=look == 'Points'):
+            if not self.draw_distance_pass(projection, view, camera_pos):
                 # No depth to read back: the brushes' edges in their colours.
                 self.draw_brush_edges(projection, view, opaque_brushes, config, _tbl)
             if look == 'Wireframe':
@@ -1123,8 +1132,13 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         if etable is not None and len(etable.effect_slots):
             self.ensure_effect_frames(etable)
         # Projected decals (blood): onto the opaque world just drawn, before
-        # anything blended, so they lie under water and glass.
-        self.draw_decals(projection, view, camera_pos, config.get('decals'))
+        # anything blended, so they lie under water and glass. A depth copy
+        # they make is still this frame's opaque depth when the particles
+        # draw (nothing between writes depth), so those reuse it.
+        copies = self._scene_depth_copies
+        if not self._solid_look:            # 'Solid Lit': no painted images
+            self.draw_decals(projection, view, camera_pos, config.get('decals'))
+        self._scene_depth_current = self._scene_depth_copies != copies
         # High-quality water reflects what is in the depth buffer: in a frame
         # that has some, effects write their solid part there too.
         self._reflected_effects = None
@@ -1243,16 +1257,24 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         self._selected_payloads.clear()
         self._distance_culls.clear()
         self.__dict__.pop('_occlusion_kept', None)
-        for vao in (self._sprite_instance_vao, self._effect_instance_vao):
+        for vao in (self._sprite_instance_vao, self._effect_instance_vao,
+                    self._particle_instance_vao):
             if vao:
                 gl.glDeleteVertexArrays(1, [vao])
-        for vbo in (self._sprite_instance_vbo, self._effect_instance_vbo):
+        for vbo in (self._sprite_instance_vbo, self._effect_instance_vbo,
+                    self._particle_instance_vbo):
             if vbo:
                 gl.glDeleteBuffers(1, [vbo])
         self._sprite_instance_vao = None
         self._effect_instance_vao = None
+        self._particle_instance_vao = None
         self._sprite_instance_vbo = None
         self._effect_instance_vbo = None
+        self._effect_instance_capacity = 0
+        self._explosion_uploaded = None
+        self._particle_instance_vbo = None
+        self._particle_instance_capacity = 0
+        self._particle_uploaded = None
         # Portal resources. The mask and rim programs are not in ``shaders``.
         if self._portal_quad_vao:
             gl.glDeleteVertexArrays(1, [self._portal_quad_vao])

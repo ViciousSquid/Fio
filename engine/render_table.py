@@ -70,7 +70,8 @@ import os
 
 import numpy as np
 
-from engine.constants import is_water_brush, normalize_color, water_high_quality
+from engine.constants import (is_water_brush, normalize_color, water_flow_velocity,
+                              water_high_quality)
 from engine.spatial import authored_hidden
 import functools
 import itertools
@@ -350,6 +351,10 @@ _COLUMNS = (
     #: The brush's "High quality" flag: depth-based colour, shoreline foam,
     #: caustics and screen-space reflections (see engine.renderer.WATER_QUALITIES).
     ('water_high_quality', (), bool, False),
+    #: "Direction": the surface's velocity, world (x, z) units a second --
+    #: its direction times its Flow Speed (engine.constants.
+    #: water_flow_velocity); (0, 0) is still water.
+    ('water_flow', (2,), np.float32, 0.0),
     ('glass_color', (3,), np.float32, 0.0),
     #: opacity, distortion, refraction, roughness, fresnel
     ('glass_params', (5,), np.float32, 0.0),
@@ -971,7 +976,8 @@ class RenderTable:
     #: The special-shader columns, and the fill a row of no special class
     #: holds (nothing reads them for such a row, but a rebuild gives it too).
     _SPECIAL_COLUMNS = ('water_tint', 'water_params', 'water_plane', 'water_wave_spread',
-                        'water_high_quality', 'glass_color', 'glass_params', 'fog_color', 'fog_params')
+                        'water_high_quality', 'water_flow', 'glass_color', 'glass_params',
+                        'fog_color', 'fog_params')
 
     def _resolve_special_rows(self, idx, special):
         """Water, glass and fog shader state -- only for rows of those classes.
@@ -998,6 +1004,7 @@ class RenderTable:
                 self.water_wave_spread[slot] = min(max(
                     _num(brush.get('water_wave_spread'), 1.0), 0.0), 1.0)
                 self.water_high_quality[slot] = water_high_quality(brush)
+                self.water_flow[slot] = water_flow_velocity(brush)
             if b & CLASS_GLASS:
                 self.glass_color[slot] = normalize_color(
                     brush.get('glass_color', [0.7, 0.85, 0.95]))

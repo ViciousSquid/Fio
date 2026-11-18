@@ -14,3 +14,6 @@ audit/_commits*.txt
 # it runs (tests/e2e/test_level_changer_spawns.py).
 maps/_e2e_*.json
 maps/*_autosave.json
+
+# Console dumps written by the debug console's `condump` command.
+logs/

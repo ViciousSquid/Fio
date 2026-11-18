@@ -1,13 +1,14 @@
 from engine.asset_qt import load_pixmap
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, 
-    QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter, QScrollArea
+    QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter, QScrollArea, QApplication
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer, QEvent
 from PyQt5 import sip
 from PyQt5.QtGui import QFont, QTextCursor, QPainter, QPixmap, QDesktopServices
 from collections import deque
 import html
+import os
 import re
 
 
@@ -16,6 +17,79 @@ import re
 #: these control characters from what they are given, so text from a map (an
 #: entity name, a LogicCommand's command) can never claim to be markup.
 _MARKUP = '\x02fio-markup\x03'
+#: Marks a toast written to the console (every toast is): ``_TOAST``,
+#: then ``level|serial|message``. Reserved characters, like _MARKUP: no
+#: outside text can carry it.
+_TOAST = '\x02fio-toast\x03'
+
+#: A console toast's border, text, background and icon, by level (Fio's
+#: colours: success green, warning orange; error red, info blue).
+TOAST_STYLES = {
+    'success': ('#4CAF50', '#8fdc98', '#14231a', '\u2714'),
+    'info':    ('#3d8ee8', '#82bdf6', '#121f2d', 'i'),
+    'warning': ('#F08000', '#f7b866', '#2a1e0f', '!'),
+    'error':   ('#e5533d', '#f3836f', '#2b1613', '\u2716'),
+}
+#: The copy button's image in the console document, and its link scheme.
+_TOAST_COPY_IMAGE = 'fio-toast-copy'
+_TOAST_COPY_LINK = 'copytoast:'
+_TOAST_CLOSE_LINK = 'closetoast:'
+_toast_serials = __import__('itertools').count(1)
+#: Seconds a console toast stays in full colour before it turns faint (it is
+#: never removed by itself: only its close button removes it).
+TOAST_FADE_SECONDS = 3.0
+#: How far a faint card's colours sink toward the console background.
+TOAST_FAINT = 0.62
+#: A toast with the same level and words as one logged less than this many
+#: seconds before (its last repeat) is not a new card: that card counts it,
+#: shows the count (``×3``), and turns full colour again.
+TOAST_REPEAT_SECONDS = 2.0
+_CONSOLE_BG = '#1a1a1a'
+
+
+def _mix(colour, toward, amount):
+    """*colour* moved *amount* (0..1) of the way to *toward* (hex strings)."""
+    from PyQt5.QtGui import QColor
+    a, b = QColor(colour), QColor(toward)
+    return QColor(round(a.red() + (b.red() - a.red()) * amount),
+                  round(a.green() + (b.green() - a.green()) * amount),
+                  round(a.blue() + (b.blue() - a.blue()) * amount))
+
+
+def _toast_copy_image(size=32):
+    """The console toast's copy button: an orange "i" in an orange circle."""
+    from PyQt5.QtGui import QImage, QPainter, QPen, QColor
+    from PyQt5.QtCore import Qt, QPointF, QRectF
+    image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.Antialiasing)
+    orange = QColor('#F08000')
+    unit = size / 16.0
+    pen = QPen(orange, 1.4 * unit)
+    pen.setCapStyle(Qt.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(Qt.NoBrush)
+    painter.drawEllipse(QRectF(1.2 * unit, 1.2 * unit, 13.6 * unit, 13.6 * unit))
+    painter.drawLine(QPointF(8 * unit, 7 * unit), QPointF(8 * unit, 11.6 * unit))
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(orange)
+    painter.drawEllipse(QPointF(8 * unit, 4.6 * unit), 1.0 * unit, 1.0 * unit)
+    painter.end()
+    return image
+
+
+def _toast_parts(message):
+    """``(level, serial, text)`` of a logged toast entry's message."""
+    level, _, rest = message[len(_TOAST):].partition('|')
+    serial, _, text = rest.partition('|')
+    return level, serial, text
+
+
+#: Marks a line whose words are never links (no click-to-filter on its
+#: names, numbers or values): a toast written to the console. Like _MARKUP it
+#: is made of reserved characters, so no outside text can carry it.
+_NO_LINKS = '\x02fio-no-links\x03'
 _MARKUP_CHARS = str.maketrans('', '', '\x00\x02\x03')
 
 
@@ -90,12 +164,90 @@ def _plain(message) -> str:
     return str(message).translate(_MARKUP_CHARS)
 
 
+#: How many messages the console history (the logger's buffer) keeps; older
+#: ones drop off the front. It is what a rebuilt console shows again and what
+#: ``condump`` writes. Kept well under DebugConsole.MAX_DOCUMENT_LINES, which
+#: rebuilds the document from this buffer when exceeded.
+HISTORY_LIMIT = 1000
+
+#: The buffer category of a command line typed into a console, echoed as
+#: ``] command``. Not a log category: it has no filter of its own.
+ECHO_CATEGORY = '\x02echo\x03'
+_ECHO_PREFIX = '] '
+_ECHO_HTML = "<br><span style='color: #F08000; font-weight: bold;'>] {}</span><br>"
+
+_RE_ANY_TAG = re.compile(r'</?[a-zA-Z][^>]*>')
+_RE_BR = re.compile(r'<br\s*/?>', re.IGNORECASE)
+
+
+def _html_to_text(text, tag_re) -> str:
+    """Console HTML as the plain text it shows: ``<br>`` a line break, the
+    other tags *tag_re* matches dropped, character references decoded."""
+    if tag_re.search(text):
+        # Rendered as HTML: source line breaks are only white space.
+        text = re.sub(r'[ \t]*\n\s*', ' ', text)
+        text = _RE_BR.sub('\n', text)
+        text = tag_re.sub('', text)
+        text = '\n'.join(line.strip() for line in text.split('\n')).strip('\n')
+    return html.unescape(text)
+
+
+def console_plain_text(category, message) -> str:
+    """One console history entry as the plain text the console shows for it.
+
+    Mirrors :meth:`DebugConsole._format_message`: a line logged with
+    :func:`debug_log_markup` (and the inert formatting of the Info and
+    MonsterAI categories) is turned from HTML into text; any other line is
+    shown literally, so it is returned as it is.
+    """
+    message = str(message)
+    if category == ECHO_CATEGORY:
+        return message
+    if message.startswith(_TOAST):
+        _level, serial, text = _toast_parts(message)
+        count = get_debug_logger().toast_count(serial)
+        return text.translate(_MARKUP_CHARS) + (f'  \u00d7{count}' if count > 1 else '')
+    if message.startswith(_NO_LINKS):
+        return message[len(_NO_LINKS):].translate(_MARKUP_CHARS)
+    if message.startswith(_MARKUP):
+        return _html_to_text(message[len(_MARKUP):].translate(_MARKUP_CHARS), _RE_ANY_TAG)
+    message = message.translate(_MARKUP_CHARS)
+    if (category or 'Info') in _INERT_MARKUP_CATEGORIES:
+        return _html_to_text(message, _RE_INERT_TAG)
+    return message
+
+
+def write_console_dump(directory, entries, base='console', ext='.txt') -> str:
+    """Write console history *entries* as plain text to a new file in
+    *directory* and return its path.
+
+    The file is ``console.txt``, or ``console_1.txt``, ``console_2.txt``...
+    when that name is taken: an existing file is never overwritten (each name
+    is claimed with an exclusive create, so not even by a concurrent dump).
+    """
+    os.makedirs(directory, exist_ok=True)
+    text = ''.join(console_plain_text(category, message) + '\n'
+                   for category, message in entries)
+    index = 0
+    while True:
+        name = f'{base}{ext}' if index == 0 else f'{base}_{index}{ext}'
+        path = os.path.join(directory, name)
+        try:
+            with open(path, 'x', encoding='utf-8', newline='\n') as handle:
+                handle.write(text)
+            return path
+        except FileExistsError:
+            index += 1
+
+
 class DebugLogger(QObject):
     """
     Global singleton that collects debug messages and emits signals.
     This allows the io_system to log without direct widget dependencies.
     """
     message_logged = pyqtSignal(str, str)  # (category, message)
+    #: A toast was logged again while its card was recent: (serial, count).
+    toast_repeated = pyqtSignal(str, int)
 
     _instance = None
 
@@ -118,7 +270,13 @@ class DebugLogger(QObject):
         super().__init__()
         self._initialized = True
         self._enabled = True
-        self._buffer = deque(maxlen=1000)  # Keep last 1000 messages
+        self._buffer = deque(maxlen=HISTORY_LIMIT)  # the console history
+        #: (level, words) -> [serial, when last logged]: the recent toasts a
+        #: repeat is counted on (TOAST_REPEAT_SECONDS).
+        self._toast_recent = {}
+        #: serial -> how many times that toast was logged, when more than once.
+        self._toast_counts = {}
+        self._toast_lock = __import__('threading').Lock()
 
     def log(self, category: str, message: str):
         """Log a message with a category tag."""
@@ -130,6 +288,89 @@ class DebugLogger(QObject):
 
         self._buffer.append((category, full_msg))
         self.message_logged.emit(category, full_msg)
+
+    def log_unlinked(self, category: str, message: str):
+        """Log a plain line the console draws without links: nothing in it
+        (a number, a name, a value) becomes a click-to-filter link. For
+        toasts written to the console when toasts are off."""
+        if not self._enabled:
+            return
+        full_msg = f"{_NO_LINKS}[{category}] {_plain(message)}"
+        self._buffer.append((category, full_msg))
+        self.message_logged.emit(category, full_msg)
+
+    def log_toast(self, message: str, level: str = 'info'):
+        """Log a toast: drawn in the console as a card in its level's colour,
+        a block of its own, an error's with a copy button, no links in it."""
+        if not self._enabled:
+            return
+        level = level if level in TOAST_STYLES else 'info'
+        words = _plain(message)
+        key = (level, words)
+        now = __import__('time').monotonic()
+        with self._toast_lock:
+            recent = self._toast_recent.get(key)
+            if recent is not None and now - recent[1] < TOAST_REPEAT_SECONDS:
+                # Again, and quickly: counted on its card, not a new one.
+                recent[1] = now
+                serial = recent[0]
+                count = self._toast_counts.get(serial, 1) + 1
+                self._toast_counts[serial] = count
+            else:
+                serial = str(next(_toast_serials))
+                count = 0
+                if len(self._toast_recent) > 64:
+                    self._toast_recent = {
+                        k: v for k, v in self._toast_recent.items()
+                        if now - v[1] < TOAST_REPEAT_SECONDS}
+                self._toast_recent[key] = [serial, now]
+        if count:
+            self.toast_repeated.emit(serial, count)
+            return
+        full_msg = f"{_TOAST}{level}|{serial}|{words}"
+        self._buffer.append(('Info', full_msg))
+        self.message_logged.emit('Info', full_msg)
+
+    def toast_count(self, serial) -> int:
+        """How many times toast *serial* was logged (its card's ``×N``)."""
+        return self._toast_counts.get(str(serial), 1)
+
+    def toasts(self):
+        """``[(serial, level, text)]`` of the toasts in the history, oldest
+        first."""
+        found = []
+        for _category, message in self._buffer:
+            if str(message).startswith(_TOAST):
+                level, serial, text = _toast_parts(message)
+                found.append((serial, level, text))
+        return found
+
+    def remove_toast(self, serial):
+        """Take the toast logged as *serial* out of the history (its close
+        button): a rebuilt console does not bring it back."""
+        serial = str(serial)
+        with self._toast_lock:
+            self._toast_counts.pop(serial, None)
+            self._toast_recent = {k: v for k, v in self._toast_recent.items()
+                                  if v[0] != serial}
+        kept = [entry for entry in self._buffer
+                if not (str(entry[1]).startswith(_TOAST)
+                        and _toast_parts(entry[1])[1] == serial)]
+        if len(kept) != len(self._buffer):
+            self._buffer.clear()
+            self._buffer.extend(kept)
+            return True
+        return False
+
+    def toast_text(self, serial) -> str:
+        """The message of the toast logged as *serial* (its copy button), or
+        None once it has left the history."""
+        for category, message in reversed(self._buffer):
+            if str(message).startswith(_TOAST):
+                _level, number, text = _toast_parts(message)
+                if number == str(serial):
+                    return text
+        return None
 
     def log_markup(self, category: str, markup: str):
         """Log a line that is Fio's own HTML (colours, entity-filter links).
@@ -156,6 +397,32 @@ class DebugLogger(QObject):
         self._buffer.append(('', message))
         self.message_logged.emit('', message)
 
+    def log_command_echo(self, command: str):
+        """Keep a command typed into a console (shown there as ``] command``)
+        in the history, so a rebuilt console and ``condump`` have it too.
+
+        Not emitted: the console that took the command has drawn it already.
+        """
+        if not self._enabled:
+            return
+        self._buffer.append((ECHO_CATEGORY, _ECHO_PREFIX + _plain(command)))
+
+    @staticmethod
+    def is_command_echo(entry, command=None) -> bool:
+        """Whether history *entry* is a typed command's echo (of *command*,
+        matched by its first word, when given)."""
+        category, message = entry
+        if category != ECHO_CATEGORY:
+            return False
+        if command is None:
+            return True
+        words = str(message)[len(_ECHO_PREFIX):].split(maxsplit=1)
+        return bool(words) and words[0].lower() == command.lower()
+
+    def history_limit(self) -> int:
+        """How many messages the history keeps (older ones drop off)."""
+        return self._buffer.maxlen
+
     def set_enabled(self, enabled: bool):
         self._enabled = enabled
 
@@ -169,6 +436,9 @@ class DebugLogger(QObject):
     def clear_buffer(self):
         """Clear the message buffer."""
         self._buffer.clear()
+        with self._toast_lock:
+            self._toast_recent = {}
+            self._toast_counts = {}
 
 
 # Global logger instance
@@ -185,6 +455,13 @@ def get_debug_logger() -> DebugLogger:
 def debug_log(category: str, message: str):
     """Convenience function to log a debug message."""
     get_debug_logger().log(category, message)
+
+
+def debug_log_toast(message: str, level: str = 'info'):
+    """A toast in the console: a card in *level*'s colour (red errors, green
+    successes...) -- a tinted body and an accent bar -- a block of its own, an
+    error's with a copy button, and no click-to-filter links in it."""
+    get_debug_logger().log_toast(message, level)
 
 
 def debug_log_markup(category: str, markup: str):
@@ -601,6 +878,22 @@ class DebugConsole(QWidget):
         self.console.setFont(QFont("IBM Plex Mono", self.font_size))
         self.console.setOpenLinks(False)
         self.console.anchorClicked.connect(self._on_anchor_clicked)
+        # Toast cards: full colour when new, faint after TOAST_FADE_SECONDS,
+        # full again (with a close button) while hovered or clicked.
+        self._toast_seen = {}            # serial -> when first drawn
+        self._toast_faint = set()        # serials drawn faint
+        self._toast_highlighted = set()  # serials hovered or clicked
+        self._toast_levels = {}          # serial -> level, as drawn
+        #: serial -> a cursor in its card: found again in O(1) -- a cursor
+        #: follows the edits around it -- and checked before it is trusted.
+        self._toast_cursors = {}
+        #: Runs only while a card is waiting to turn faint.
+        self._toast_fader = QTimer(self)
+        self._toast_fader.setInterval(250)
+        self._toast_fader.timeout.connect(self._fade_toasts)
+        self.console.setMouseTracking(True)
+        self.console.viewport().setMouseTracking(True)
+        self.console.viewport().installEventFilter(self)
         self.console.setStyleSheet("""
             QTextBrowser {
                 background-color: #1a1a1a;
@@ -783,6 +1076,7 @@ class DebugConsole(QWidget):
         """Connect to the global debug logger."""
         logger = get_debug_logger()
         logger.message_logged.connect(self._on_message)
+        logger.toast_repeated.connect(self._on_toast_repeated)
 
     def _load_buffer(self):
         """Load any buffered messages that were logged before the console opened."""
@@ -818,8 +1112,8 @@ class DebugConsole(QWidget):
         # Echo the command to the console exactly like Quake
         cursor = self.console.textCursor()
         cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml(f"<br><span style='color: #F08000; font-weight: bold;'>] "
-                          f"{html.escape(cmd, quote=False)}</span><br>")
+        cursor.insertHtml(_ECHO_HTML.format(html.escape(cmd, quote=False)))
+        get_debug_logger().log_command_echo(cmd)
 
         # Add to local history and clear the line
         self.command_input.add_history(cmd)
@@ -833,10 +1127,264 @@ class DebugConsole(QWidget):
         # Pass the raw string to whatever is listening
         self.command_issued.emit(cmd)
 
+    # -- toast cards ---------------------------------------------------------
+
+    def _toast_state(self, serial):
+        if serial in self._toast_highlighted:
+            return 'highlighted'
+        return 'faint' if serial in self._toast_faint else 'new'
+
+    @staticmethod
+    def _toast_colours(level, state):
+        """``(accent, text, body, close button)`` colours of a card."""
+        border, ink, body, _icon = TOAST_STYLES.get(level, TOAST_STYLES['info'])
+        if state == 'faint':
+            border = _mix(border, _CONSOLE_BG, TOAST_FAINT).name()
+            ink = _mix(ink, _CONSOLE_BG, TOAST_FAINT).name()
+            body = _mix(body, _CONSOLE_BG, TOAST_FAINT).name()
+        close = ink if state == 'highlighted' else body
+        return border, ink, body, close
+
+    def _toast_paragraphs(self, serial, level, text, ink, close_ink):
+        """The words of toast *serial*'s card as HTML paragraphs: its text, a
+        ``×N`` after the first line when it was logged N times, an error's
+        copy button and the close button."""
+        # One paragraph a line: with <br> between them, Qt sized the box
+        # as if all the lines were one, far wider than the longest.
+        # Leading spaces (an indented list) are kept.
+        def _line(line):
+            stripped = line.lstrip(' ')
+            return ('&nbsp;' * (len(line) - len(stripped))
+                    + html.escape(stripped, quote=False))
+        rows = [_line(line) for line in text.split('\n')]
+        count = get_debug_logger().toast_count(serial)
+        if count > 1:
+            rows[0] += f'&nbsp;&nbsp;<b>\u00d7{count}</b>'
+        # Only an error has the copy button (to put it on the clipboard);
+        # a success, warning or note is just its words.
+        copy = (f'&nbsp;&nbsp;<a href="{_TOAST_COPY_LINK}{serial}" '
+                f'title="Copy the error">'
+                f'<img src="{_TOAST_COPY_IMAGE}" width="16" height="16" '
+                f'style="vertical-align: middle;"></a>'
+                if level == 'error' else '')
+        # The close button: tiny, and shown (in the text's colour) only
+        # while the card is highlighted -- otherwise drawn in the card's
+        # own colour, and a click on it does nothing.
+        close = (f'&nbsp;&nbsp;<a href="{_TOAST_CLOSE_LINK}{serial}" '
+                 f'title="Remove this toast" style="color: {close_ink}; '
+                 f'text-decoration: none; font-size: small;">\u2715</a>')
+        return ''.join(
+            f'<p style="margin: 0; color: {ink};">'
+            + (f'<a name="fio-toast-{serial}"></a>' if i == 0 else '')
+            + row
+            + (copy + close if i == len(rows) - 1 else '') + '</p>'
+            for i, row in enumerate(rows))
+
+    def _on_toast_repeated(self, serial, count):
+        """Toast *serial* was logged again: its card shows the count and is
+        in full colour again (its fade starts over). A card not drawn yet
+        (still queued) shows the count when it is."""
+        import time
+        from PyQt5.QtGui import QTextCursor
+        serial = str(serial)
+        self._toast_seen[serial] = time.monotonic()
+        self._toast_faint.discard(serial)
+        table = self._toast_table(serial)
+        if table is None:
+            return
+        text = get_debug_logger().toast_text(serial)
+        if text is None:
+            return
+        level = self._toast_levels.get(serial, 'info')
+        _border, ink, _body, close_ink = self._toast_colours(level, self._toast_state(serial))
+        edit = QTextCursor(self.console.document())
+        edit.beginEditBlock()
+        try:
+            # The card's words again, with the count: inside its cell, so
+            # the card itself (and everything around it) stays as it is.
+            cell = table.cellAt(0, 1)
+            words = cell.firstCursorPosition()
+            words.setPosition(cell.lastCursorPosition().position(), QTextCursor.KeepAnchor)
+            words.insertHtml(self._toast_paragraphs(
+                serial, level, text.translate(_MARKUP_CHARS), ink, close_ink))
+            self._restyle_toast(serial)
+        finally:
+            edit.endEditBlock()
+        self._toast_cursors.pop(serial, None)
+        self._wake_fader()
+
+    def _toast_table(self, serial):
+        """The console document's table drawing toast *serial*, or None.
+
+        From the cursor kept in its card when there is one and it still
+        points into that card; else every card is found again in one walk
+        of the document (after a rebuild, say) and their cursors kept, so a
+        burst of cards fading together costs one walk, not one each."""
+        serial = str(serial)
+        cursor = self._toast_cursors.get(serial)
+        if cursor is not None:
+            table = cursor.currentTable()
+            if table is not None and self._toast_serial_of(table) == serial:
+                return table
+        from PyQt5.QtGui import QTextCursor, QTextTable
+        self._toast_cursors = {}
+        found = None
+        for frame in self.console.document().rootFrame().childFrames():
+            if not isinstance(frame, QTextTable):
+                continue
+            number = self._toast_serial_of(frame)
+            if number is None:
+                continue
+            self._toast_cursors[number] = QTextCursor(frame.cellAt(0, 1).firstCursorPosition())
+            if number == serial:
+                found = frame
+        return found
+
+    def _toast_serial_of(self, table):
+        if table is None or table.columns() < 2:
+            return None
+        block = table.cellAt(0, 1).firstCursorPosition().block()
+        it = block.begin()
+        while not it.atEnd():
+            for name in it.fragment().charFormat().anchorNames():
+                if name.startswith("fio-toast-"):
+                    return name[len("fio-toast-"):]
+            it += 1
+        return None
+
+    def _restyle_toast(self, serial):
+        """Recolour toast *serial*'s card in place, for its state."""
+        from PyQt5.QtGui import QColor, QTextCharFormat, QTextCursor
+        table = self._toast_table(serial)
+        if table is None:
+            return
+        level = self._toast_levels.get(serial)
+        if level is None:
+            level = next((lv for sr, lv, _t in get_debug_logger().toasts() if sr == serial),
+                         'info')
+        border, ink, body, close = self._toast_colours(level, self._toast_state(serial))
+        for column, colour in ((0, border), (1, body)):
+            cell = table.cellAt(0, column)
+            fmt = cell.format()
+            fmt.setBackground(QColor(colour))
+            cell.setFormat(fmt)
+        cell = table.cellAt(0, 1)
+        cursor = cell.firstCursorPosition()
+        cursor.setPosition(cell.lastCursorPosition().position(), QTextCursor.KeepAnchor)
+        text_fmt = QTextCharFormat()
+        text_fmt.setForeground(QColor(ink))
+        cursor.mergeCharFormat(text_fmt)
+        # The close button: the cell's last character, the tiny cross.
+        end = cell.lastCursorPosition()
+        mark = QTextCursor(end)
+        mark.movePosition(QTextCursor.Left, QTextCursor.KeepAnchor)
+        if mark.selectedText() == '\u2715':
+            close_fmt = QTextCharFormat()
+            close_fmt.setForeground(QColor(close))
+            mark.mergeCharFormat(close_fmt)
+
+    def _fade_toasts(self):
+        """Turn faint the cards that have been in full colour long enough;
+        stop the timer when no card is waiting."""
+        import time
+        now = time.monotonic()
+        waiting = False
+        due = []
+        for serial, since in list(self._toast_seen.items()):
+            if serial in self._toast_faint or serial in self._toast_highlighted:
+                continue
+            if now - since < TOAST_FADE_SECONDS:
+                waiting = True
+                continue
+            due.append(serial)
+        if due:
+            # One edit: the document is laid out again once, from the first
+            # card changed, not once a card (each from there to the end).
+            from PyQt5.QtGui import QTextCursor
+            edit = QTextCursor(self.console.document())
+            edit.beginEditBlock()
+            try:
+                for serial in due:
+                    self._toast_faint.add(serial)
+                    self._restyle_toast(serial)
+            finally:
+                edit.endEditBlock()
+        if not waiting:
+            self._toast_fader.stop()
+
+    def _wake_fader(self):
+        """A card is in full colour and will turn faint: tick until it has."""
+        if not self._toast_fader.isActive():
+            self._toast_fader.start()
+
+    def _highlight_toast(self, serial):
+        """Full colour and a close button for *serial*; the card that was
+        highlighted fades again in TOAST_FADE_SECONDS."""
+        import time
+        from PyQt5.QtGui import QTextCursor
+        others = [other for other in self._toast_highlighted if other != serial]
+        new = serial is not None and serial not in self._toast_highlighted
+        if not (others or new):
+            return                      # the same card, or none: nothing to redraw
+        edit = QTextCursor(self.console.document())
+        edit.beginEditBlock()           # both cards: one layout
+        try:
+            for other in others:
+                self._toast_highlighted.discard(other)
+                self._toast_seen[other] = time.monotonic()
+                self._toast_faint.discard(other)
+                self._restyle_toast(other)
+                self._wake_fader()
+            if new:
+                self._toast_highlighted.add(serial)
+                self._toast_faint.discard(serial)
+                self._restyle_toast(serial)
+        finally:
+            edit.endEditBlock()
+
+    def remove_toast(self, serial):
+        """Remove toast *serial*'s card from the console and its history."""
+        from PyQt5.QtGui import QTextCursor
+        serial = str(serial)
+        table = self._toast_table(serial)
+        if table is not None:
+            cursor = QTextCursor(self.console.document())
+            cursor.setPosition(table.firstPosition() - 1)
+            cursor.setPosition(table.lastPosition() + 1, QTextCursor.KeepAnchor)
+            cursor.removeSelectedText()
+        get_debug_logger().remove_toast(serial)
+        self._toast_seen.pop(serial, None)
+        self._toast_levels.pop(serial, None)
+        self._toast_cursors.pop(serial, None)
+        self._toast_faint.discard(serial)
+        self._toast_highlighted.discard(serial)
+
+    def eventFilter(self, obj, event):
+        if obj is self.console.viewport():
+            kind = event.type()
+            if kind in (QEvent.MouseMove, QEvent.MouseButtonPress):
+                table = self.console.cursorForPosition(event.pos()).currentTable()
+                serial = self._toast_serial_of(table)
+                if serial is not None or self._toast_highlighted:
+                    self._highlight_toast(serial)
+            elif kind == QEvent.Leave and self._toast_highlighted:
+                self._highlight_toast(None)
+        return super().eventFilter(obj, event)
+
     def _on_anchor_clicked(self, url: QUrl):
         """Handle clicking on an entity filter or an external URL."""
         link = url.toString()
-        if link.startswith("filter:"):
+        if link.startswith(_TOAST_CLOSE_LINK):
+            # A toast's close button: only while it shows (highlighted).
+            serial = link[len(_TOAST_CLOSE_LINK):]
+            if serial in self._toast_highlighted:
+                self.remove_toast(serial)
+        elif link.startswith(_TOAST_COPY_LINK):
+            # A console toast's copy button: its whole message.
+            text = get_debug_logger().toast_text(link[len(_TOAST_COPY_LINK):])
+            if text is not None:
+                QApplication.clipboard().setText(text)
+        elif link.startswith("filter:"):
             entity_name = link.split(":", 1)[1]
             self._apply_entity_filter(entity_name)
         elif link.startswith(("http://", "https://")):
@@ -946,7 +1494,42 @@ class DebugConsole(QWidget):
         a line logged with :func:`debug_log_markup` keeps its own tags.
         """
         message = str(message)
+        if category == ECHO_CATEGORY:
+            # A typed command, drawn as it was when entered (whatever the
+            # filters: the live echo ignores them too).
+            return _ECHO_HTML.format(html.escape(message[len(_ECHO_PREFIX):], quote=False))
+        if message.startswith(_TOAST):
+            # A toast: a card in its colour -- its words (an error's with a
+            # copy button), no icon in front -- and
+            # no links in its words. No filter hides a toast: not the
+            # category, an entity, nor any of the hide boxes.
+            level, serial, text = _toast_parts(message)
+            text = text.translate(_MARKUP_CHARS)
+            self._toast_seen.setdefault(serial, __import__('time').monotonic())
+            self._toast_levels[serial] = level
+            if serial not in self._toast_faint and serial not in self._toast_highlighted:
+                self._wake_fader()
+            border, ink, body, close_ink = self._toast_colours(
+                level, self._toast_state(serial))
+            document = self.console.document()
+            from PyQt5.QtGui import QTextDocument
+            if document.resource(QTextDocument.ImageResource, QUrl(_TOAST_COPY_IMAGE)) is None:
+                document.addResource(QTextDocument.ImageResource,
+                                     QUrl(_TOAST_COPY_IMAGE), _toast_copy_image())
+            paragraphs = self._toast_paragraphs(serial, level, text, ink, close_ink)
+            # A card, as the pop-up toasts are: a tinted body with an accent
+            # bar down its left side. (A cell takes a background; Qt ignores
+            # a table's.)
+            return (
+                f'<table cellspacing="0" cellpadding="0" border="0" '
+                f'style="margin-top: 2px; margin-bottom: 2px;"><tr>'
+                f'<td width="3" bgcolor="{border}"></td>'
+                f'<td bgcolor="{body}" style="padding: 2px 8px 2px 7px;">'
+                f'{paragraphs}</td></tr></table>')
         is_markup = message.startswith(_MARKUP)
+        no_links = not is_markup and message.startswith(_NO_LINKS)
+        if no_links:
+            message = message[len(_NO_LINKS):]
         # The reserved characters mean nothing anywhere else in a line.
         message = (message[len(_MARKUP):] if is_markup else message).translate(_MARKUP_CHARS)
 
@@ -1037,6 +1620,12 @@ class DebugConsole(QWidget):
             if version_match:
                 version_html = self._version_banner_html(version_match.group(1))
                 return f'<span style="color: {color};">{version_html}</span><br>'
+
+        # A toast written to the console: plain words, none of them a
+        # click-to-filter link -- not its numbers, names or values.
+        if no_links:
+            return (f'<span style="color: {color};">'
+                    f'{html.escape(message, quote=False)}</span><br>')
 
         # The startup OpenGL line ("OpenGL 4.1 Metal - 90.5 | Apple M5 | ...")
         # is hardware text: its version numbers are not entities, so nothing
@@ -1217,6 +1806,12 @@ class DebugConsole(QWidget):
 
     def clear(self):
         """Clear the console and buffer."""
+        self._toast_seen.clear()
+        self._toast_faint.clear()
+        self._toast_highlighted.clear()
+        self._toast_levels.clear()
+        self._toast_cursors.clear()
+        self._toast_fader.stop()
         self.console.clear()
         self.message_count = 0
         self._document_lines = 0

@@ -529,11 +529,11 @@ lifetime of the renderer that owns it.*
   earlier instance of your own, is still valid.
 
 **Display modes.** The frame input's `brush_display_mode` is the editor's
-Display box — `Textured`, `Solid Lit` (no textures), `Wireframe`, `Points`,
+Display box — `Textured`, `Solid Lit` (no textures), `Wireframe`,
 `Overlay` (Textured with the wireframe drawn over it); `r_wireframe` selects
 Wireframe. The host publishes it every frame and the renderer decides how each
-looks. In Play the host publishes `Textured` unless Wireframe, Points or Overlay
-is selected.
+looks. In Play the host publishes `Textured` unless Wireframe or Overlay is
+selected.
 
 **Diagnostics.** [Debug Tables](https://github.com/ViciousSquid/Fio/wiki/Debug-Tables)
 (**Debug → Debug Tables**) works unchanged with any renderer: it labels the

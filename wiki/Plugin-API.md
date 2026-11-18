@@ -529,11 +529,12 @@ lifetime of the renderer that owns it.*
   earlier instance of your own, is still valid.
 
 **Display modes.** The frame input's `brush_display_mode` is the editor's
-Display box — `Textured`, `Solid Lit` (no textures), `Wireframe`, `Points`,
-`Overlay` (Textured with the wireframe drawn over it); `r_wireframe` selects
-Wireframe. The host publishes it every frame and the renderer decides how each
-looks. In Play the host publishes `Textured` unless Wireframe, Points or Overlay
-is selected.
+Display box — `Textured`, `Solid Lit` (nothing textured: brushes, models and
+terrain shaded in their colours, no decals), `Wireframe`, `Overlay` (Textured
+with the wireframe drawn over it); `r_wireframe` selects Wireframe. The host
+publishes it every frame and the renderer decides how each looks; a value it
+does not know is drawn as Textured. In Play the host publishes `Textured`
+unless Wireframe or Overlay is selected.
 
 **Diagnostics.** [Debug Tables](https://github.com/ViciousSquid/Fio/wiki/Debug-Tables)
 (**Debug → Debug Tables**) works unchanged with any renderer: it labels the
@@ -559,6 +560,10 @@ def register_console_command(self, name: str, callback, help_text: str = "") -> 
 receives `main_window`. `register_console_command` adds a plugin-owned debug
 console command; its callback receives `(args, main_window, logic, play_mode)`.
 Both are gated by the plugin's enabled state and are available from API 1.4.0.
+While the plugin is enabled its commands are listed by the console's `help`
+under *Plugin Commands*, with their `help_text`. A name a built-in command
+already uses is never dispatched to the plugin (built-ins are tried first), so
+it is not listed as a plugin command either.
 `register_menu_action` above is the plugin-specific menu counterpart for actions
 that belong with the plugin rather than in Tools.
 

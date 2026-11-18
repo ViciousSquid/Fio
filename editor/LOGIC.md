@@ -260,6 +260,43 @@ until it had finished shutting.
 invents behaviour: each maps onto properties the AI already owns, and spawn
 health is recorded during the reset pass that already walks every monster.
 
+**LogicSpawner.** `spawn_count` entities per `Spawn`, scattered within
+`spawn_radius` of the spawn point. What a spawner makes during Play is a
+*session* Thing (`LogicSession.add_session_thing`): Stop removes it, and each
+Play counts `max_spawn` afresh, so a playtest leaves the map as authored.
+
+**Explosions** (`engine/explosions.py`). `Effect.Explode` plays an explosion
+over whatever the Effect is: a FIRE explodes and burns again afterwards
+(`return_after_explosion`, on by default; off, it becomes an EXPLOSION for
+good). The authored `effect_type` is never rewritten. `OnExplode` fires as it
+goes off, `OnExplodeFinished` once it has played. The sound always plays from
+the explosion, at `explosion_volume`.
+
+**Blasts.** An Effect's explosion can damage and push: `explosion_damage`,
+`explosion_radius`, `explosion_force` (all 0 / harmless by default). Everything
+within the radius that the blast can see takes the damage -- the player,
+monsters, explosive Props -- and the player, monsters and physics Props are
+pushed (never a Prop with physics off, nor anything with physics off in
+Settings).
+
+**Explosive Props.** A Prop with `explosive` on takes damage -- shots,
+projectiles, blasts, or the `Damage` input -- and at `explosive_health` it
+explodes (`Explode` sets it off at once). It has no explosion of its own: the
+model is removed and, at that same moment, an EXPLOSION Effect is spawned where
+it was, carrying the Prop's explosion settings, and explodes -- the Effect is
+the fireball, light, sound, sparks and blast. The fireball is sized to cover
+the model and opens partway in (`explosion_skip`), already bright, so the
+model is not seen to vanish. Other explosive Props caught in the blast go off
+in turn, a moment apart. `OnExplode` fires on the Prop. Stop puts the barrels
+back and removes the Effects they spawned.
+
+**Shake.** Shakes the screen when sent `Shake` (from a trigger brush's
+`OnTrigger`, a button, a timer...); `intensity` 0..1 and `duration` say how
+hard and how long, and `Shake`'s parameter can override the intensity.
+Purely visual (`engine/shake.py`): only the camera view wobbles -- the
+player, physics and the world are untouched. `Stop` ends every shake;
+`OnShake` fires each time. The panel's *Test shake* shakes the editor's view.
+
 ---
 
 ## 5. Big World and dormancy
@@ -324,6 +361,19 @@ Gate.OnTrigger    -> Door.Open          (AND)
 ```
 Trigger.OnTrigger -> Relay.Trigger -> Timer.Enable -> Spawner.Spawn
 ```
+
+**A fire that flares up and spreads.** The Effect panel's *Add fire spawner*
+builds this; *Fires* picks which of the five fires it scatters.
+
+```
+Torch.OnExplode      -> torch_fires.Spawn      (delay: part of the explosion)
+torch_fires          -> 4 FIRE Effects within 96 u, gone again at Stop
+Torch                -> a FIRE again once its explosion has played
+```
+
+**Exploding barrels.** Nothing to wire: shooting one is enough, and the
+blast sets off its neighbours. A barrel's own `OnExplode` can drive anything
+else, a fire spawner included.
 
 **A persistent world change.** Set it once; react to it on every later load.
 

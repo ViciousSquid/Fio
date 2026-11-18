@@ -137,6 +137,10 @@ CONTROL_STYLESHEET = """
     QMenuBar::item { background: transparent; padding: 5px 10px; margin: 0px; }
     QMenuBar::item:selected { background: #4b4d4d; }
     QMenu { background: #2b2b2b; color: #e0e0e0; border: 1px solid #666; padding: 2px; }
+    /* Fio's colours: an orange strip along the top of every menu, green
+       along the top of every submenu (a submenu is a child of its menu). */
+    QMenu { border-top: 3px solid #FF8C00; }
+    QMenu QMenu { border-top: 3px solid #4CAF50; }
     QMenu::item { padding: 5px 26px 5px 24px; margin: 0px; border: none; }
     QMenu::item:selected { background: #425f5d; color: #fff; }
     QMenu::item:disabled { color: #858585; }

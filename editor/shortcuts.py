@@ -73,8 +73,16 @@ DECLARED = (
     ('Component modes', 'Shift+F', 'Face mode'),
     ('Component modes', 'Q', 'Step Select -> Brush -> Vertex -> Edge -> Face'),
 
-    ('Brush and texture', 'Page Up', "Rotate the hovered face's texture 90 clockwise"),
-    ('Brush and texture', 'Page Down', "Rotate the hovered face's texture 90 anticlockwise"),
+    ('Brush and texture', 'Page Up', "Rotate the selected face's texture 90 clockwise"),
+    ('Brush and texture', 'Page Down', "Rotate the selected face's texture 90 anticlockwise"),
+    ('Brush and texture', 'Shift+Right / Shift+Up',
+     "Rotate the Surface Inspector's face's texture 90 clockwise"),
+    ('Brush and texture', 'Shift+Left / Shift+Down',
+     "Rotate the Surface Inspector's face's texture 90 anticlockwise"),
+    ('Brush and texture', 'Arrow keys',
+     "Nudge the Surface Inspector's face's texture by its shift Step"),
+    ('Brush and texture', 'Shift+5',
+     "Fit the texture to the selected face (no face: every face of the selected brushes)"),
     ('Brush and texture', 'Enter', 'Apply the clip (in Clip mode)'),
     ('Brush and texture', 'Shift+Enter', 'Apply the clip keeping both sides'),
 

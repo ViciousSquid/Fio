@@ -187,6 +187,9 @@ class QtGameView(QOpenGLWidget):
 
         self.face_mode_active = False
         self.hovered_face_info = None
+        #: What :attr:`hovered_face_info` was picked under (see
+        #: :meth:`face_under_cursor`): cursor, camera and world.
+        self._face_hover_key = None
 
         # --- Component editing (shares the main window's ComponentController) ---
         # Only the drag anchors are per-view; the mode, hover and component
@@ -252,6 +255,10 @@ class QtGameView(QOpenGLWidget):
         self.show_glasses = self.editor.config.getboolean(
             'Display', 'show_glasses', fallback=True
         )
+        #: Settings > Editor > 3D View: a light hidden with H gives no light
+        #: in the editor while it is hidden.
+        self.hide_hidden_lights = self.editor.config.getboolean(
+            'Display', 'hide_hidden_lights', fallback=False)
         # The glasses player 1 wears (Settings > Appearance); player 2
         # always wears the default pair.
         self.player1_glasses = normalize_glasses(self.editor.config.get(
@@ -446,6 +453,74 @@ class QtGameView(QOpenGLWidget):
 
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
+
+    #: Turning the camera this fast (radians a second) pushes the lens drops
+    #: as hard as they are pushed (engine.lens_water's motion of 1).
+    LENS_TURN_FOR_FULL_PUSH = 4.0
+
+    def _draw_lens_water(self, render_state, splitscreen):
+        """Advance and draw the water on the camera's lens (engine.lens_water).
+
+        When the player's eye comes up out of the water -- from deep water,
+        or standing up after crouching under -- the lens is splashed, and the
+        drops run off and dry: gone within LENS_WATER_SECONDS, always. Waist deep
+        with the eye above the water, the bottom half of the lens has drops;
+        shallower, none. Under water there are none. Purely visual, by real time, on this thread;
+        nothing at all is done while the lens is dry and the eye is not under.
+        """
+        lens = getattr(self, '_lens_water', None)
+        if lens is None:
+            from engine.lens_water import LensWater
+            lens = self._lens_water = LensWater()
+            self._lens_was_under = False
+            self._lens_clock = None
+            self._lens_look = None
+        if not self.play_mode or render_state is None:
+            if lens.active:
+                lens.clear()
+            self._lens_was_under = False
+            self._lens_clock = None
+            self._lens_look = None
+            return
+        under = bool(getattr(render_state, 'player_underwater', False))
+        if under:
+            if lens.active:
+                lens.submerged()
+        elif self._lens_was_under:
+            lens.surfaced()
+        self._lens_was_under = under
+        now = time.perf_counter()
+        dt = 0.0 if self._lens_clock is None else now - self._lens_clock
+        # Waist deep, the eye above the water: drops on the bottom half.
+        if getattr(render_state, 'player_wading', False):
+            lens.standing_in_water(dt)
+        look = (float(render_state.player_angle), float(render_state.player_pitch))
+        if not lens.active:
+            self._lens_clock, self._lens_look = now, look
+            return
+        motion = (0.0, 0.0)
+        if self._lens_look is not None and dt > 1e-4:
+            turn = (look[0] - self._lens_look[0] + math.pi) % (2.0 * math.pi) - math.pi
+            nod = look[1] - self._lens_look[1]
+            full = self.LENS_TURN_FOR_FULL_PUSH * dt
+            # Turning right lowers the angle; looking up raises the pitch and
+            # moves the view up the screen (y down).
+            motion = (-turn / full, -nod / full)
+        self._lens_clock, self._lens_look = now, look
+        lens.update(dt, motion)
+        drops = lens.frame()
+        if not drops:
+            return
+        ratio = self.devicePixelRatioF()
+        width = max(1, int(self.width() * ratio))
+        height = max(1, int(self.height() * ratio))
+        viewport = (0, 0, width // 2, height) if splitscreen else (0, 0, width, height)
+        # Optional, like animate_textures and draw_face_hover: a renderer that
+        # does not offer it (it is not in the locked contract) shows none.
+        # The built-in one has it from engine.renderer.core.
+        draw = getattr(self.renderer, 'draw_lens_water', None)
+        if draw is not None:
+            draw(drops, viewport)
 
     def _clear_play_mode_hint(self):
         self._play_mode_hint = ""
@@ -942,10 +1017,10 @@ class QtGameView(QOpenGLWidget):
         self._view_ptr = glm.value_ptr(self.view_matrix)
         self._render_config["culling_enabled"] = self.culling_enabled
         # The Display box is published as-is while editing. In Play the game
-        # is drawn textured; only the debug views (Wireframe, Points, Overlay)
+        # is drawn textured; only the debug views (Wireframe, Overlay)
         # carry over.
         _display = self.brush_display_mode
-        if self.play_mode and _display not in ("Wireframe", "Points", "Overlay"):
+        if self.play_mode and _display not in ("Wireframe", "Overlay"):
             _display = "Textured"
         self._render_config["brush_display_mode"] = _display
         self._render_config["show_triggers_as_solid"] = self.show_triggers_as_solid
@@ -958,6 +1033,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["show_glasses"] = bool(self.show_glasses)
+        self._render_config["hide_hidden_lights"] = bool(self.hide_hidden_lights)
         from engine.glasses import world_glasses
         self.logic_thread.player_runtime.glasses_style = normalize_glasses(self.player1_glasses)
         (_glass_positions, _glass_sprites, _spectator_positions, _spectator_sprites,
@@ -1168,11 +1244,23 @@ class QtGameView(QOpenGLWidget):
                 _segments, _colours = connection_segments(conn_lines)
                 self.renderer.draw_connection_lines(
                     self.projection_matrix, self.view_matrix, _segments, _colours)
-        if self.face_mode_active and self.hovered_face_info:
-            brush, face_name = self.hovered_face_info
+        # The face being edited -- the Surface Inspector's, which stays put
+        # whatever the cursor passes over -- in orange; in Face Mode the face
+        # under the cursor too: faintly while another face is selected.
+        selected = None if self.play_mode else self.editor.selected_face_target()
+        hovered = self.face_under_cursor() if self.face_mode_active else None
+        if selected is not None:
             self.renderer.draw_face_highlight(
                 self.projection_matrix, self.view_matrix,
-                face_highlight_triangles(brush, face_name))
+                face_highlight_triangles(*selected))
+        if hovered is not None and not (
+                selected is not None and hovered[0] is selected[0]
+                and hovered[1] == selected[1]):
+            draw = (self.renderer.draw_face_highlight if selected is None
+                    else getattr(self.renderer, 'draw_face_hover', None))
+            if draw is not None:
+                draw(self.projection_matrix, self.view_matrix,
+                     face_highlight_triangles(*hovered))
         # Component handles.  The arrays come from the editor's controller,
         # which rebuilds them only when the selection, hover or geometry
         # changed; here it is a version check and a draw call.
@@ -1200,6 +1288,10 @@ class QtGameView(QOpenGLWidget):
             _pmgr.emit("render.post_scene", viewport=self, renderer=self.renderer,
                        projection=self.projection_matrix, view=self.view_matrix,
                        camera_pos=camera_pos, play_mode=self.play_mode)
+
+        # Water on the lens after coming up out of the water: over the whole
+        # world, under the HUD.
+        self._draw_lens_water(render_state, _splitscreen)
 
         restore_default_pixel_store()
         # The native renderer may leave viewport/scissor/depth state from a
@@ -1722,7 +1814,9 @@ class QtGameView(QOpenGLWidget):
                     return
 
         if self.face_mode_active and event.button() == Qt.LeftButton:
-            if self.hovered_face_info:
+            # Picked here, at the press: the hover is only as fresh as the
+            # last mouse move, and the camera may have moved since.
+            if self.face_under_cursor(event.pos()):
                 # Arm the press: a drag from here moves the face's plane, a
                 # click without movement textures it (the original behaviour,
                 # decided on release).
@@ -2015,10 +2109,43 @@ class QtGameView(QOpenGLWidget):
                 self.update()
             return
         if self.face_mode_active:
-            self.hovered_face_info = self.picking.get_brush_face_at_coords(event.x(), event.y())
+            self.face_under_cursor(event.pos())
             self.update()
             return
         super().mouseMoveEvent(event)
+
+    def face_under_cursor(self, pos=None):
+        """``(brush, face key)`` under the cursor in Face Mode, or None.
+
+        :attr:`hovered_face_info` picked again whenever the cursor, the camera
+        or the world has changed since it was last picked. It used to be
+        picked on mouse moves only, and Qt sends none while the cursor is
+        still: fly the camera (WASD, mouse look, framing a selection), undo,
+        or move a brush, and the hover -- what a click textures, what Page
+        Up/Down rotates, what is highlighted -- was still the face that had
+        been under the cursor before, on another brush (after an undo, a
+        detached copy of one). *pos* is the cursor in widget coordinates;
+        by default where the cursor is now.
+        """
+        if not self.face_mode_active:
+            return None
+        if pos is None:
+            pos = self.mapFromGlobal(QCursor.pos())
+            if not self.rect().contains(pos):
+                return self.hovered_face_info
+        state = self.editor.state
+        key = (pos.x(), pos.y(), self.width(), self.height(),
+               self.view_matrix.to_tuple(), self.projection_matrix.to_tuple(),
+               tuple(self.logic_thread.camera.get_editor_camera().pos)
+               if self.logic_thread is not None else None,
+               getattr(state, 'world_epoch', None),
+               brush_placement.placement_stamps, id(state.brushes),
+               len(state.brushes))
+        if key != self._face_hover_key:
+            self._face_hover_key = key
+            self.hovered_face_info = self.picking.get_brush_face_at_coords(
+                pos.x(), pos.y())
+        return self.hovered_face_info
 
     def mouseReleaseEvent(self, event):
         if self.play_mode and self.pause_menu is not None:

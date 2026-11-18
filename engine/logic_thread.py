@@ -10,6 +10,8 @@ import time
 import os
 
 from .threaded_game_state import ThreadedGameState
+from .explosions import ExplosionRuntime, finish_explosions
+from .shake import ShakeRuntime
 from .cutscene_runtime import CutsceneRuntime
 from .logic_camera import LogicCamera
 from .logic_player import LogicPlayer
@@ -286,6 +288,10 @@ class LogicThread(threading.Thread):
         )
         # LogicCombat owns weapons, projectiles, bullet marks and noise.
         self.combat_runtime = LogicCombat(self)
+        #: Explosive Props: damage taken, explosions due, what Stop puts back.
+        self.explosion_runtime = ExplosionRuntime(self)
+        #: Screen shakes (the Shake entity): the camera view only.
+        self.shake_runtime = ShakeRuntime()
         # LogicTiming owns timer and light-fade advancement.
         self.timing_runtime = LogicTiming(self)
         # LogicCollision owns world/model collision geometry and cache rebuilding.
@@ -514,6 +520,9 @@ class LogicThread(threading.Thread):
 
     def _tick(self, delta: float):
         self._announce_pause_menu()
+        # Explosions that have played go back to their type (a FIRE burns
+        # again), in a game and after a preview in the editor alike.
+        finish_explosions(self)
         if self.session_runtime.play_mode:
             self._tick_play_mode(delta)
             self.collision_runtime.rebuild_if_dirty()
@@ -682,6 +691,10 @@ class LogicThread(threading.Thread):
         # Update monster projectiles (flying monster ranged attacks)
         # NOTE: Monster AI itself now runs in MonsterAIThread
         combat_runtime._update_monster_projectiles(delta)
+
+        # Explosive Props that shots or blasts have finished off go up now
+        # (outside the monster lock, which their blast takes).
+        self.explosion_runtime.update()
 
         # ── Player 2 physics (split-screen) ──────────────────────────────────
         self.player_runtime.update_player2(delta)

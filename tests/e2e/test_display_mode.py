@@ -1,17 +1,16 @@
 """The editor's Display box is host state; renderers only receive it.
 
-The Display box ("Wireframe", "Points", "Solid Lit", "Textured", "Overlay") and
+The Display box ("Wireframe", "Solid Lit", "Textured", "Overlay") and
 ``r_wireframe`` set the view's display mode. The host publishes it as the
 ``brush_display_mode`` frame input, so:
 
 * any renderer -- here one that shares nothing with ``ForwardRenderer`` -- sees
   a change on the very next frame, with nothing set on the renderer itself;
-* in Play the game is drawn textured; only Wireframe, Points and Overlay
-  carry over;
+* in Play the game is drawn textured; only Wireframe and Overlay carry over;
 * the built-in renderer draws the modes as the box names them: Textured as
-  normal, Solid Lit with no textures, and Wireframe (true brush edges) and
-  Points (a laser scan, after Scanner Sombre) on black, coloured by distance
-  from the eye -- warm up close, cold far away; Overlay is Textured with every
+  normal, Solid Lit with no textures anywhere (brushes, models, terrain; no
+  decals), Wireframe (true brush edges) on black, coloured by distance from
+  the eye -- warm up close, cold far away; Overlay is Textured with every
   brush triangle drawn over it in white.
 """
 
@@ -27,7 +26,7 @@ from tests.helpers.worlds import box_brush, level_data, make_thing, room  # noqa
 
 pytestmark = [pytest.mark.gl, pytest.mark.integration]
 
-MODES = ("Wireframe", "Points", "Solid Lit", "Textured", "Overlay")
+MODES = ("Wireframe", "Solid Lit", "Textured", "Overlay")
 
 
 @pytest.fixture
@@ -128,7 +127,7 @@ def test_play_is_drawn_textured_unless_wireframe_is_on(fio_session, flat):
     session.paint()
     assert set(_published_modes(view.renderer)) == {"Textured"}
 
-    for mode in ("Wireframe", "Points", "Overlay"):
+    for mode in ("Wireframe", "Overlay"):
         combo.setCurrentText(mode)
         view.renderer.frames.clear()
         session.paint()
@@ -162,26 +161,14 @@ def test_the_built_in_renderer_draws_each_display_mode(fio_session):
     # ... Solid Lit shows none: a textured world and an untextured one match.
     assert _diff(textured["Solid Lit"], plain["Solid Lit"]) < 0.001
     assert _diff(textured["Solid Lit"], textured["Textured"]) > 0.05
-    # Wireframe and Points are drawn on black, coloured by distance, and
-    # textures play no part in either.
-    for mode in ("Wireframe", "Points"):
-        assert _diff(textured[mode], plain[mode]) < 0.001, mode
-    assert _diff(textured["Wireframe"], textured["Points"]) > 0.05
-
-    # Points is a laser scan (after Scanner Sombre): points of light on black,
-    # warm on the floor at our feet, cold on the far wall.
-    scan = textured["Points"].astype(np.int16)
-    dark = float((scan.max(axis=2) < 24).mean())
-    assert 0.5 < dark < 0.98, dark
-    h = scan.shape[0]
-    near = scan[int(h * 0.85):].reshape(-1, 3).sum(axis=0)
-    far = scan[int(h * 0.35):int(h * 0.5)].reshape(-1, 3).sum(axis=0)
-    assert near[0] > 2 * near[2], f"near points are not warm: {near}"
-    assert far[2] > far[0], f"far points are not cold: {far}"
+    # Wireframe is drawn on black, coloured by distance; textures play no
+    # part in it.
+    assert _diff(textured["Wireframe"], plain["Wireframe"]) < 0.001
 
     # Wireframe is lines on black: the coloured pixels are edges, the near
     # crate's warm and the far walls' cold.
     wire = textured["Wireframe"].astype(np.int16)
+    h = wire.shape[0]
     assert float((wire.max(axis=2) < 24).mean()) > 0.5
     rows = np.arange(h)[:, None].repeat(wire.shape[1], axis=1)
     warm = (wire[..., 0] - wire[..., 2]) > 80
@@ -228,3 +215,26 @@ def test_wireframe_draws_true_brush_edges(fio_session):
     box_edges = [c for c in calls if c == (gl.GL_LINES, 24)]
     assert len(box_edges) == renderer.render_stats.visible_brushes > 0
     assert not filled, "Wireframe went through the filled brush pass"
+
+
+def test_solid_lit_draws_no_decals_and_untextured_models(fio_session, monkeypatch):
+    """Reported: Solid Lit still showed some textures -- decals, textured
+    models and brushes with a nodraw face. Nothing is textured in it now."""
+    session = _open(fio_session, _level(textured=True))
+    renderer = session.view.renderer
+    decal_calls = []
+    real = renderer.draw_decals
+    monkeypatch.setattr(renderer, 'draw_decals',
+                        lambda *a, **k: (decal_calls.append(1), real(*a, **k)))
+    combo = session.window.display_mode_combobox
+    session.publish()
+    combo.setCurrentText("Textured")
+    session.paint()
+    assert decal_calls and renderer._solid_look is False
+    del decal_calls[:]
+    combo.setCurrentText("Solid Lit")
+    session.paint()
+    assert decal_calls == [] and renderer._solid_look is True
+    import inspect
+    from engine.renderer.forward import renderer as forward
+    assert not hasattr(forward, 'nodraw_brushes')       # no textured exception

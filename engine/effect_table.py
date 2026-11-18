@@ -8,6 +8,7 @@ read or mutate per-Effect runtime attributes on the hot path.
 from __future__ import annotations
 
 import random
+import weakref
 
 import numpy as np
 
@@ -16,6 +17,7 @@ from .effect_entity import (
     EFFECT_EXPLOSION,
     EFFECT_FIRE,
     EFFECT_ORB,
+    EFFECT_PARTICLES,
 )
 from .soa import grow_soa_arrays
 
@@ -24,12 +26,16 @@ FAMILY_FIRE = 0
 FAMILY_EXPLOSION = 1
 FAMILY_ORB = 2
 FAMILY_CUSTOM = 3
+#: The emitter alone. Active from the start and looping, like FIRE; every
+#: family other than EXPLOSION is.
+FAMILY_PARTICLES = 4
 
 _FAMILY_IDS = {
     EFFECT_FIRE: FAMILY_FIRE,
     EFFECT_EXPLOSION: FAMILY_EXPLOSION,
     EFFECT_ORB: FAMILY_ORB,
     EFFECT_CUSTOM: FAMILY_CUSTOM,
+    EFFECT_PARTICLES: FAMILY_PARTICLES,
 }
 
 
@@ -76,6 +82,7 @@ class EffectStore:
         "_index_by_object",
         "_capacity",
         "_count",
+        "_returns",
     )
 
     def __init__(self, capacity=16):
@@ -90,6 +97,11 @@ class EffectStore:
         self.ids = []
         self.generation = 0
         self._index_by_object = {}
+        #: id(thing) -> (weakref to it, type to return to, when): explosions
+        #: that hand back to another type when they end
+        #: (:meth:`trigger_explosion`, :meth:`finish_explosions`). Weak, so
+        #: the store still keeps no authoring object alive.
+        self._returns = {}
 
     def __len__(self):
         return self._count
@@ -154,6 +166,7 @@ class EffectStore:
         self._count = 0
         self.ids.clear()
         self._index_by_object.clear()
+        self._returns.clear()
         self.generation += 1
 
     def rebuild(self, things, *, reset_runtime=False):
@@ -210,6 +223,7 @@ class EffectStore:
 
     def begin_session(self, things):
         """Reset every Effect runtime row at Play start."""
+        self._returns.clear()
         self.rebuild(things, reset_runtime=True)
 
     def index_of(self, thing):
@@ -251,15 +265,65 @@ class EffectStore:
         self.generation += 1
         return index
 
-    def trigger_explosion(self, thing, now):
-        """Start or restart one-shot EXPLOSION playback."""
+    def trigger_explosion(self, thing, now, return_to=None):
+        """Start or restart one-shot EXPLOSION playback.
+
+        With *return_to* (an Effect type name) the row goes back to that type
+        when the explosion has played: :meth:`finish_explosions` reports it
+        once its lifetime is over. A FIRE that explodes this way burns again
+        afterwards; an EXPLOSION previewed in the editor returns to its
+        dormant self."""
         index = self.sync_authored(thing)
         self.family_id[index] = FAMILY_EXPLOSION
         self.phase[index] = 0.0
         self.spawn_time[index] = float(now)
         self.active[index] = True
         self.generation += 1
+        if return_to:
+            self._returns[id(thing)] = (
+                weakref.ref(thing), str(return_to).strip().upper(),
+                float(now) + float(self.lifetime[index]))
+        else:
+            self._returns.pop(id(thing), None)
         return index
+
+    def returning(self, thing):
+        """The type *thing*'s playing explosion returns to, or None."""
+        entry = self._returns.get(id(thing))
+        return entry[1] if entry is not None else None
+
+    def finish_explosions(self, now):
+        """Return every explosion that has played to the type it came from.
+
+        Called once a tick; does nothing (one dict check) when no explosion
+        is due to return. Each returning Effect's row is reset to its type
+        (:meth:`set_type`), and ``(thing, type)`` is listed for the caller.
+        """
+        if not self._returns:
+            return ()
+        due = [key for key, (_ref, _type, end) in self._returns.items()
+               if end <= now]
+        finished = []
+        for key in due:
+            ref, return_to, _end = self._returns.pop(key)
+            thing = ref()
+            if thing is None or self.index_of(thing) < 0:
+                continue                       # deleted while it played
+            self.set_type(thing, return_to)
+            finished.append((thing, return_to))
+        return finished
+
+    def cancel_returns(self):
+        """Return every explosion still playing to its type now (Play
+        stopping): ``(thing, type)`` for each."""
+        finished = []
+        for ref, return_to, _end in list(self._returns.values()):
+            thing = ref()
+            if thing is not None and self.index_of(thing) >= 0:
+                self.set_type(thing, return_to)
+                finished.append((thing, return_to))
+        self._returns.clear()
+        return finished
 
     def set_position(self, thing, position):
         """Update an Effect execution position without reading object state.

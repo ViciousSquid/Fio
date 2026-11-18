@@ -1127,7 +1127,10 @@ def test_a_panel_already_in_the_selection_is_left_alone(main_window):
     assert host.surface_inspector.target == (brush, 'east')
 
 
-def test_it_follows_the_selection_to_another_brush(main_window):
+def test_the_selected_face_stays_when_the_selection_moves_to_another_brush(main_window):
+    """The inspector's face is changed by clicking another face or picking
+    one from its list, and released by closing it -- never by the selection,
+    so adjustments keep going to the face that was chosen."""
     host = main_window
     one, two = make_box(), make_box(pos=(256, 0, 0))
     host.state.selected_objects = [one]
@@ -1137,7 +1140,17 @@ def test_it_follows_the_selection_to_another_brush(main_window):
     host.state.selected_objects = [two]
     host.sync_surface_inspector()
 
-    assert host.surface_inspector.target[0] is two
+    assert host.surface_inspector.target[0] is one
+
+
+def test_an_unbound_panel_binds_to_the_selection(main_window):
+    host = main_window
+    host.toggle_surface_inspector()
+    assert host.surface_inspector.target is None
+    brush = make_box()
+    host.state.selected_objects = [brush]
+    host.sync_surface_inspector()
+    assert host.surface_inspector.target[0] is brush
 
 
 def test_deselecting_does_not_blank_a_panel_being_worked_in(main_window):
@@ -1161,31 +1174,25 @@ def test_a_closed_panel_is_not_woken_by_a_selection(main_window):
     assert host.surface_inspector is None
 
 
-def test_undo_re_points_a_closed_inspector_without_reopening_it(inspector):
-    """Closing the panel is not an undoable action. Undo re-points the
-    inspector at the rebuilt brush, and that re-bind used to show() it."""
+def test_closing_releases_the_face_and_undo_does_not_reopen_it(inspector):
+    """Closing the panel releases its face (reopened, it binds to whatever
+    is chosen then). Closing is not an undoable action: undo neither
+    re-opens the panel nor binds it again."""
     from editor.main_window import MainWindow
 
     host, panel, brush = inspector
     brush['id'] = 'box-1'
     panel.hide()
     assert not panel.isVisible()
+    assert panel.target is None
+    assert host.selected_face_target() is None
 
-    # What undo leaves behind: the scene rebuilt from JSON, a new dict with
-    # the same stable id.
     rebuilt = dict(brush)
     host.state.brushes[:] = [rebuilt]
-    host.surface_inspector = panel
     host.face_texture_target = None
     MainWindow._rebind_face_targets(host)
 
     assert not panel.isVisible(), "undo re-opened the closed Surface Inspector"
-    assert panel.target[0] is rebuilt, "the closed panel was not re-pointed"
-
-    # A brush that no longer exists unbinds it -- still without opening it.
-    host.state.brushes[:] = []
-    MainWindow._rebind_face_targets(host)
-    assert not panel.isVisible()
     assert panel.target is None
 
 
@@ -1202,3 +1209,115 @@ def test_undo_keeps_an_open_inspector_open(inspector):
     MainWindow._rebind_face_targets(host)
     assert panel.isVisible()
     assert panel.target[0] is rebuilt
+
+
+# ---------------------------------------------------------------------------
+# The selected face: locked, and edited from the keyboard
+# ---------------------------------------------------------------------------
+
+def _key(host, key, shift=False, text=""):
+    """A key press as the editor's event filter receives it."""
+    from PyQt5.QtCore import QEvent, Qt
+    from PyQt5.QtGui import QKeyEvent
+    modifiers = (Qt.ShiftModifier if shift else Qt.NoModifier) | Qt.KeypadModifier
+    event = QKeyEvent(QEvent.KeyPress, key, modifiers, text)
+    return host.eventFilter(host, event)
+
+
+def _angle(brush, face):
+    return ft.get_transform(brush, face)['angle']
+
+
+def test_page_up_turns_the_selected_face_not_the_hovered_one(inspector):
+    """Reported: a texture rotated on one side of a pillar, then the same
+    texture put on another side; rotating that turned the first side again.
+    In Face Mode Page Up turned the face last under the cursor -- the first
+    side, crossed on the way to the panel -- not the face being edited."""
+    host, panel, brush = inspector
+    other = make_box(pos=(600, 0, 0))
+    host.state.brushes.append(other)
+    host.view_3d.face_mode_active = True
+    host.show_surface_inspector(brush, 'east')
+    host.view_3d.face_under_cursor = lambda pos=None: (brush, 'north')
+    host.rotate_textures(1)
+    assert _angle(brush, 'east') == 90.0
+    assert _angle(brush, 'north') == 0.0
+    host.view_3d.face_under_cursor = lambda pos=None: (other, 'top')
+    host.rotate_textures(1)
+    assert _angle(brush, 'east') == 180.0 and _angle(other, 'top') == 0.0
+
+
+def test_the_selected_face_is_what_the_view_highlights(inspector):
+    host, panel, brush = inspector
+    assert host.selected_face_target() == (brush, 'north')
+    panel.hide()
+    assert host.selected_face_target() is None
+
+
+def test_shift_arrows_rotate_the_selected_face(inspector):
+    from PyQt5.QtCore import Qt
+    host, panel, brush = inspector
+    assert _key(host, Qt.Key_Right, shift=True)
+    assert _angle(brush, 'north') == 90.0
+    assert _key(host, Qt.Key_Up, shift=True)
+    assert _angle(brush, 'north') == 180.0
+    assert _key(host, Qt.Key_Left, shift=True)
+    assert _key(host, Qt.Key_Down, shift=True)
+    assert _angle(brush, 'north') == 0.0
+    assert brush['pos'] == [0, 0, 0]                 # the brush did not move
+    assert _angle(brush, 'south') == 0.0
+
+
+def test_arrows_nudge_the_selected_face_by_its_step(inspector):
+    from PyQt5.QtCore import Qt
+    host, panel, brush = inspector
+    panel.hshift_step.setValue(0.25)
+    panel.vshift_step.setValue(0.5)
+    assert _key(host, Qt.Key_Right)
+    assert _key(host, Qt.Key_Right)
+    assert _key(host, Qt.Key_Down)
+    shift = ft.get_transform(brush, 'north')['shift']
+    assert shift == pytest.approx((0.5, -0.5))
+    assert brush['pos'] == [0, 0, 0]                 # not a brush nudge
+    assert ft.get_transform(brush, 'south')['shift'] == (0.0, 0.0)
+
+
+def test_arrows_nudge_the_brush_when_no_face_is_selected(inspector):
+    from PyQt5.QtCore import Qt
+    host, panel, brush = inspector
+    panel.hide()
+    _key(host, Qt.Key_Right)
+    assert ft.get_transform(brush, 'north')['shift'] == (0.0, 0.0)
+
+
+def test_shift_5_fits_the_selected_face_and_keeps_its_texture(inspector):
+    from PyQt5.QtCore import Qt
+    host, panel, brush = inspector
+    ft.set_transform(brush, 'north', shift=(0.3, 0.1), scale=(3.0, 2.0), angle=90.0)
+    ft.set_transform(brush, 'south', scale=(4.0, 4.0))
+    panel.refresh_from_face()
+    assert _key(host, Qt.Key_Percent, shift=True, text="%")
+    north = ft.get_transform(brush, 'north')
+    assert north['scale'] == (1.0, 1.0) and north['shift'] == (0.0, 0.0)
+    assert north['texture'] == 'tex_north.png'
+    assert ft.get_transform(brush, 'south')['scale'] == (4.0, 4.0)   # only that face
+
+
+def test_shift_5_fits_every_face_of_the_selected_brushes(main_window):
+    from PyQt5.QtCore import Qt
+    host = main_window
+    one, two = make_box(), make_box(pos=(600, 0, 0))
+    host.state.brushes[:] = [one, two]
+    for brush in (one, two):
+        for face in ft.face_keys(brush):
+            ft.set_transform(brush, face, scale=(5.0, 3.0), shift=(0.2, 0.2))
+    host.set_selected_objects([one, two])
+    assert host.selected_face_target() is None
+    assert _key(host, Qt.Key_5, shift=True, text="%")
+    for brush in (one, two):
+        for face in ft.face_keys(brush):
+            mapping = ft.get_transform(brush, face)
+            assert mapping['scale'] == (1.0, 1.0) and mapping['shift'] == (0.0, 0.0)
+            assert mapping['texture'] == 'tex_%s.png' % face
+    host.undo()
+    assert ft.get_transform(host.state.brushes[0], 'east')['scale'] == (5.0, 3.0)

@@ -98,6 +98,10 @@ except ImportError:                                   # pragma: no cover
     Thing = PathNode = Portal = Prop = Monster = Effect = None
     LogicGate = LogicRelay = LogicTimer = LevelChanger = Light = None
     LogicSpawner = LogicCamera = ReflectionProbe = None
+from .effect_entity import (
+    EMITTER_SCALE_RANGE, EXPLOSION_FLASH_DECAY, EXPLOSION_FLASH_GAIN,
+    EXPLOSION_LIGHT_FADE_FROM, EXPLOSION_PREVIEW_T, emitter_id,
+    explosion_light_scale)
 
 
 # --------------------------------------------------------------------------
@@ -582,10 +586,21 @@ _EFFECT_ORB_LIGHT_COLOUR = np.asarray(
     (0x4A, 0x9B, 0xFF), dtype=np.float32
 ) / 255.0
 
-# EXPLOSION's atlas is 16 frames, numbered 1..16 for authoring.
-# The editor preview is intentionally locked to frame 10 (atlas index 9).
-_EXPLOSION_FRAME_COUNT = 16.0
-_EXPLOSION_PREVIEW_FRAME = 10
+#: Explosions a tick from which their lights are worked out by NumPy rather
+#: than a Python loop. A small-N crossover (the invariant in
+#: tests/performance/test_small_n_invariant.py): a map plays a handful of
+#: explosions at once, and below this the loop's per-row cost is less than
+#: NumPy's fixed cost a call. Measured (CPython 3.13, NumPy 2; re-measure
+#: with ``pytest tests/performance/test_small_n_invariant.py -k benchmark -s
+#: --run-benchmarks``)::
+#:
+#:     explosions    loop      NumPy
+#:              1     1.1 us   18.5 us
+#:              8     4.2 us   18.7 us
+#:             32    15.4 us   19.1 us
+#:             48    23.1 us   19.1 us
+#:            128    60.0 us   22.3 us
+EXPLOSION_LIGHT_VECTOR_FROM = 40
 
 def _effect_fire_variant(props):
     value = str(
@@ -696,6 +711,15 @@ _COLUMNS = (
     ('effect_custom_loop', (), bool, True),
     ('effect_preview', (), bool, False),
     ('effect_params', (4,), np.float32, 0.0),
+    #: The Effect's particle emitter: preset id (0 = none, see
+    #: effect_entity.EMITTER_PRESETS), (rate 0..1, scale, extent width,
+    #: extent height) and tint 0..1. Authored, so resolved with the other
+    #: static Effect columns and never touched by the clock.
+    #: Where an explosion's playback starts, 0..0.9 (explosion_skip).
+    ('effect_skip', (), np.float32, 0.0),
+    ('effect_emitter', (), np.uint8, 0),
+    ('effect_emitter_params', (4,), np.float32, 0.0),
+    ('effect_emitter_tint', (3,), np.float32, 1.0),
     ('effect_color', (3,), np.float32, 1.0),
     ('effect_light_color', (3,), np.float32, 1.0),
     ('effect_light_enabled', (), bool, False),
@@ -1263,36 +1287,34 @@ class EntityTable:
             ).astype(np.float32)
             explosion_active = None
             preview_explosion = explosion & preview
+            if any_explosion:
+                # An explosion played in the editor (the panel's Play): it
+                # runs on its own clock, lit, as it would in a game, and the
+                # frozen Preview frame stands aside while it does.
+                playing = explosion & active
+                if playing.any():
+                    elapsed = np.where(
+                        playing, np.maximum(now - spawn, 0.0), elapsed
+                    ).astype(np.float32)
+                    explosion_active = playing & (elapsed < lifetime)
+                    preview_explosion = preview_explosion & ~playing
+                    if not explosion_active.any():
+                        explosion_active = None     # played out: as if idle
 
         if any_explosion:
-            if effect_runtime:
-                explosion_elapsed = elapsed[explosion]
-                flash_active = (
-                    explosion_active[explosion]
-                    & (explosion_elapsed < np.minimum(
-                        lifetime[explosion], 0.12))
-                )
-                decay = np.exp(-explosion_elapsed / 0.035).astype(
-                    np.float32
-                )
-                self.light_enabled[explosion_slots] = (
-                    explosion_light & flash_active
-                )
-                self.light_params[explosion_slots, 0] = (
-                    explosion_intensity * (1.0 + 2.0 * decay)
-                )
+            if explosion_active is not None:
+                self._explosion_lights(
+                    explosion_slots, elapsed[explosion], lifetime[explosion],
+                    explosion_active[explosion], explosion_light,
+                    explosion_intensity)
             else:
                 self.light_enabled[explosion_slots] = False
                 self.light_params[explosion_slots, 0] = explosion_intensity
 
         if preview_explosion is not None and preview_explosion.any():
-            preview_t = (
-                (float(_EXPLOSION_PREVIEW_FRAME) - 0.5)
-                / _EXPLOSION_FRAME_COUNT
-            )
             elapsed = np.where(
                 preview_explosion,
-                (lifetime * preview_t).astype(np.float32),
+                (lifetime * EXPLOSION_PREVIEW_T).astype(np.float32),
                 elapsed,
             )
         self.effect_elapsed[effect_ls] = elapsed
@@ -1309,8 +1331,49 @@ class EntityTable:
 
         if effect_runtime:
             self.effect_alive[effect_ls] = fire | explosion_active
+        elif explosion_active is not None:
+            self.effect_alive[effect_ls] = (
+                fire | explosion_active | preview_explosion)
         else:
             self.effect_alive[effect_ls] = fire | preview_explosion
+
+    def _explosion_lights(self, slots, elapsed, lifetime, playing, light_on,
+                          intensity):
+        """Light the explosions in *slots* for this tick: on for as long as
+        each plays, at ``light_intensity`` times
+        :func:`~engine.effect_entity.explosion_light_scale` -- a flash that
+        eases to nothing as the fireball fades. A Python loop below
+        :data:`EXPLOSION_LIGHT_VECTOR_FROM` explosions, NumPy from it; the
+        same lights either way."""
+        if len(slots) < EXPLOSION_LIGHT_VECTOR_FROM:
+            self._explosion_lights_loop(
+                slots, elapsed, lifetime, playing, light_on, intensity)
+        else:
+            self._explosion_lights_table(
+                slots, elapsed, lifetime, playing, light_on, intensity)
+
+    def _explosion_lights_loop(self, slots, elapsed, lifetime, playing,
+                               light_on, intensity):
+        enabled, params = self.light_enabled, self.light_params
+        for slot, e, life, play, on, base in zip(
+                slots.tolist(), elapsed.tolist(), lifetime.tolist(),
+                playing.tolist(), light_on.tolist(), intensity.tolist()):
+            scale = explosion_light_scale(e, life) if play else 0.0
+            enabled[slot] = on and scale > 0.0
+            params[slot, 0] = base * scale
+
+    def _explosion_lights_table(self, slots, elapsed, lifetime, playing,
+                                light_on, intensity):
+        e = elapsed.astype(np.float64)
+        t = e / lifetime.astype(np.float64)
+        flash = 1.0 + EXPLOSION_FLASH_GAIN * np.exp(
+            -np.maximum(e, 0.0) / EXPLOSION_FLASH_DECAY)
+        u = np.clip((t - EXPLOSION_LIGHT_FADE_FROM)
+                    / (1.0 - EXPLOSION_LIGHT_FADE_FROM), 0.0, 1.0)
+        scale = np.where(playing & (t < 1.0),
+                         flash * (1.0 - u * u * (3.0 - 2.0 * u)), 0.0)
+        self.light_enabled[slots] = light_on & (scale > 0.0)
+        self.light_params[slots, 0] = intensity * scale
 
     def set_aux_lights(self, lights):
         """Put the lights that are not entities into the frame's light list.
@@ -1529,6 +1592,7 @@ class EntityTable:
                     1 if effect_type == 'EXPLOSION'
                     else 2 if effect_type == 'ORB'
                     else 3 if effect_type == 'CUSTOM'
+                    else 4 if effect_type == 'PARTICLES'
                     else 0
                 )
             self.effect_fire_variant[slot] = (
@@ -1569,6 +1633,19 @@ class EntityTable:
 
             self.effect_params[slot] = (
                 width, visual_intensity, light_intensity, light_radius
+            )
+            self.effect_emitter[slot] = emitter_id(props)
+            self.effect_skip[slot] = max(0.0, min(0.9, _effect_float(
+                props, 'explosion_skip', 0.0)))
+            self.effect_emitter_params[slot] = (
+                max(0.0, min(1.0, _effect_float(props, 'emitter_rate', 1.0))),
+                max(EMITTER_SCALE_RANGE[0], min(EMITTER_SCALE_RANGE[1],
+                    _effect_float(props, 'emitter_scale', 1.0))),
+                width,
+                height,
+            )
+            self.effect_emitter_tint[slot] = _effect_colour(
+                props, 'emitter_tint', [255, 255, 255]
             )
             self.effect_color[slot] = _effect_colour(
                 props, 'colour', [255, 110, 25]
@@ -1640,6 +1717,10 @@ class EntityTable:
             self.effect_custom_loop[slot] = True
             self.effect_preview[slot] = False
             self.effect_params[slot].fill(0.0)
+            self.effect_emitter[slot] = 0
+            self.effect_skip[slot] = 0.0
+            self.effect_emitter_params[slot].fill(0.0)
+            self.effect_emitter_tint[slot] = 1.0
             self.effect_color[slot] = 1.0
             self.effect_light_color[slot] = 1.0
             self.effect_light_enabled[slot] = False

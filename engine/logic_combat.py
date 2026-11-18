@@ -230,6 +230,16 @@ class LogicCombat:
         rows = logic.collision_runtime.collision_rows()
         walls = [self._trace_brushes(rows, ray_origin, direction, reach)
                  for direction in directions]
+        # Explosive Props in the way (none on most maps: one check). A barrel
+        # stops the ray like a wall, but takes the hit.
+        explosions = logic.explosion_runtime
+        barrels = [None] * len(walls)
+        if explosions.explosives():
+            for k, ((dist, _point), direction) in enumerate(zip(walls, directions)):
+                hit = explosions.trace(ray_origin, direction, min(dist, reach))
+                if hit is not None:
+                    barrels[k] = hit
+                    walls[k] = (hit[1], None)
         results = []
         with logic.session_runtime.monster_lock:
             monsters, centres, radii = self._hitscan_monster_snapshot()
@@ -238,7 +248,8 @@ class LogicCombat:
                                            centres, radii)
             killed = set()
             bleeding = []       # (the actor's centre, the ray that hit it)
-            for (dist, point), candidates, direction in zip(walls, pending, directions):
+            for (dist, point), candidates, direction, barrel in zip(
+                    walls, pending, directions, barrels):
                 target = None
                 for row in candidates:
                     if id(monsters[row]) not in killed:
@@ -251,6 +262,10 @@ class LogicCombat:
                     if self._damage_monster(weapon, target):
                         killed.add(id(target))
                     results.append(True)
+                    continue
+                if barrel is not None:
+                    explosions.damage_prop(barrel[0], weapon.damage)
+                    results.append(False)
                     continue
                 # A melee strike leaves no mark on the wall it meets.
                 if point is not None and weapon.mode == 'hitscan':
@@ -748,6 +763,8 @@ class LogicCombat:
         # wall test is one NumPy query over every box instead of a walk.
         collision_rows = logic.collision_runtime.collision_rows()
         survivors = []
+        explosions = logic.explosion_runtime
+        any_explosives = bool(explosions.explosives())
 
         player = logic.player_runtime.player
         player_can_be_hit = (
@@ -850,6 +867,11 @@ class LogicCombat:
                     )
                 continue
 
+            barrel = explosions.point_hit(px, py, pz) if any_explosives else None
+            if barrel is not None:
+                explosions.damage_prop(barrel, float(projectiles.damage[i]))
+                continue
+
             hit_wall = False
             if collision_rows is not None:
                 brushes = collision_rows.brushes
@@ -944,6 +966,8 @@ class LogicCombat:
         grid = logic.session_runtime.spatial_grid
         all_collision_brushes = logic.collision_runtime._collision_brushes_cache
         keep = live.copy()
+        explosions = logic.explosion_runtime
+        any_explosives = bool(explosions.explosives())
 
         live_rows = np.flatnonzero(live)
         owners = projectiles.owner_id[live_rows]
@@ -1002,6 +1026,14 @@ class LogicCombat:
                     )
                 keep[i] = False
                 continue
+
+            if any_explosives:
+                bx, by, bz = (float(v) for v in pos32[i])
+                barrel = explosions.point_hit(bx, by, bz)
+                if barrel is not None:
+                    explosions.damage_prop(barrel, float(projectiles.damage[i]))
+                    keep[i] = False
+                    continue
 
             if wall_hits is not None:
                 hit_wall = any(

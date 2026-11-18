@@ -8,6 +8,8 @@ orchestrator; the published render state is owned by ThreadedGameState.
 from __future__ import annotations
 
 import math
+
+from .lens_water import wets_bottom_half
 import time
 import weakref
 
@@ -466,6 +468,8 @@ class LogicRender:
             view_matrix = editor_camera.get_view_matrix()
             fov = editor_camera.fov
 
+        # A Shake (purely visual) wobbles the view and nothing else.
+        view_matrix = logic.shake_runtime.apply(view_matrix)
         write_state.camera_view_matrix = view_matrix
 
         cinematic_active = bool(logic.cutscene_runtime.state)
@@ -501,10 +505,14 @@ class LogicRender:
         write_state.player_dead = logic.player_runtime.player_dead
         write_state.player_ammo = max(0, int(logic.combat_runtime.player_ammo))
         if logic.session_runtime.play_mode and logic.player_runtime.player and not logic.cutscene_runtime.state:
-            write_state.player_underwater = bool(logic.player_runtime.player.eye_underwater)
-            write_state.underwater_tint = list(logic.player_runtime.player.water_tint)
+            _player = logic.player_runtime.player
+            write_state.player_underwater = bool(_player.eye_underwater)
+            write_state.underwater_tint = list(_player.water_tint)
+            write_state.player_wading = wets_bottom_half(
+                _player.water_depth_frac, _player.eye_underwater)
         else:
             write_state.player_underwater = False
+            write_state.player_wading = False
         write_state.collected_keys = set(logic.player_runtime.collected_keys)
         write_state.hud_message = logic.interaction_runtime.current_hud_message
         write_state.hud_prompt_key = logic.interaction_runtime.current_hud_key_name

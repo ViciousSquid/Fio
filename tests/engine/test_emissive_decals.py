@@ -287,3 +287,23 @@ def test_emissive_survives_a_map_round_trip(images):
     assert again.properties["emissive"] is True
     assert again.properties["emissive_intensity"] == 3.0
     assert again.properties["emissive_radius"] == 99.0
+
+
+# ---------------------------------------------------------------------------
+# The emissive decals' own texture array: their images at full resolution
+# ---------------------------------------------------------------------------
+
+def test_emissive_decals_are_drawn_from_their_images_full_resolution():
+    """An emissive decal is its image, unmodulated: a 256-pixel layer
+    magnified across a screen is fuzzy (the bug), so the emissive draw reads
+    an array sized to hold its largest image (a power of two, 256 to 1024)."""
+    from engine.renderer.forward.decals import (
+        DECAL_TEXTURE_SIZE, EMISSIVE_TEXTURE_MAX, emissive_side)
+    assert DECAL_TEXTURE_SIZE == 256 and EMISSIVE_TEXTURE_MAX == 1024
+    assert emissive_side([]) == 256
+    assert emissive_side([(64, 64)]) == 256
+    assert emissive_side([(256, 256)]) == 256
+    assert emissive_side([(512, 512)]) == 512
+    assert emissive_side([(625, 491), (256, 256)]) == 1024
+    assert emissive_side([(1024, 256)]) == 1024          # a wide banner: its width
+    assert emissive_side([(4096, 4096)]) == 1024          # capped

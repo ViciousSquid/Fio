@@ -181,7 +181,9 @@ def test_applying_a_texture_reaches_a_cut_face(main_window, monkeypatch):
                         lambda: '/assets/textures/Dev/256.jpg')
     for key in (cut, 'top'):
         host.apply_texture_to_specific_face(brush, key)
-        assert bf.face_material(brush, key).texture == '256.jpg', key
+        # Named from assets/textures, folder and all (the renderer loads
+        # assets/textures/<name>).
+        assert bf.face_material(brush, key).texture == 'Dev/256.jpg', key
     index = int(cut[1:])
-    assert brush['geometry']['planes'][index]['texture'] == '256.jpg'
+    assert brush['geometry']['planes'][index]['texture'] == 'Dev/256.jpg'
     assert 'textures' not in brush

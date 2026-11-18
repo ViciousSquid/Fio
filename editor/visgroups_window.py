@@ -5,9 +5,9 @@ Opened from the eye on the toolbar. Four tabs:
 * **User** -- named groups of brushes and entities, each shown or hidden by
   its checkbox: make one from the selection, add or remove the selection,
   select a group's members, rename (double-click) or delete it.
-* **Groups** -- brush groups (brushes attached to one another, which always
-  move together) and the brushes in each: rename (double-click), select or
-  ungroup one. Made from Scene Hierarchy > Add to Group...
+* **Groups** -- brush groups (brushes and entities attached to one another,
+  which always move together) and the members of each: rename
+  (double-click), select or ungroup one. Made from Scene Hierarchy > Add to Group...
 * **Auto** -- every kind of object (the Filter menu), shown or hidden.
 * **Cordon** -- a box; while it is on, only what reaches into it is shown in
   the editor's views. Set it from the selection or type its corners.
@@ -265,7 +265,7 @@ class VisgroupsWindow(QWidget):
         self.delete_btn.setEnabled(has_group)
         has_brush_group = bool(self.current_brush_group())
         self.group_from_selection_btn.setEnabled(
-            any(isinstance(o, dict) for o in self._selection()))
+            any(brush_groups.is_groupable(o) for o in self._selection()))
         self.select_brush_group_btn.setEnabled(has_brush_group)
         self.edit_brush_group_btn.setEnabled(has_brush_group)
         self.ungroup_btn.setEnabled(has_brush_group)
@@ -276,7 +276,7 @@ class VisgroupsWindow(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         self.brush_group_tree = QTreeWidget()
-        self.brush_group_tree.setHeaderLabels(["Group / Brush", "Brushes"])
+        self.brush_group_tree.setHeaderLabels(["Group / Member", "Members"])
         self.brush_group_tree.header().setStyleSheet(_HEADER_STYLE)
         self.brush_group_tree.setColumnWidth(0, 200)
         self.brush_group_tree.itemChanged.connect(self._on_brush_group_renamed)
@@ -286,17 +286,18 @@ class VisgroupsWindow(QWidget):
 
         grid = QGridLayout()
         self.group_from_selection_btn = self._button(
-            "Group Selection...", "Attach the selected brushes to one another: "
-            "they always move together, in the editor and in Play",
+            "Group Selection...", "Attach the selected brushes and entities to "
+            "one another: they always move together in the editor (and brushes "
+            "in Play)",
             self.group_selection)
         self.select_brush_group_btn = self._button(
-            "Select Members", "Select every brush in this group",
+            "Select Members", "Select every brush and entity in this group",
             self.select_brush_group)
         self.edit_brush_group_btn = self._button(
-            "Edit...", "Rename this group, or add and remove brushes",
+            "Edit...", "Rename this group, or add and remove members",
             self.edit_brush_group)
         self.ungroup_btn = self._button(
-            "Ungroup", "Dissolve this group (its brushes stay, detached)",
+            "Ungroup", "Dissolve this group (its members stay, detached)",
             self.ungroup_brush_group)
         grid.addWidget(self.group_from_selection_btn, 0, 0, 1, 2)
         grid.addWidget(self.select_brush_group_btn, 1, 0)
@@ -316,10 +317,11 @@ class VisgroupsWindow(QWidget):
 
     def _brush_group_members(self, name=None):
         name = self.current_brush_group() if name is None else name
-        return brush_groups.members(self.main_window.state.brushes, name)
+        return brush_groups.members(
+            brush_groups.scene_objects(self.main_window.state), name)
 
     def group_selection(self):
-        brushes = [o for o in self._selection() if isinstance(o, dict)]
+        brushes = [o for o in self._selection() if brush_groups.is_groupable(o)]
         if brushes:
             self.main_window.open_brush_group_dialog(brushes)
 
@@ -340,10 +342,15 @@ class VisgroupsWindow(QWidget):
             self.main_window.set_brush_group(chosen, '')
 
     def _on_brush_group_double_click(self, item, _column):
-        index = item.data(0, Qt.UserRole + 1)       # an index: Qt copies dicts
-        brushes = self.main_window.state.brushes
-        if index is not None and 0 <= index < len(brushes):
-            self.main_window.set_selected_objects([brushes[index]])
+        # ('brush' | 'thing', index): Qt would copy a dict stored as item data.
+        data = item.data(0, Qt.UserRole + 1)
+        if not data:
+            return
+        kind, index = data
+        state = self.main_window.state
+        objects = state.brushes if kind == 'brush' else state.things
+        if 0 <= index < len(objects):
+            self.main_window.set_selected_objects([objects[index]])
             self.main_window.update_views()
 
     def _on_brush_group_renamed(self, item, column):
@@ -362,22 +369,21 @@ class VisgroupsWindow(QWidget):
         current = self.current_brush_group()
         tree.clear()
         state = self.main_window.state
-        index_of = {id(b): i for i, b in enumerate(state.brushes)}
-        colours = brush_groups.colours(state.brushes)
-        hierarchy = getattr(self.main_window, 'scene_hierarchy', None)
-        for name, chosen in brush_groups.groups(state.brushes).items():
+        index_of = {id(b): ('brush', i) for i, b in enumerate(state.brushes)}
+        index_of.update((id(t), ('thing', i)) for i, t in enumerate(state.things))
+        every = brush_groups.scene_objects(state)
+        colours = brush_groups.colours(every)
+        label = brush_groups.labeller(
+            state, getattr(self.main_window, 'scene_hierarchy', None))
+        for name, chosen in brush_groups.groups(every).items():
             top = QTreeWidgetItem([name, str(len(chosen))])
             top.setData(0, Qt.UserRole, name)
             top.setFlags(top.flags() | Qt.ItemIsEditable)
             top.setForeground(0, QBrush(QColor(colours[name])))
             tree.addTopLevelItem(top)
             for brush in chosen:
-                index = index_of[id(brush)]
-                label = (hierarchy._get_brush_display_name(brush, index)
-                         if hierarchy is not None
-                         else brush.get('name') or 'Brush %d' % (index + 1))
-                child = QTreeWidgetItem(top, [label, ""])
-                child.setData(0, Qt.UserRole + 1, index)
+                child = QTreeWidgetItem(top, [label(brush), ""])
+                child.setData(0, Qt.UserRole + 1, index_of[id(brush)])
             top.setExpanded(True)
             if name == current:
                 tree.setCurrentItem(top)
