@@ -76,10 +76,61 @@ def queue_explosion_sound(game_state, effect):
     })
 
 
+#: An Effect's blast: what its explosion does to the world around it.
+#:
+#: * ``explosion_damage`` -- damage dealt to everything within the radius
+#:   that the blast can see (walls stop it): the player, monsters, and
+#:   explosive Props, which may go off in turn;
+#: * ``explosion_radius`` -- world units, from the explosion's centre;
+#: * ``explosion_force`` -- the push at the centre (world units a second for
+#:   a body of mass 1), falling to nothing at the radius. Monsters, the
+#:   player and Props with physics on are shoved away; a Prop with physics
+#:   off is never moved, nor is anything when physics is off for the session.
+#:
+#: An Effect does no damage and pushes nothing unless it is given some: an
+#: explosion is harmless until it is told otherwise.
+BLAST_DEFAULTS = {
+    'explosion_damage': 0,
+    'explosion_radius': 192.0,
+    'explosion_force': 0.0,
+}
+
+
+def _blast_number(props, key):
+    try:
+        value = float(props.get(key, BLAST_DEFAULTS[key]))
+    except (TypeError, ValueError):
+        return float(BLAST_DEFAULTS[key])
+    return max(value, 0.0) if value == value else float(BLAST_DEFAULTS[key])
+
+
+def blast_settings(props):
+    """``(damage, radius, force)`` of an Effect's blast."""
+    return (_blast_number(props, 'explosion_damage'),
+            _blast_number(props, 'explosion_radius'),
+            _blast_number(props, 'explosion_force'))
+
+
+def blast_centre(effect):
+    """Where an Effect's blast comes from: the middle of its fireball. An
+    EXPLOSION stands on its position (its fireball rises from it); any other
+    type is centred on it."""
+    x, y, z = _position(effect)
+    props = effect.properties
+    if str(props.get('effect_type', 'FIRE')).strip().upper() == EFFECT_EXPLOSION:
+        try:
+            y += float(props.get('height', 46.0)) * 0.5
+        except (TypeError, ValueError):
+            pass
+    return (x, y, z)
+
+
 def explode_effect(effect, logic, now=None):
     """Set *effect* off in a running game: play its explosion and sound,
-    and fire ``OnExplode`` (and ``OnChanged`` if it became an EXPLOSION for
-    good). Returns the type it will go back to when the explosion ends."""
+    fire ``OnExplode`` (and ``OnChanged`` if it became an EXPLOSION for
+    good), and apply its blast (:data:`BLAST_DEFAULTS`) -- the one way
+    anything explodes, barrels included. Returns the type it will go back
+    to when the explosion ends."""
     now = time.perf_counter() if now is None else now
     props = effect.properties
     current = str(props.get('effect_type', 'FIRE') or 'FIRE').strip().upper()
@@ -100,6 +151,11 @@ def explode_effect(effect, logic, now=None):
         io.fire_output(effect, 'OnExplode')
         if became_explosion:
             io.fire_output(effect, 'OnChanged', value=EFFECT_EXPLOSION)
+    damage, radius, force = blast_settings(props)
+    if radius > 0.0 and (damage > 0.0 or force > 0.0):
+        runtime = getattr(logic, 'explosion_runtime', None)
+        if runtime is not None:
+            runtime.blast(blast_centre(effect), radius, damage, force, now)
     return return_to
 
 
@@ -130,18 +186,17 @@ def finish_explosions(logic, now=None):
 # Explosive Props (barrels)
 # ---------------------------------------------------------------------------
 
-#: Authored settings of an explosive Prop, and their defaults.
+#: Authored settings of an explosive Prop, and their defaults:
 #:
 #: * ``explosive`` -- whether damage can set it off at all;
 #: * ``explosive_health`` -- damage it takes, in total, before it explodes;
-#: * ``explosion_damage`` -- damage dealt to everything within the radius:
-#:   the player, monsters, and other explosive Props (which may go off too);
-#: * ``explosion_radius`` -- world units, from the Prop's centre;
-#: * ``explosion_force`` -- the push at the centre (world units a second for
-#:   a body of mass 1), falling to nothing at the radius. Monsters, the player
-#:   and Props with physics on are shoved away. A Prop with physics off is
-#:   never moved, nor is anything when physics is off for the session.
-#: * ``explosion_volume`` -- how loud its sound is (0..1), played from it.
+#: * ``explosion_damage``, ``explosion_radius``, ``explosion_force`` and
+#:   ``explosion_volume`` -- its explosion's. When the barrel explodes its
+#:   model is removed and, at that same moment, an EXPLOSION Effect is
+#:   spawned where the model was, carrying these, and set off: the Effect's
+#:   explosion (:func:`explode_effect`) is the fireball, light, sound and
+#:   sparks, and the blast (:data:`BLAST_DEFAULTS`). The barrel has no
+#:   explosion of its own.
 EXPLOSIVE_DEFAULTS = {
     'explosive': False,
     'explosive_health': 20,
@@ -150,6 +205,49 @@ EXPLOSIVE_DEFAULTS = {
     'explosion_force': 400.0,
     'explosion_volume': 1.0,
 }
+
+#: How the Effect a barrel spawns looks: a burst of sparks and a flash of
+#: light. Its size follows the blast radius (BARREL_FIREBALL_FRACTION of it;
+#: the fireball grows to three times that while it plays).
+BARREL_EFFECT_LOOK = {
+    'effect_type': EFFECT_EXPLOSION,
+    'preview': False,
+    'lifetime': 0.9,
+    'emitter': 'SPARKS',
+    'light_enabled': True,
+    'light_intensity': 3.0,
+}
+BARREL_FIREBALL_FRACTION = 0.3
+#: Hiding the model as it goes: the fireball is at least this many times the
+#: barrel's own size, and opens BARREL_SKIP of the way into its playback --
+#: already a solid core, at about twice its brightness from the flash -- so
+#: from its first frame it covers the place where the model was.
+BARREL_COVER = 1.5
+BARREL_SKIP = 0.12
+
+
+def barrel_effect(prop, base, model_size=(0.0, 0.0)):
+    """The EXPLOSION Effect *prop* spawns when it goes, standing at *base*
+    (where its model was), with the barrel's explosion settings; sized to
+    cover the model (*model_size*: its width and height)."""
+    from .effect_entity import Effect
+    props = prop.properties
+    radius = _number(props, 'explosion_radius')
+    cover_w, cover_h = (BARREL_COVER * float(v) for v in model_size)
+    settings = dict(BARREL_EFFECT_LOOK)
+    settings.update({
+        'name': '%s_explosion' % (props.get('name') or 'barrel'),
+        'width': max(radius * BARREL_FIREBALL_FRACTION, cover_w, 16.0),
+        'height': max(radius * BARREL_FIREBALL_FRACTION, cover_h, 16.0),
+        'explosion_skip': BARREL_SKIP,
+        'light_radius': max(radius * 2.0, 128.0),
+        'explosion_damage': _number(props, 'explosion_damage'),
+        'explosion_radius': radius,
+        'explosion_force': _number(props, 'explosion_force'),
+        'explosion_volume': explosion_volume(
+            {'explosion_volume': props.get('explosion_volume', 1.0)}),
+    })
+    return Effect(pos=[float(v) for v in base], properties=settings)
 
 
 def _number(props, key):
@@ -167,33 +265,30 @@ def is_explosive(thing) -> bool:
 
 class ExplosionRuntime:
     """Explosive Props in a running game: the damage they have taken, the
-    explosions waiting to go off, and what Play must put back when it stops.
+    explosions waiting to go off, and what Play must put back when it stops;
+    and the blast every exploding Effect applies (:meth:`blast`).
 
     Damage reaches a barrel from a shot (:meth:`trace` / :meth:`point_hit`,
-    asked by the hitscan and the projectiles) or from another explosion.
-    Once a barrel has taken ``explosive_health`` it explodes -- at once when
-    shot, :data:`CHAIN_DELAY` later when set off by a neighbour, so a row of
-    barrels goes up one after another. Exploding hides the barrel and takes
-    its collision away, plays an EXPLOSION Effect at it, damages everything
-    in range that the blast can see, and pushes what can move.
+    asked by the hitscan and the projectiles), the ``Damage`` input, or a
+    blast. Once a barrel has taken ``explosive_health`` it explodes -- at
+    once when shot, :data:`CHAIN_DELAY` later when caught in a neighbour's
+    blast, so a row of barrels goes up one after another. Exploding removes
+    the model (hidden, its collision gone) and, at that same moment, spawns
+    an EXPLOSION Effect where the model was and sets it off
+    (:func:`barrel_effect`, :func:`explode_effect`): the Effect does
+    everything else.
 
     Everything here is per session: :meth:`stop` shows the barrels again,
-    and the Effects the explosions made are session Things
-    (:meth:`~engine.logic_session.LogicSession.add_session_thing`), removed
-    when Play stops -- the map is as authored.
+    and the Effects they spawned are session Things, removed when Play
+    stops -- the map is as authored.
     Nothing costs anything on a map without explosive Props: every entry
     point returns at its first check.
     """
 
     #: Seconds between a barrel caught in a blast and its own explosion.
     CHAIN_DELAY = 0.15
-    #: The fireball's size, as a fraction of the blast radius (it grows to
-    #: three times this while it plays).
-    FIREBALL_FRACTION = 0.35
-    #: How long a barrel's fireball plays, seconds.
-    FIREBALL_LIFETIME = 0.9
-    #: Monsters and the player are pushed by this fraction of the force (the
-    #: rest of it goes into the damage); bodies take all of it.
+    #: Monsters and the player are pushed by this fraction of the force;
+    #: physics bodies take all of it.
     ACTOR_PUSH = 0.8
     #: Upward share of the player's push: a blast lifts as it shoves.
     PLAYER_LIFT = 0.35
@@ -215,8 +310,9 @@ class ExplosionRuntime:
         self._explosives = None
 
     def stop(self):
-        """Put the barrels back as authored (the fireballs, which the
-        session added, the session removes). Returns whether any changed."""
+        """Put the barrels back as authored (the Effects they spawned are
+        session Things: the session removes them). Returns whether any
+        changed."""
         from .spatial import set_authored_flag
         changed = bool(self.exploded)
         for prop, was_hidden in self.exploded.values():
@@ -335,7 +431,8 @@ class ExplosionRuntime:
                 self.explode_prop(prop, now)
 
     def explode_prop(self, prop, now=None):
-        """Blow *prop* up now."""
+        """Blow *prop* up now: the model is removed and, at the same moment,
+        an EXPLOSION Effect is spawned where it was and explodes."""
         from .change_journal import touch
         from .spatial import set_authored_flag
         logic = self.logic
@@ -343,11 +440,8 @@ class ExplosionRuntime:
         props = prop.properties
         centre = self.centre(prop)
         lo, _hi = self.box(prop)
-        radius = max(_number(props, 'explosion_radius'), 0.0)
-        damage = max(_number(props, 'explosion_damage'), 0.0)
-        force = max(_number(props, 'explosion_force'), 0.0)
 
-        # The barrel goes: hidden, and its collision with it.
+        # The model goes: hidden, and its collision with it.
         self.exploded[id(prop)] = (prop, bool(props.get('hidden', False)))
         self.damage_taken.pop(id(prop), None)
         set_authored_flag(prop, 'hidden', True)
@@ -356,30 +450,15 @@ class ExplosionRuntime:
         if sync is not None:
             sync()
 
-        self._fireball(prop, (centre[0], lo[1], centre[2]), radius, now)
+        # The Effect, where the model was (standing on its base), explodes.
+        hi = self.box(prop)[1]
+        effect = barrel_effect(prop, (centre[0], lo[1], centre[2]),
+                               (max(hi[0] - lo[0], hi[2] - lo[2]), hi[1] - lo[1]))
+        logic.session_runtime.add_session_thing(effect)
         if logic.io_manager is not None:
             logic.io_manager.fire_output(prop, 'OnExplode')
-        if radius > 0.0:
-            self.blast(centre, radius, damage, force, now)
-
-    def _fireball(self, prop, base, radius, now):
-        from .effect_entity import Effect
-        props = prop.properties
-        size = max(radius * self.FIREBALL_FRACTION, 16.0)
-        effect = Effect(pos=list(base), properties={
-            'name': '%s_explosion' % (props.get('name') or 'barrel'),
-            'effect_type': EFFECT_EXPLOSION,
-            'width': size, 'height': size,
-            'lifetime': self.FIREBALL_LIFETIME,
-            'emitter': 'SPARKS',
-            'light_enabled': True,
-            'light_radius': max(radius * 2.0, 128.0),
-            'light_intensity': 3.0,
-            'explosion_volume': explosion_volume(
-                {'explosion_volume': props.get('explosion_volume', 1.0)}),
-        })
-        self.logic.session_runtime.add_session_thing(effect)
-        explode_effect(effect, self.logic, now)
+        explode_effect(effect, logic, now)
+        return effect
 
     def blast(self, centre, radius, damage, force, now=None):
         """Damage and push everything within *radius* of *centre* that the

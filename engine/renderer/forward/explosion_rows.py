@@ -43,6 +43,7 @@ _INTENSITY = EXPLOSION_COLUMNS['intensity']
 _LIFETIME = EXPLOSION_COLUMNS['lifetime']
 _SEED = EXPLOSION_COLUMNS['seed']
 _PREVIEW = EXPLOSION_COLUMNS['preview']
+_SKIP = EXPLOSION_COLUMNS['skip']
 _R = EXPLOSION_COLUMNS['r']
 
 
@@ -86,7 +87,7 @@ def _rows_loop(table, slots, camera_xz, clock_origin):
     spawn, lifetime, seed = (table.effect_spawn_time, table.effect_lifetime,
                              table.effect_seed)
     preview, colour = table.effect_preview, table.effect_color
-    active = table.effect_active
+    active, skip = table.effect_active, table.effect_skip
     wrap = EXPLOSION_TIME_WRAP
     rows = []
     for slot in slots.tolist():
@@ -98,7 +99,7 @@ def _rows_loop(table, slots, camera_xz, clock_origin):
             float(params[slot, 0]), float(size[slot, 1]),
             float(params[slot, 1]), float(lifetime[slot]),
             _f32(seed[slot]), 1.0 if preview[slot] and not active[slot] else 0.0,
-            0.0, 0.0,
+            float(skip[slot]), 0.0,
             r, g, b, 0.0,
         ))
     if camera_xz is not None and len(rows) > 1:
@@ -125,5 +126,6 @@ def _rows_table(table, slots, camera_xz, clock_origin):
     rows[:, _LIFETIME] = table.effect_lifetime[slots]
     rows[:, _SEED] = table.effect_seed[slots]
     rows[:, _PREVIEW] = table.effect_preview[slots] & ~table.effect_active[slots]
+    rows[:, _SKIP] = table.effect_skip[slots]
     rows[:, _R:_R + 3] = table.effect_color[slots]
     return rows

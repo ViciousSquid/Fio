@@ -529,6 +529,8 @@ class GLESRenderer:
         import math
         from engine.effect_entity import EXPLOSION_FRAME_COUNT as frames, explosion_cell_box
         t = max(0., min(1., float(table.effect_elapsed[row])/max(.001,float(table.effect_lifetime[row]))))
+        skip = max(0., min(.9, float(table.effect_skip[row])))
+        t = skip + (1. - skip) * t                 # explosion_skip: start partway in
         index = min(frames-1, int(t*frames))
         key = name+'#explosion'+str(index)
         if key not in self._images.cache:

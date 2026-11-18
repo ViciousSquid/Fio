@@ -707,6 +707,8 @@ _COLUMNS = (
     #: effect_entity.EMITTER_PRESETS), (rate 0..1, scale, extent width,
     #: extent height) and tint 0..1. Authored, so resolved with the other
     #: static Effect columns and never touched by the clock.
+    #: Where an explosion's playback starts, 0..0.9 (explosion_skip).
+    ('effect_skip', (), np.float32, 0.0),
     ('effect_emitter', (), np.uint8, 0),
     ('effect_emitter_params', (4,), np.float32, 0.0),
     ('effect_emitter_tint', (3,), np.float32, 1.0),
@@ -1624,6 +1626,8 @@ class EntityTable:
                 width, visual_intensity, light_intensity, light_radius
             )
             self.effect_emitter[slot] = emitter_id(props)
+            self.effect_skip[slot] = max(0.0, min(0.9, _effect_float(
+                props, 'explosion_skip', 0.0)))
             self.effect_emitter_params[slot] = (
                 max(0.0, min(1.0, _effect_float(props, 'emitter_rate', 1.0))),
                 max(EMITTER_SCALE_RANGE[0], min(EMITTER_SCALE_RANGE[1],
@@ -1704,6 +1708,7 @@ class EntityTable:
             self.effect_preview[slot] = False
             self.effect_params[slot].fill(0.0)
             self.effect_emitter[slot] = 0
+            self.effect_skip[slot] = 0.0
             self.effect_emitter_params[slot].fill(0.0)
             self.effect_emitter_tint[slot] = 1.0
             self.effect_color[slot] = 1.0

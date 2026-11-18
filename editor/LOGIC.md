@@ -272,13 +272,23 @@ good). The authored `effect_type` is never rewritten. `OnExplode` fires as it
 goes off, `OnExplodeFinished` once it has played. The sound always plays from
 the explosion, at `explosion_volume`.
 
+**Blasts.** An Effect's explosion can damage and push: `explosion_damage`,
+`explosion_radius`, `explosion_force` (all 0 / harmless by default). Everything
+within the radius that the blast can see takes the damage -- the player,
+monsters, explosive Props -- and the player, monsters and physics Props are
+pushed (never a Prop with physics off, nor anything with physics off in
+Settings).
+
 **Explosive Props.** A Prop with `explosive` on takes damage -- shots,
-projectiles, other explosions, or the `Damage` input -- and at
-`explosive_health` it explodes (`Explode` sets it off at once): the model is
-removed, a fireball plays, and everything within `explosion_radius` that the
-blast can see takes `explosion_damage` and is pushed (`explosion_force`).
-Other explosive Props go off in turn, a moment apart. `OnExplode` fires.
-Stop puts the barrels back.
+projectiles, blasts, or the `Damage` input -- and at `explosive_health` it
+explodes (`Explode` sets it off at once). It has no explosion of its own: the
+model is removed and, at that same moment, an EXPLOSION Effect is spawned where
+it was, carrying the Prop's explosion settings, and explodes -- the Effect is
+the fireball, light, sound, sparks and blast. The fireball is sized to cover
+the model and opens partway in (`explosion_skip`), already bright, so the
+model is not seen to vanish. Other explosive Props caught in the blast go off
+in turn, a moment apart. `OnExplode` fires on the Prop. Stop puts the barrels
+back and removes the Effects they spawned.
 
 **Shake.** Shakes the screen when sent `Shake` (from a trigger brush's
 `OnTrigger`, a button, a timer...); `intensity` 0..1 and `duration` say how

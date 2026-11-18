@@ -2247,7 +2247,8 @@ class View2D(QWidget):
     BLAST_RADIUS_COLOUR = (204, 85, 0)
 
     def _draw_blast_radius(self, painter, thing, s_pos):
-        """The circle an Explosive Prop's blast reaches, with its size."""
+        """The circle a blast reaches (an Effect's, or an Explosive Prop's),
+        with its size."""
         from engine.explosions import EXPLOSIVE_DEFAULTS
         try:
             radius = float(thing.properties.get(
@@ -2430,10 +2431,12 @@ class View2D(QWidget):
             
             draw_rect = None
 
-            # An Explosive Prop's blast radius (dark orange), under the model,
-            # while its panel's eye button is on -- as a monster's sight is.
+            # A blast radius (dark orange) -- an Effect's, or that of the Effect
+            # an Explosive Prop spawns -- while its panel's eye is on, as a
+            # monster's sight is.
             if (getattr(self.editor, '_explosion_preview_thing', None) is thing
-                    and thing.properties.get('explosive', False)):
+                    and (thing.properties.get('explosive', False)
+                         or thing.properties.get('type') == 'effect')):
                 self._draw_blast_radius(painter, thing, s_pos)
 
             # --- MODEL RENDERING ---

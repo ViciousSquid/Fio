@@ -2918,7 +2918,7 @@ from .effect_entity import (                                    # noqa: E402
 EXPLOSION_INSTANCE_LAYOUT = (
     ('iPosStart', ('x', 'y', 'z', 'start')),
     ('iSize', ('width', 'height', 'intensity', 'lifetime')),
-    ('iMeta', ('seed', 'preview', 'spare_meta_z', 'spare_meta_w')),
+    ('iMeta', ('seed', 'preview', 'skip', 'spare_meta_w')),
     ('iColor', ('r', 'g', 'b', 'spare_color_w')),
 )
 #: Column of each component in a row: EXPLOSION_COLUMNS['height'] is 5.
@@ -2973,7 +2973,11 @@ void main() {
     } else {
         float elapsed = uTime - iPosStart.w;
         if (elapsed < 0.0) elapsed += TIME_WRAP;
-        t = clamp(elapsed / lifetime, 0.0, 1.0);
+        // Playback may start partway in (iMeta.z, explosion_skip): opening
+        // on a fireball already grown and bright, which hides whatever it
+        // replaces -- an exploding barrel's model.
+        float skip = clamp(iMeta.z, 0.0, 0.9);
+        t = skip + (1.0 - skip) * clamp(elapsed / lifetime, 0.0, 1.0);
     }
     float growth = mix(1.0, 3.0, smoothstep(0.0, 0.28, t));
     float w = width * growth;

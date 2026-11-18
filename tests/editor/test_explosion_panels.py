@@ -215,3 +215,17 @@ def test_the_shake_panel(editor):
         pytest.skip("no logic thread without a GL context")
     _button(panel, "▶ Test shake").click()
     assert view.logic_thread.shake_runtime.shakes
+
+
+def test_an_effect_has_a_blast_section(editor):
+    fire = Effect(properties={"name": "torch", "effect_type": "FIRE"})
+    panel = _show(editor, fire)
+    damage = next(s for s in panel.findChildren(QSpinBox)
+                  if s.toolTip().startswith("Damage dealt"))
+    assert damage.value() == 0                                   # harmless by default
+    damage.setValue(45)
+    assert fire.properties["explosion_damage"] == 45
+    eye = next(b for b in panel.findChildren(QToolButton)
+               if b.toolTip() == "Show the blast radius in the 2D views")
+    eye.setChecked(True)
+    assert editor._explosion_preview_thing is fire

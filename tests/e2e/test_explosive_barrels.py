@@ -253,3 +253,59 @@ def test_with_physics_off_in_settings_nothing_is_pushed(fio_session, clock):
     _step(session, 20)
     assert list(crate.pos) == [90.0, 0.0, 0.0]
     assert crate.properties["physics_enabled"] is True        # left as authored
+
+
+def test_a_barrel_becomes_an_effect_explosion_where_its_model_was(fio_session, clock):
+    """The model is removed and, at the same moment, an EXPLOSION Effect is
+    spawned where it was, carrying the barrel's settings, sized to cover the
+    model and opening partway in: the Effect does the exploding."""
+    from engine.effect_entity import Effect
+    from engine.explosions import BARREL_COVER, BARREL_SKIP
+    session = _play(fio_session, clock, [_barrel("b1", 40.0, -30.0, explosion_damage=33,
+                                                 explosion_radius=150.0, explosion_force=250.0,
+                                                 explosion_volume=0.5)])
+    runtime = session.logic.explosion_runtime
+    barrel = _named(session, "b1")
+    lo, hi = runtime.box(barrel)
+    centre = runtime.centre(barrel)
+    effect = runtime.explode_prop(barrel)
+    assert isinstance(effect, Effect) and barrel.properties["hidden"] is True
+    assert effect in session.state.things
+    assert list(effect.pos) == pytest.approx([centre[0], lo[1], centre[2]])
+    p = effect.properties
+    assert p["effect_type"] == "EXPLOSION"
+    assert (p["explosion_damage"], p["explosion_radius"], p["explosion_force"],
+            p["explosion_volume"]) == (33, 150.0, 250.0, 0.5)
+    assert p["height"] >= BARREL_COVER * (hi[1] - lo[1]) - 1e-6
+    assert p["explosion_skip"] == BARREL_SKIP
+    # It is playing: the Effect's own explosion.
+    _step(session)
+    with session.render_state() as frame:
+        table = frame.entity_table
+        slot = table.slot_of_id[p["id"]]
+        assert bool(table.effect_alive[slot]) and int(table.effect_type[slot]) == 1
+        assert table.effect_skip[slot] == pytest.approx(BARREL_SKIP)
+
+
+def test_a_physics_barrel_explodes_where_it_has_rolled_to(fio_session, clock):
+    session = _play(fio_session, clock, [_barrel("b1", 0.0, 0.0)])
+    barrel = _named(session, "b1")
+    barrel.pos = [210.0, 0.0, -75.0]                  # knocked across the room
+    effect = session.logic.explosion_runtime.explode_prop(barrel)
+    assert effect.pos[0] == pytest.approx(210.0) and effect.pos[2] == pytest.approx(-75.0)
+
+
+def test_an_effect_is_harmless_unless_given_a_blast(fio_session, clock):
+    from engine.effect_entity import Effect
+    session = _play(fio_session, clock, [
+        make_thing(Effect, "torch", (0.0, 30.0, 0.0), effect_type="FIRE"),
+        make_thing(Effect, "mine", (0.0, 0.0, 400.0), effect_type="EXPLOSION",
+                   explosion_damage=25, explosion_radius=150.0)])
+    logic = session.logic
+    player = logic.player_runtime.player
+    player.pos = glm.vec3(60.0, player.pos.y, 0.0)
+    logic.io_manager._execute_input("torch", "Explode", "", "test")
+    assert logic.player_runtime.player_health == 100            # no blast set
+    player.pos = glm.vec3(60.0, player.pos.y, 400.0)
+    logic.io_manager._execute_input("mine", "Explode", "", "test")
+    assert logic.player_runtime.player_health == 75             # its own blast

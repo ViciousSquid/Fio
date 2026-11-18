@@ -2831,6 +2831,9 @@ class PropertyEditor(QWidget):
 
         volume_widget, _volume_slider = self._explosion_volume_row(thing)
         form.addRow("Volume:", volume_widget)
+        from engine.explosions import BLAST_DEFAULTS
+        form.addRow(self._section("Blast"))
+        self._blast_rows(form, thing, BLAST_DEFAULTS, "the middle of its fireball")
 
         fire_combo = _fire_variant_combo(props.get("fire_texture"))
         fire_label = QLabel("Fire:")
@@ -3439,9 +3442,9 @@ class PropertyEditor(QWidget):
 
     def _build_explosive_ui(self, form, thing):
         """The Explosive section of a Prop: off by default; on, damage sets it
-        off (engine.explosions) -- the model goes, a fireball plays, and
-        everything within the radius takes the damage and is pushed. The eye
-        button shows the radius in the 2D views, as a monster's sight is."""
+        off (engine.explosions) -- the model goes and an EXPLOSION Effect is
+        spawned where it was, carrying the Damage, Radius, Push and Volume set
+        here, which explodes. The eye shows the radius in the 2D views."""
         from engine.explosions import EXPLOSIVE_DEFAULTS
         props = thing.properties
 
@@ -3458,38 +3461,18 @@ class PropertyEditor(QWidget):
                                       _Style.CHECKBOX)
         explosive_cb.setToolTip(
             "Shots, projectiles and other explosions damage it. Once it has "
-            "taken its Health it explodes: the model is removed, a fireball "
-            "plays, and everything within the Radius takes the Damage and is "
-            "pushed away -- other explosive props too, which may go off in turn.")
+            "taken its Health it explodes: the model is removed and, at that "
+            "same moment, an EXPLOSION Effect is spawned where it was and goes "
+            "off with the settings below -- everything within the Radius takes "
+            "the Damage and is pushed away, other explosive props too, which "
+            "may go off in turn.")
         form.addRow("", explosive_cb)
 
         health_spin = _make_spin(value('explosive_health'), 1, 9999,
                                  tooltip="Damage it takes, in total, before it explodes.")
         form.addRow("Health:", health_spin)
-        damage_spin = _make_spin(value('explosion_damage'), 0, 9999,
-                                 tooltip="Damage dealt to everything within the radius "
-                                         "that the blast can see (walls stop it).")
-        form.addRow("Damage:", damage_spin)
-        radius_spin = _make_spin(value('explosion_radius'), 0, 4096, suffix=" u",
-                                 tooltip="How far the blast reaches, from the prop's centre.")
-        radius_btn = QToolButton()
-        radius_btn.setIcon(load_icon("assets/ui/controls/eye.svg"))
-        radius_btn.setCheckable(True)
-        radius_btn.setToolTip("Show the blast radius in the 2D views")
-        radius_btn.setChecked(getattr(self.editor, '_explosion_preview_thing', None) is thing)
-        radius_btn.setStyleSheet("""
-            QToolButton { background-color: #425f5d; color: white; border-radius: 4px; padding: 3px 8px; font-size: 14px; border: 1px solid #555; }
-            QToolButton:checked { background-color: #B34700; border-color: #B34700; }
-            QToolButton:hover { background-color: #5a7a82; }
-        """)
-        form.addRow("Radius:", _hbox(radius_spin, radius_btn, stretch=False))
-        force_spin = _make_spin(value('explosion_force'), 0, 5000,
-                                tooltip="How hard the blast pushes at its centre, falling to "
-                                        "nothing at the radius. Monsters, the player and props "
-                                        "with Physics on are shoved away; a prop with Physics "
-                                        "off is never moved, nor is any when physics is off "
-                                        "in Settings.")
-        form.addRow("Push:", force_spin)
+        damage_spin, radius_spin, radius_btn, force_spin = self._blast_rows(
+            form, thing, EXPLOSIVE_DEFAULTS, "the prop's centre")
         volume_widget, volume_slider = self._explosion_volume_row(thing)
         form.addRow("Volume:", volume_widget)
 
@@ -3531,6 +3514,51 @@ class PropertyEditor(QWidget):
             refresh()
             self._repaint_viewport()
 
+        explosive_cb.toggled.connect(on_explosive)
+        health_spin.valueChanged.connect(
+            lambda v: self.update_object_prop('explosive_health', int(v)))
+        refresh()
+
+    def _blast_rows(self, form, thing, defaults, centre_name):
+        """Damage, Radius (with the eye that shows it in the 2D views, dark
+        orange, as a monster's sight is) and Push rows for *thing*'s
+        explosion, bound to its explosion_damage / _radius / _force. For an
+        Effect they are its own blast; for an explosive Prop, those of the
+        Effect it spawns when it goes. Returns the four widgets."""
+        props = thing.properties
+
+        def value(key):
+            try:
+                return int(round(float(props.get(key, defaults[key]))))
+            except (TypeError, ValueError):
+                return int(defaults[key])
+
+        damage_spin = _make_spin(value('explosion_damage'), 0, 9999,
+                                 tooltip="Damage dealt to everything within the radius "
+                                         "that the blast can see (walls stop it): the "
+                                         "player, monsters, explosive props. 0: none.")
+        form.addRow("Damage:", damage_spin)
+        radius_spin = _make_spin(value('explosion_radius'), 0, 4096, suffix=" u",
+                                 tooltip="How far the blast reaches, from %s." % centre_name)
+        radius_btn = QToolButton()
+        radius_btn.setIcon(load_icon("assets/ui/controls/eye.svg"))
+        radius_btn.setCheckable(True)
+        radius_btn.setToolTip("Show the blast radius in the 2D views")
+        radius_btn.setChecked(getattr(self.editor, '_explosion_preview_thing', None) is thing)
+        radius_btn.setStyleSheet("""
+            QToolButton { background-color: #425f5d; color: white; border-radius: 4px; padding: 3px 8px; font-size: 14px; border: 1px solid #555; }
+            QToolButton:checked { background-color: #B34700; border-color: #B34700; }
+            QToolButton:hover { background-color: #5a7a82; }
+        """)
+        form.addRow("Radius:", _hbox(radius_spin, radius_btn, stretch=False))
+        force_spin = _make_spin(value('explosion_force'), 0, 5000,
+                                tooltip="How hard the blast pushes at its centre, falling to "
+                                        "nothing at the radius. Monsters, the player and props "
+                                        "with Physics on are shoved away; a prop with Physics "
+                                        "off is never moved, nor is any when physics is off "
+                                        "in Settings. 0: no push.")
+        form.addRow("Push:", force_spin)
+
         def on_radius(v):
             self.update_object_prop('explosion_radius', float(v))
             if getattr(self.editor, '_explosion_preview_thing', None) is thing:
@@ -3540,16 +3568,13 @@ class PropertyEditor(QWidget):
             self.editor._explosion_preview_thing = thing if checked else None
             self._repaint_viewport()
 
-        explosive_cb.toggled.connect(on_explosive)
-        health_spin.valueChanged.connect(
-            lambda v: self.update_object_prop('explosive_health', int(v)))
         damage_spin.valueChanged.connect(
             lambda v: self.update_object_prop('explosion_damage', int(v)))
         radius_spin.valueChanged.connect(on_radius)
         radius_btn.toggled.connect(on_preview)
         force_spin.valueChanged.connect(
             lambda v: self.update_object_prop('explosion_force', float(v)))
-        refresh()
+        return damage_spin, radius_spin, radius_btn, force_spin
 
     def _build_collect_ui(self, form, thing):
         """Build the compact, human-facing Prop interaction editor.
