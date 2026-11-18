@@ -66,7 +66,7 @@ EMISSIVE_TEXTURE_MAX = 1024
 #:         96   14.3 us   15.8 us
 #:        128   18.9 us   17.2 us
 #:       1024  147.8 us   56.5 us
-GLOW_REMAP_VECTOR_FROM = 112
+GLOW_REMAP_VECTOR_FROM = 110
 #: An empty shared-layer lookup (no emissive layers loaded).
 _NO_LAYERS = np.empty(0, dtype=np.int64)
 #: Floats an instance: a 4x4 box matrix, (variant, opacity, kind, flags)
