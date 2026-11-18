@@ -2243,6 +2243,30 @@ class View2D(QWidget):
             
         return pts_x, pts_y
 
+    #: An explosion's blast radius: dark orange.
+    BLAST_RADIUS_COLOUR = (204, 85, 0)
+
+    def _draw_blast_radius(self, painter, thing, s_pos):
+        """The circle an Explosive Prop's blast reaches, with its size."""
+        from engine.explosions import EXPLOSIVE_DEFAULTS
+        try:
+            radius = float(thing.properties.get(
+                'explosion_radius', EXPLOSIVE_DEFAULTS['explosion_radius']))
+        except (TypeError, ValueError):
+            radius = float(EXPLOSIVE_DEFAULTS['explosion_radius'])
+        r, g, b = self.BLAST_RADIUS_COLOUR
+        px = radius * self.zoom_factor
+        painter.save()
+        painter.setBrush(QBrush(QColor(r, g, b, 40)))
+        painter.setPen(QPen(QColor(r, g, b, 220), 1, Qt.DashLine))
+        painter.drawEllipse(s_pos, px, px)
+        painter.setPen(QPen(QColor(r, g, b)))
+        font = QFont()
+        font.setPointSize(8)
+        painter.setFont(font)
+        painter.drawText(QPointF(s_pos.x() + px + 4, s_pos.y() + 4), f"{int(radius)} u")
+        painter.restore()
+
     def _draw_model_wireframe(self, painter, model_thing, ax_map, ax1, ax2):
         """Draws the projected wireframe of a 3D model in the 2D view."""
         model_path = entity_model_path(model_thing)
@@ -2405,6 +2429,12 @@ class View2D(QWidget):
             s_pos = self.world_to_screen(w_pos)
             
             draw_rect = None
+
+            # An Explosive Prop's blast radius (dark orange), under the model,
+            # while its panel's eye button is on -- as a monster's sight is.
+            if (getattr(self.editor, '_explosion_preview_thing', None) is thing
+                    and thing.properties.get('explosive', False)):
+                self._draw_blast_radius(painter, thing, s_pos)
 
             # --- MODEL RENDERING ---
             # A Prop may retain its model_path while being represented as a

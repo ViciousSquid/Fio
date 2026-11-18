@@ -344,10 +344,14 @@ class LogicCollision:
         brushes = []
 
         physics_on = bool(getattr(logic.session_runtime, 'physics_enabled', True))
+        explosions = getattr(logic, 'explosion_runtime', None)
+        exploded = explosions.exploded if explosions is not None else {}
         for thing in logic.editor_state.things:
             props = getattr(thing, 'properties', {})
             if not props.get('model_path'):
                 continue
+            if exploded and id(thing) in exploded:
+                continue            # blown up this session: nothing there
             # With physics switched off for the session nothing is a body: a
             # physics Prop collides as the scenery it otherwise is.
             physics_enabled = physics_on and bool(props.get('physics_enabled', False))

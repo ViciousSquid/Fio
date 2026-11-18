@@ -274,3 +274,44 @@ def test_the_preview_shows_its_frame_whole():
     assert p == pytest.approx(EXPLOSION_PREVIEW_FRAME - 1)
     # The player renderer picks int(t * FRAMES): the same frame.
     assert int(EXPLOSION_PREVIEW_T * EXPLOSION_FRAME_COUNT) == EXPLOSION_PREVIEW_FRAME - 1
+
+
+# ---------------------------------------------------------------------------
+# The sound
+# ---------------------------------------------------------------------------
+
+class _Sounds:
+    def __init__(self):
+        self.queued = []
+
+    def queue_sound(self, sound):
+        self.queued.append(sound)
+
+
+@pytest.mark.parametrize("props, expected", [
+    ({}, 1.0),
+    ({"explosion_volume": 0.4}, 0.4),
+    ({"explosion_volume": 7}, 1.0),
+    ({"explosion_volume": -1}, 0.0),
+    ({"explosion_volume": "nonsense"}, 1.0),
+    ({"silent": True}, 0.0),                           # a map from before
+    ({"silent": True, "explosion_volume": 0.5}, 0.5),  # the volume says
+])
+def test_explosion_volume(props, expected):
+    from engine.explosions import explosion_volume
+    assert explosion_volume(props) == pytest.approx(expected)
+
+
+def test_the_sound_plays_from_the_explosion_at_its_volume():
+    from engine.explosions import EXPLOSION_SOUND, queue_explosion_sound
+    effect = Effect(pos=(10.0, 20.0, 30.0), properties={
+        "effect_type": "EXPLOSION", "explosion_volume": 0.3})
+    sounds = _Sounds()
+    queue_explosion_sound(sounds, effect)
+    assert sounds.queued == [{"action": "play", "file": EXPLOSION_SOUND,
+                              "volume": pytest.approx(0.3),
+                              "position": [10.0, 20.0, 30.0]}]
+    assert os.path.exists(os.path.join(ROOT, EXPLOSION_SOUND))
+    effect.properties["explosion_volume"] = 0.0
+    queue_explosion_sound(sounds, effect)
+    assert len(sounds.queued) == 1                     # 0 % is silent

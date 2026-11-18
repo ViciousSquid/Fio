@@ -83,13 +83,21 @@ def _per_tick_copy_advance(self, effect_runtime, effect_store=None):
         preview_explosion = (
             explosion & self.effect_preview[effect_ls]
         )
+        # Since: an explosion triggered in the editor (the panel's Play)
+        # plays there too, and its frozen Preview stands aside meanwhile.
+        playing = explosion & active
+        if playing.any():
+            elapsed = np.where(playing, np.maximum(now - spawn, 0.0),
+                               elapsed).astype(np.float32)
+            explosion_active = playing & (elapsed < lifetime)
+            preview_explosion = preview_explosion & ~playing
 
     self.light_enabled[effect_ls] = self.effect_light_enabled[effect_ls]
     self.light_params[effect_ls, 0] = self.effect_params[effect_ls, 2]
     self.light_params[effect_ls, 1] = self.effect_params[effect_ls, 3]
     if explosion.any():
         explosion_slots = effect_ls[explosion]
-        if effect_runtime:
+        if effect_runtime or explosion_active.any():
             # The light curve itself is pinned by test_effect_primitive; here
             # the reference lights through the same function, so this test
             # keeps pinning what it is about: publication.

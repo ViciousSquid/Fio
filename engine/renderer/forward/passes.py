@@ -1123,14 +1123,14 @@ class PassesMixin:
             # A looping emitter draws while its Effect is alive (always, for
             # all but EXPLOSION). A burst plays from its trigger until its
             # particles have all died -- past the explosion's own lifetime --
-            # and in the editor shows only as a frozen Preview.
-            if play_mode:
-                lives = self._PARTICLE_PRESET_LIVES[table.effect_emitter[slots]]
-                since = now - table.effect_spawn_time[slots]
-                burst_live = (table.effect_active[slots] & (since >= 0.0)
-                              & (since < lives * self.PARTICLE_BURST_WINDOW))
-            else:
-                burst_live = table.effect_alive[slots]
+            # in a game or played from the editor's panel; a dormant one
+            # shows only as the editor's frozen Preview (alive just then).
+            active = table.effect_active[slots]
+            lives = self._PARTICLE_PRESET_LIVES[table.effect_emitter[slots]]
+            since = now - table.effect_spawn_time[slots]
+            playing = (active & (since >= 0.0)
+                       & (since < lives * self.PARTICLE_BURST_WINDOW))
+            burst_live = np.where(active, playing, table.effect_alive[slots])
             keep = np.where(burst, burst_live, table.effect_alive[slots])
         else:
             keep = table.effect_alive[slots]
@@ -1162,7 +1162,8 @@ class PassesMixin:
         # 0 loops, 1 a burst, 2 a burst frozen for the editor's Preview.
         data[:, 7] = np.where(
             burst,
-            np.where(table.effect_preview[slots] & (not play_mode), 2.0, 1.0),
+            np.where(table.effect_preview[slots] & ~table.effect_active[slots],
+                     2.0, 1.0),
             0.0)
         data[:, 8:10] = params[:, 2:4]
         # Playback start on the wrapped render clock (0 for a looping

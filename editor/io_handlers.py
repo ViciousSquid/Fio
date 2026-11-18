@@ -18,6 +18,7 @@ import time
 from engine.effect_entity import (
     EFFECT_FIRE_TEXTURES, EFFECT_ORB_TEXTURES, EFFECT_TYPES, EMITTER_IDS,
     EMITTER_NONE, PARTICLES_DEFAULT_EMITTER)
+from engine.explosions import explode_effect, is_explosive
 
 # Import debug logger - with fallback to print if not available
 try:
@@ -275,33 +276,10 @@ def register_all_input_handlers(io_manager: IOManager):
         logic.io_manager.fire_output(entity, 'OnChanged', value=emitter)
 
     def effect_explode(entity, param, logic):
-        """Switch an Effect to EXPLOSION permanently and play it once."""
-        now = time.perf_counter()
-        entity.properties["effect_type"] = "EXPLOSION"
-        entity.properties["preview"] = False
-        logic.session_runtime.effect_store.trigger_explosion(entity, now)
-
-        game_state = logic.game_state
-        if not bool(entity.properties.get('silent', False)):
-            try:
-                source_position = [
-                    float(entity.pos.x),
-                    float(entity.pos.y),
-                    float(entity.pos.z),
-                ]
-            except AttributeError:
-                source_position = [
-                    float(entity.pos[0]),
-                    float(entity.pos[1]),
-                    float(entity.pos[2]),
-                ]
-            game_state.queue_sound({
-                'action': 'play',
-                'file': 'assets/sounds/explode.mp3',
-                'volume': 1.0,
-                'position': source_position,
-            })
-        logic.io_manager.fire_output(entity, 'OnChanged', value='EXPLOSION')
+        """Play the Effect's explosion once (engine.explosions): a FIRE (or
+        any type) goes back to itself afterwards unless its
+        ``return_after_explosion`` is off, when it stays an EXPLOSION."""
+        explode_effect(entity, logic)
 
     io_manager.register_input_handler('effect', 'settype', effect_set_type)
     io_manager.register_input_handler('effect', 'setfiretexture', effect_set_fire_texture)
@@ -722,6 +700,22 @@ def register_all_input_handlers(io_manager: IOManager):
         # The active Prop runtime observes this one-shot request on its next tick.
         entity.properties['_drop_requested'] = True
 
+    def prop_explode(entity, param, logic):
+        """Blow an Explosive prop up now."""
+        if is_explosive(entity) and id(entity) not in logic.explosion_runtime.exploded:
+            logic.explosion_runtime.explode_prop(entity)
+
+    def prop_damage(entity, param, logic):
+        """Damage a prop (param: amount, default 10); an Explosive one goes
+        up once it has taken its Health."""
+        try:
+            amount = float(param) if str(param or '').strip() else 10.0
+        except (TypeError, ValueError):
+            return
+        logic.explosion_runtime.damage_prop(entity, amount)
+
+    io_manager.register_input_handler('prop', 'explode', prop_explode)
+    io_manager.register_input_handler('prop', 'damage', prop_damage)
     io_manager.register_input_handler('prop', 'enable', prop_enable)
     io_manager.register_input_handler('prop', 'disable', prop_disable)
     io_manager.register_input_handler('prop', 'collect', prop_collect)
@@ -1466,19 +1460,40 @@ def register_all_input_handlers(io_manager: IOManager):
 
             debug_log("IO", f"LogicSpawner random spawn: type={chosen_type}, variant={chosen_variant}")
 
-        # ---- create the new entity ----
-        new_thing = cls(pos=spawn_pos, properties=extra_props)
-        logic.editor_state.things.append(new_thing)
-        entity.properties['_spawn_count'] = spawn_count + 1
+        # ---- create the new entities: spawn_count of them, scattered within
+        #      spawn_radius of the spawn point (across the floor, same height) ----
+        try:
+            per_spawn = max(1, int(entity.properties.get('spawn_count', 1)))
+        except (TypeError, ValueError):
+            per_spawn = 1
+        try:
+            scatter = max(0.0, float(entity.properties.get('spawn_radius', 0.0)))
+        except (TypeError, ValueError):
+            scatter = 0.0
+        if max_spawn > 0:
+            per_spawn = min(per_spawn, max_spawn - spawn_count)
+        import math
+        import random
+        for k in range(per_spawn):
+            pos = list(spawn_pos)
+            if scatter > 0.0:
+                # Evenly round the circle, each at a random distance, so a
+                # batch spreads out rather than piling up.
+                angle = (k + random.random() * 0.8) / per_spawn * 2.0 * math.pi
+                reach = scatter * math.sqrt(0.15 + 0.85 * random.random())
+                pos[0] += math.cos(angle) * reach
+                pos[2] += math.sin(angle) * reach
+            new_thing = cls(pos=pos, properties=dict(extra_props))
+            # A session Thing: it is gone again when Play stops.
+            logic.session_runtime.add_session_thing(new_thing)
+            spawn_count += 1
+            entity.properties['_spawn_count'] = spawn_count
 
-        # ---- rebuild caches so the new entity can be found by name/id ----
-        logic.world_runtime.build_entity_caches()
+            # ---- fire outputs ----
+            if logic.io_manager:
+                logic.io_manager.fire_output(entity, 'OnSpawn')
 
-        # ---- fire outputs ----
-        if logic.io_manager:
-            logic.io_manager.fire_output(entity, 'OnSpawn')
-
-        debug_log("IO", f"LogicSpawner '{entity.name}' spawned '{spawn_type}' at {spawn_pos}")
+            debug_log("IO", f"LogicSpawner '{entity.name}' spawned '{spawn_type}' at {pos}")
 
     def spawner_enable(entity, param, logic):
         set_authored_flag(entity, 'disabled', False)
@@ -1490,6 +1505,30 @@ def register_all_input_handlers(io_manager: IOManager):
         """Change spawn location to a different PathNode."""
         if param:
             entity.properties['target_node'] = param
+
+    # ==========================================================================
+    # SHAKE INPUTS (purely visual: engine.shake)
+    # ==========================================================================
+
+    def shake_shake(entity, param, logic):
+        from engine.shake import shake_settings
+        if entity.properties.get('disabled', False):
+            return
+        intensity, duration = shake_settings(entity.properties)
+        if str(param or '').strip():
+            try:
+                intensity = max(0.0, min(1.0, float(param)))
+            except (TypeError, ValueError):
+                pass
+        logic.shake_runtime.start(intensity, duration)
+        if logic.io_manager:
+            logic.io_manager.fire_output(entity, 'OnShake')
+
+    def shake_stop(entity, param, logic):
+        logic.shake_runtime.stop()
+
+    io_manager.register_input_handler('shake', 'shake', shake_shake)
+    io_manager.register_input_handler('shake', 'stop', shake_stop)
 
     io_manager.register_input_handler('logic_spawner', 'spawn',         spawner_spawn)
     io_manager.register_input_handler('logic_spawner', 'enable',        spawner_enable)

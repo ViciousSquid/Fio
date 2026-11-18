@@ -49,6 +49,8 @@ class LogicSession:
         self.monster_lock = threading.RLock()
         self.monster_ai_thread = None
         self.effect_store = EffectStore()
+        #: Things added to the world during Play (add_session_thing).
+        self.session_things = []
         #: The PlayerStart this play session began at (its OnPlayerSpawn and
         #: OnPlayerDeath outputs fire); None outside Play.
         self.spawn_start = None
@@ -96,6 +98,28 @@ class LogicSession:
         position = start_rules.pick_start([t.properties for t in starts])
         return starts[position] if position is not None else None
 
+    def add_session_thing(self, thing):
+        """Add *thing* to the running world for this Play session only: a
+        LogicSpawner's spawn, a barrel's fireball. Play stopping removes it,
+        so a playtest leaves the map as it was authored."""
+        logic = self.logic
+        logic.editor_state.things.append(thing)
+        self.session_things.append(thing)
+        logic.world_runtime.build_entity_caches()
+
+    def remove_session_things(self):
+        """Take the session's Things out of the world; whether there were any."""
+        things = self.logic.editor_state.things
+        removed = False
+        for thing in getattr(self, 'session_things', ()):
+            try:
+                things.remove(thing)
+                removed = True
+            except ValueError:
+                pass
+        self.session_things = []
+        return removed
+
     def _apply_play_mode_unlocked(self, enabled: bool, spawn_start=None):
         logic = self.logic
         self.play_mode = enabled
@@ -138,6 +162,14 @@ class LogicSession:
 
             # Runtime effect state belongs to this play session, not authoring.
             self.effect_store.begin_session(logic.editor_state.things)
+            logic.explosion_runtime.start()
+            logic.shake_runtime.stop()
+            self.session_things = []
+            # Each Play counts its spawners' spawns afresh (max_spawn).
+            for thing in logic.editor_state.things:
+                props = getattr(thing, 'properties', None)
+                if isinstance(props, dict) and props.get('type') == 'logic_spawner':
+                    props.pop('_spawn_count', None)
 
             # Reset player stats.
             logic.player_runtime.player_health = 100
@@ -275,6 +307,16 @@ class LogicSession:
                 )
 
             self.stop_monster_ai()
+            # An explosion still playing goes back to its type now: a FIRE
+            # stopped mid-explosion is a FIRE in the editor, as authored.
+            self.effect_store.cancel_returns()
+            # Exploded barrels stand again; what the session added (barrels'
+            # fireballs, spawned fires and monsters) goes.
+            changed = logic.explosion_runtime.stop()
+            logic.shake_runtime.stop()
+            changed = self.remove_session_things() or changed
+            if changed:
+                logic.editor_state.mark_world_changed()
             logic.trigger_runtime._reset_trigger_state()
             logic.trigger_runtime.fired_once_triggers.clear()
             logic.player_runtime.collected_keys.clear()

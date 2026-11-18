@@ -120,6 +120,61 @@ class MonsterAI:
         self._tick_monsters = None
         self._offscreen_accum = 0.0
         self._owed = {}
+        #: Monsters shoved by a blast: id(monster) -> [monster, vx, vz],
+        #: world units a second, slowing by KNOCKBACK_DRAG (knock_back).
+        self._knockback = {}
+
+    #: How fast a shove dies away (1/s): a monster pushed at v slides about
+    #: v / KNOCKBACK_DRAG units.
+    KNOCKBACK_DRAG = 6.0
+    #: Below this speed a shove is over.
+    KNOCKBACK_MIN_SPEED = 8.0
+
+    def knock_back(self, monster, dx, dz, speed):
+        """Shove *monster* along (dx, dz) at *speed* (an explosion). Taken
+        with the monster lock held; the slide runs in :meth:`update`,
+        through the same wall test as walking, so a pushed monster stops at
+        walls. Shoves add up."""
+        length = (dx * dx + dz * dz) ** 0.5
+        if length < 1e-6 or speed <= 0.0:
+            return
+        entry = self._knockback.get(id(monster))
+        vx, vz = dx / length * speed, dz / length * speed
+        if entry is None:
+            self._knockback[id(monster)] = [monster, vx, vz]
+        else:
+            entry[1] += vx
+            entry[2] += vz
+
+    def _apply_knockback(self, delta):
+        """Slide every shoved monster on by this tick's share of its shove."""
+        decay = math.exp(-self.KNOCKBACK_DRAG * delta)
+        done = []
+        for key, entry in self._knockback.items():
+            monster, vx, vz = entry
+            props = monster.properties
+            if props.get('dead') or props.get('hidden'):
+                done.append(key)
+                continue
+            x, y, z = (float(v) for v in monster.pos)
+            nx, nz = x + vx * delta, z + vz * delta
+            if not self._monster_overlaps_wall(nx, y, nz, MONSTER_WALL_MARGIN):
+                monster.pos = [nx, y, nz]
+            elif not self._monster_overlaps_wall(nx, y, z, MONSTER_WALL_MARGIN):
+                monster.pos = [nx, y, z]
+                vz = 0.0
+            elif not self._monster_overlaps_wall(x, y, nz, MONSTER_WALL_MARGIN):
+                monster.pos = [x, y, nz]
+                vx = 0.0
+            else:
+                vx = vz = 0.0
+            vx, vz = vx * decay, vz * decay
+            if vx * vx + vz * vz < self.KNOCKBACK_MIN_SPEED ** 2:
+                done.append(key)
+            else:
+                entry[1], entry[2] = vx, vz
+        for key in done:
+            del self._knockback[key]
 
     def set_spatial_grid(self, grid):
         """Called by LogicThread after populating the grid."""
@@ -147,6 +202,7 @@ class MonsterAI:
         self._tick_monsters = None
         self._offscreen_accum = 0.0
         self._owed = {}
+        self._knockback = {}
         self._debug_rays.clear()
 
     # -------------------------------------------------------------------------
@@ -163,6 +219,8 @@ class MonsterAI:
 
         player_pos = self.lt.player_runtime.player.pos
         self._debug_rays.clear()
+        if self._knockback:
+            self._apply_knockback(delta)
         # The batch describes one tick. Dropping it here rather than building
         # it means a map with no teams never pays for one.
         self._enemy_ready = False

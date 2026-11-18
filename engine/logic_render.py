@@ -466,6 +466,8 @@ class LogicRender:
             view_matrix = editor_camera.get_view_matrix()
             fov = editor_camera.fov
 
+        # A Shake (purely visual) wobbles the view and nothing else.
+        view_matrix = logic.shake_runtime.apply(view_matrix)
         write_state.camera_view_matrix = view_matrix
 
         cinematic_active = bool(logic.cutscene_runtime.state)

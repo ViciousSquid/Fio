@@ -437,7 +437,8 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
         "SetCustomGif", "SetLoop", "SetEmitter",
         "Hide", "Show", "ToggleVisibility", "Explode",
     ]
-    assert get_output_names("effect") == ["OnChanged"]
+    assert get_output_names("effect") == [
+        "OnChanged", "OnExplode", "OnExplodeFinished"]
 
     set_type(effect, "explosion", logic)
 
@@ -544,10 +545,11 @@ def test_effect_texture_inputs_ignore_invalid_variants():
     assert effect.properties["orb_texture"] == EFFECT_ORB_TEXTURES[0]
 
 
-def test_explode_input_forces_fire_to_explosion_and_never_reverts():
+def test_explode_with_return_off_makes_fire_an_explosion_for_good():
     effect = Effect(properties={
         "id": "fire-to-explosion",
         "effect_type": EFFECT_FIRE,
+        "return_after_explosion": False,
     })
     table = EntityTable()
     table.begin_frame([effect], epoch=1, effect_runtime=True)
@@ -588,6 +590,48 @@ def test_explode_input_forces_fire_to_explosion_and_never_reverts():
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
     assert float(table.effect_elapsed[0]) < just_started
+
+
+def test_a_fire_that_explodes_burns_again_afterwards():
+    """The default: Explode plays over the FIRE, which is never rewritten,
+    and the FIRE is back once the explosion has played -- OnExplode when it
+    goes off, OnExplodeFinished when it is back."""
+    import time
+    from engine.explosions import finish_explosions
+    effect = Effect(properties={"name": "torch", "effect_type": EFFECT_FIRE,
+                                "lifetime": 0.5})
+    events = []
+    send = _io_for(effect, events)
+    logic, store = send.logic, send.effect_store
+    logic.session_runtime.play_mode = True
+    table = EntityTable()
+
+    send("Explode")
+    table.begin_frame([effect], epoch=1, effect_runtime=True, effect_store=store)
+    assert effect.properties["effect_type"] == EFFECT_FIRE      # authored, untouched
+    assert table.effect_type[0] == 1 and bool(table.effect_alive[0])
+    assert ("OnExplode", None) in events
+    assert store.returning(effect) == EFFECT_FIRE
+
+    assert finish_explosions(logic, now=time.perf_counter()) == []   # still playing
+    finished = finish_explosions(logic, now=time.perf_counter() + 0.6)
+    assert finished == [(effect, EFFECT_FIRE)]
+    assert ("OnExplodeFinished", None) in events
+    table.begin_frame([effect], epoch=1, effect_runtime=True, effect_store=store)
+    assert table.effect_type[0] == 0 and bool(table.effect_alive[0])
+    assert store.returning(effect) is None
+    logic.session_runtime.play_mode = False
+
+
+def test_stopping_play_mid_explosion_leaves_the_fire_a_fire():
+    effect = Effect(properties={"name": "torch", "effect_type": EFFECT_FIRE})
+    send = _io_for(effect)
+    store = send.effect_store
+    send("Explode")
+    assert store.family_id[store.index_of(effect)] == 1
+    assert store.cancel_returns() == [(effect, EFFECT_FIRE)]
+    assert store.family_id[store.index_of(effect)] == 0
+    assert effect.properties["effect_type"] == EFFECT_FIRE
 
 
 def test_effect_explode_io_plays_once_and_can_be_retriggered():

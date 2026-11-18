@@ -1525,6 +1525,32 @@ class LogicSpawner(Thing):
         self.properties.setdefault('max_spawn', 0)
         # Extra properties merged into the spawned entity
         self.properties.setdefault('spawn_properties', {})
+        # Entities made by one Spawn, and how far around the spawn point
+        # they are scattered (0: all on it)
+        self.properties.setdefault('spawn_count', 1)
+        self.properties.setdefault('spawn_radius', 0.0)
+
+
+# =============================================================================
+# SHAKE ENTITY
+# =============================================================================
+
+class Shake(Thing):
+    """Shakes the screen when triggered (its Shake input, from any I/O -- a
+    trigger brush's OnTrigger, a button, a timer). Purely visual: the camera
+    view wobbles, dying away over ``duration`` seconds; the player, physics
+    and the world are untouched (engine.shake).
+
+    Properties: ``intensity`` 0..1 (how hard), ``duration`` seconds.
+    """
+    pixmap_path = "assets/sprites/shake.png"
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        from engine.shake import SHAKE_DEFAULTS
+        self.properties['type'] = 'shake'
+        for key, value in SHAKE_DEFAULTS.items():
+            self.properties.setdefault(key, value)
 
 
 # =============================================================================
@@ -2300,6 +2326,7 @@ ENTITY_TYPES = {
     'PathNode': PathNode,
     'LogicCamera': LogicCamera,
     'LogicSpawner': LogicSpawner,
+    'Shake': Shake,
     'Portal': Portal,
     'LogicState': LogicState,
 }
@@ -2316,7 +2343,7 @@ if _effect_class is not None:
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Prop', 'LevelChanger'],
-    'Environment': ['Light', 'Effect', 'Speaker', 'ReflectionProbe', 'Portal', 'Decal'],
+    'Environment': ['Light', 'Effect', 'Speaker', 'ReflectionProbe', 'Portal', 'Decal', 'Shake'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }

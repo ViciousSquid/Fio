@@ -1277,9 +1277,22 @@ class EntityTable:
             ).astype(np.float32)
             explosion_active = None
             preview_explosion = explosion & preview
+            if any_explosion:
+                # An explosion played in the editor (the panel's Play): it
+                # runs on its own clock, lit, as it would in a game, and the
+                # frozen Preview frame stands aside while it does.
+                playing = explosion & active
+                if playing.any():
+                    elapsed = np.where(
+                        playing, np.maximum(now - spawn, 0.0), elapsed
+                    ).astype(np.float32)
+                    explosion_active = playing & (elapsed < lifetime)
+                    preview_explosion = preview_explosion & ~playing
+                    if not explosion_active.any():
+                        explosion_active = None     # played out: as if idle
 
         if any_explosion:
-            if effect_runtime:
+            if explosion_active is not None:
                 self._explosion_lights(
                     explosion_slots, elapsed[explosion], lifetime[explosion],
                     explosion_active[explosion], explosion_light,
@@ -1308,6 +1321,9 @@ class EntityTable:
 
         if effect_runtime:
             self.effect_alive[effect_ls] = fire | explosion_active
+        elif explosion_active is not None:
+            self.effect_alive[effect_ls] = (
+                fire | explosion_active | preview_explosion)
         else:
             self.effect_alive[effect_ls] = fire | preview_explosion
 

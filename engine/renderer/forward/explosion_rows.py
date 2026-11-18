@@ -1,7 +1,8 @@
 """EXPLOSION instance rows: one per explosion drawn, back to front.
 
 A row is the explosion's authored data -- where, how big, how bright, when it
-started, whether it is the editor's frozen Preview -- laid out by
+started, whether it is the editor's frozen Preview (a Preview that is not
+playing: one played from the panel runs like any other) -- laid out by
 :data:`engine.shaders.EXPLOSION_INSTANCE_LAYOUT`, which also generates the
 shader's attribute declarations. Nothing in a row moves with the clock (the
 shader reads the time from a uniform), so the renderer uploads rows only when
@@ -85,6 +86,7 @@ def _rows_loop(table, slots, camera_xz, clock_origin):
     spawn, lifetime, seed = (table.effect_spawn_time, table.effect_lifetime,
                              table.effect_seed)
     preview, colour = table.effect_preview, table.effect_color
+    active = table.effect_active
     wrap = EXPLOSION_TIME_WRAP
     rows = []
     for slot in slots.tolist():
@@ -95,7 +97,8 @@ def _rows_loop(table, slots, camera_xz, clock_origin):
             _f32((float(spawn[slot]) - clock_origin) % wrap),
             float(params[slot, 0]), float(size[slot, 1]),
             float(params[slot, 1]), float(lifetime[slot]),
-            _f32(seed[slot]), 1.0 if preview[slot] else 0.0, 0.0, 0.0,
+            _f32(seed[slot]), 1.0 if preview[slot] and not active[slot] else 0.0,
+            0.0, 0.0,
             r, g, b, 0.0,
         ))
     if camera_xz is not None and len(rows) > 1:
@@ -121,6 +124,6 @@ def _rows_table(table, slots, camera_xz, clock_origin):
     rows[:, _INTENSITY] = table.effect_params[slots, 1]
     rows[:, _LIFETIME] = table.effect_lifetime[slots]
     rows[:, _SEED] = table.effect_seed[slots]
-    rows[:, _PREVIEW] = table.effect_preview[slots]
+    rows[:, _PREVIEW] = table.effect_preview[slots] & ~table.effect_active[slots]
     rows[:, _R:_R + 3] = table.effect_color[slots]
     return rows

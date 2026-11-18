@@ -72,7 +72,7 @@ def connect_entities(owner, source, target):
         preferred_outputs = ('OnTrigger', 'OnTimer', 'OnPressed', 'OnUse', 'OnDamaged', 'OnDeath')
         preferred_inputs = {'door': 'Open', 'mover': 'Open', 'monster': 'Wake',
                             'light': 'TurnOn', 'logic_relay': 'Trigger', 'logic_timer': 'Enable',
-                            'audio': 'PlaySound'}
+                            'audio': 'PlaySound', 'shake': 'Shake'}
         output = min(outputs, key=lambda d: preferred_outputs.index(d.name) if d.name in preferred_outputs else len(preferred_outputs)).name
         choices = (preferred_inputs.get(target_kind), 'Trigger', 'Toggle', 'Enable', 'TurnOn', 'Open', 'Wake', 'Start', 'Show')
         input_name = min(inputs, key=lambda d: choices.index(d.name) if d.name in choices else len(choices)).name

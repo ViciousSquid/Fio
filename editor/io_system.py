@@ -972,6 +972,8 @@ def register_default_io():
             IODef('Hide', 'Hide this prop'),
             IODef('Show', 'Show this prop'),
             IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
+            IODef('Explode', 'Blow up this prop now, if it is Explosive'),
+            IODef('Damage', 'Damage this prop (param: amount); an Explosive prop explodes once it has taken its Health', 'int'),
         ],
         outputs=[
             IODef('OnCarried', 'Fired when the player carries this prop'),
@@ -979,6 +981,7 @@ def register_default_io():
             IODef('OnRest', 'Fired when this prop comes to rest'),
             IODef('OnCollected', 'Fired when the player collects this prop'),
             IODef('OnRespawn', 'Fired when this prop respawns'),
+            IODef('OnExplode', 'Fired when this Explosive prop explodes'),
         ]
     )
 
@@ -1112,6 +1115,8 @@ def register_default_io():
             IODef('Hide', 'Hide this prop'),
             IODef('Show', 'Show this prop'),
             IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
+            IODef('Explode', 'Blow up this prop now, if it is Explosive'),
+            IODef('Damage', 'Damage this prop (param: amount); an Explosive prop explodes once it has taken its Health', 'int'),
         ],
         outputs=[
             IODef('OnCarried', 'Fired when the player carries this prop'),
@@ -1119,6 +1124,7 @@ def register_default_io():
             IODef('OnRest', 'Fired when this prop comes to rest'),
             IODef('OnCollected', 'Fired when the player collects this prop'),
             IODef('OnRespawn', 'Fired when this prop respawns'),
+            IODef('OnExplode', 'Fired when this Explosive prop explodes'),
         ]
     )
 
@@ -1201,10 +1207,12 @@ def register_default_io():
             IODef('Hide', 'Hide this Effect'),
             IODef('Show', 'Show this Effect'),
             IODef('ToggleVisibility', 'Toggle Effect visibility'),
-            IODef('Explode', 'Switch to EXPLOSION and play its animation once'),
+            IODef('Explode', 'Play its explosion once; a FIRE (or other type) burns again afterwards unless Return after exploding is off'),
         ],
         outputs=[
             IODef('OnChanged', 'Fired when an authored Effect control changes (parameter: value)', 'string'),
+            IODef('OnExplode', 'Fired when it explodes'),
+            IODef('OnExplodeFinished', 'Fired when its explosion has played (a returning Effect is its own type again)'),
         ]
     )
 
@@ -1243,6 +1251,18 @@ def register_default_io():
         outputs=[
             IODef('OnSpawn',       'Fired each time an entity is spawned'),
             IODef('OnMaxReached',  'Fired when max_spawn limit is hit'),
+        ]
+    )
+
+    # === SHAKE ===
+    # Purely visual: the camera view wobbles; nothing in the world moves.
+    register_io('shake',
+        inputs=[
+            IODef('Shake', 'Shake the screen (param: intensity 0-1, else its own)', 'string'),
+            IODef('Stop', 'Stop every shake now'),
+        ],
+        outputs=[
+            IODef('OnShake', 'Fired each time it shakes the screen'),
         ]
     )
 
