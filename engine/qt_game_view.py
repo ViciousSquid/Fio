@@ -1890,6 +1890,11 @@ class QtGameView(QOpenGLWidget):
                     return
         if not self.play_mode and event.button() == Qt.RightButton:
             self._editor_right_mouse_held = True
+            window = self.window()
+            if not window.isActiveWindow():
+                # A right-click does not activate a window on macOS: this
+                # one, after a dialog or a floating panel, may not be.
+                window.activateWindow()
             if not self.hasFocus():
                 self.setFocus(Qt.MouseFocusReason)      # WASD comes here
             self._sync_editor_mouselook()
@@ -1922,8 +1927,9 @@ class QtGameView(QOpenGLWidget):
         it showed and the view stopped seeing the mouse. Polled, the cursor
         is back in the middle every frame and each movement counts once.
         """
-        held = (self._mouse_look_captured() and self.window().isActiveWindow()
+        held = (self._mouse_look_captured() and self._look_window_active()
                 and self._look_has_focus())
+        self._report_dead_look(held)
         self._sync_play_mouse_grab(held)
         if self._mac_mouse is not None:
             self._poll_mouse_look_macos()
@@ -1952,6 +1958,37 @@ class QtGameView(QOpenGLWidget):
         and focus moving to a panel mid-drag (a property panel rebuilt, a
         floating tool window) left right-drag dead until pressed again."""
         return self.hasFocus() or (not self.play_mode and self.mouselook_active)
+
+    def _look_window_active(self):
+        """Whether the look may turn the camera, as far as windows go.
+
+        Play needs this view's window to be the active one. Editor look also
+        counts while it holds the mouse grab and Fio is the frontmost
+        application: another Fio window can be active -- a floating panel,
+        or wherever a dialog (the colour picker) handed activation back --
+        with the keys still reaching the editor, and on macOS a right-click
+        does not activate a window, so right-drag there was left dead until
+        a left click. Switching to another application still stops it."""
+        if self.window().isActiveWindow():
+            return True
+        return (not self.play_mode and self.mouselook_active
+                and self.mouseGrabber() is self
+                and QApplication.applicationState() == Qt.ApplicationActive)
+
+    def _report_dead_look(self, held):
+        """Say once, in the console, why an editor look is not turning the
+        camera (so a report says which condition it was)."""
+        if self.play_mode or not self.mouselook_active or held:
+            self._dead_look_reported = False
+            return
+        if getattr(self, '_dead_look_reported', False):
+            return
+        self._dead_look_reported = True
+        debug_log("Input", "3D view look is held but not turning: window active=%s, "
+                           "app active=%s, mouse grab=%s, focus=%s" % (
+                               self.window().isActiveWindow(),
+                               QApplication.applicationState() == Qt.ApplicationActive,
+                               self.mouseGrabber() is self, self._look_has_focus()))
 
     @staticmethod
     def _right_button_down():
@@ -2015,7 +2052,7 @@ class QtGameView(QOpenGLWidget):
         reports (deltaX/deltaY), summed by the native event filter.
         """
         mouse = self._mac_mouse
-        if (not self._mouse_look_captured() or not self.window().isActiveWindow()
+        if (not self._mouse_look_captured() or not self._look_window_active()
                 or not self._look_has_focus()):
             self._attach_mac_cursor()
             mouse.take()                       # movement made with the cursor free

@@ -220,3 +220,54 @@ def test_a_right_press_takes_the_focus_for_wasd(editing):
     button(view, QEvent.MouseButtonPress, True)
     assert view.hasFocus() and view.mouselook_active
     button(view, QEvent.MouseButtonRelease, False)
+
+
+def _window_active(monkeypatch, editing, active, app_active=True):
+    import engine.qt_game_view as gv
+    monkeypatch.setattr(type(editing.window), 'isActiveWindow', lambda self: active)
+    state = Qt.ApplicationActive if app_active else Qt.ApplicationInactive
+    monkeypatch.setattr(gv.QApplication, 'applicationState', staticmethod(lambda: state))
+
+
+def test_right_drag_turns_when_another_fio_window_is_active(editing, monkeypatch):
+    """After the colour picker (or with a floating panel active) the keys
+    still reach the editor but the view's window is not the active one; on
+    macOS a right-click does not activate it. Holding the look, it turns."""
+    view = editing.view
+    _window_active(monkeypatch, editing, False)
+    button(view, QEvent.MouseButtonPress, True)
+    assert view.mouselook_active and view.mouseGrabber() is view
+    assert _turns(editing), "right-drag was dead with another Fio window active"
+    button(view, QEvent.MouseButtonRelease, False)
+
+
+def test_another_application_in_front_stops_the_look(editing, monkeypatch):
+    view = editing.view
+    _window_active(monkeypatch, editing, False, app_active=False)
+    button(view, QEvent.MouseButtonPress, True)
+    assert not _turns(editing)
+    button(view, QEvent.MouseButtonRelease, False)
+
+
+def test_a_right_press_activates_the_views_window(editing, monkeypatch):
+    view = editing.view
+    activated = []
+    _window_active(monkeypatch, editing, False)
+    monkeypatch.setattr(type(editing.window), 'activateWindow',
+                        lambda self: activated.append(self))
+    button(view, QEvent.MouseButtonPress, True)
+    assert activated == [editing.window]
+    button(view, QEvent.MouseButtonRelease, False)
+
+
+def test_a_look_that_cannot_turn_says_why_once(editing, monkeypatch):
+    import engine.qt_game_view as gv
+    logged = []
+    monkeypatch.setattr(gv, 'debug_log', lambda category, message: logged.append(message))
+    view = editing.view
+    _window_active(monkeypatch, editing, False, app_active=False)
+    button(view, QEvent.MouseButtonPress, True)
+    view._poll_mouse_look()
+    view._poll_mouse_look()
+    assert len(logged) == 1 and "app active=False" in logged[0]
+    button(view, QEvent.MouseButtonRelease, False)
