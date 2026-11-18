@@ -1171,11 +1171,23 @@ class QtGameView(QOpenGLWidget):
                 _segments, _colours = connection_segments(conn_lines)
                 self.renderer.draw_connection_lines(
                     self.projection_matrix, self.view_matrix, _segments, _colours)
-        if self.face_mode_active and self.face_under_cursor():
-            brush, face_name = self.hovered_face_info
+        # The face being edited -- the Surface Inspector's, which stays put
+        # whatever the cursor passes over -- in orange; in Face Mode the face
+        # under the cursor too: faintly while another face is selected.
+        selected = None if self.play_mode else self.editor.selected_face_target()
+        hovered = self.face_under_cursor() if self.face_mode_active else None
+        if selected is not None:
             self.renderer.draw_face_highlight(
                 self.projection_matrix, self.view_matrix,
-                face_highlight_triangles(brush, face_name))
+                face_highlight_triangles(*selected))
+        if hovered is not None and not (
+                selected is not None and hovered[0] is selected[0]
+                and hovered[1] == selected[1]):
+            draw = (self.renderer.draw_face_highlight if selected is None
+                    else getattr(self.renderer, 'draw_face_hover', None))
+            if draw is not None:
+                draw(self.projection_matrix, self.view_matrix,
+                     face_highlight_triangles(*hovered))
         # Component handles.  The arrays come from the editor's controller,
         # which rebuilds them only when the selection, hover or geometry
         # changed; here it is a version check and a draw call.

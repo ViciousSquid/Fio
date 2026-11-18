@@ -1032,7 +1032,14 @@ class MainWindow(QMainWindow):
         # --- Arrow key nudging: works from any widget focus ---
         if event.type() == QEvent.KeyPress:
             key = event.key()
+            if self.is_fit_key(event) and not self._typing_focus():
+                if self.fit_textures():
+                    return True
             if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+                # A face selected in the Surface Inspector takes them first:
+                # arrows nudge its texture, Shift+arrows rotate it.
+                if self._arrow_face_texture(event):
+                    return True
                 # Selected terrain stamps take the arrows while the stamp
                 # brush is active, selected decals while the Decal tool is.
                 if self._nudge_terrain_stamps(event):
@@ -1090,6 +1097,70 @@ class MainWindow(QMainWindow):
         terrain.move_paint_stamps(terrain.selected_stamp_ids, dx, dz, defer=True)
         timer.start(350)
         view_3d.update()
+        return True
+
+    def _arrow_face_texture(self, event):
+        """The arrow keys on the Surface Inspector's selected face (see
+        :meth:`editor.surface_inspector.SurfaceInspector.arrow_key`). Not in
+        Play, and not while a text or number field has the keyboard, where
+        the arrows are that field's."""
+        if self.view_3d is None or self.view_3d.play_mode:
+            return False
+        if self.selected_face_target() is None or self._typing_focus():
+            return False
+        return self.surface_inspector.arrow_key(event)
+
+    @staticmethod
+    def _typing_focus():
+        """Whether a text or number field has the keyboard (its keys are its
+        own: arrows step it, Shift+5 types a '%')."""
+        from PyQt5.QtWidgets import (QAbstractSpinBox, QComboBox, QLineEdit,
+                                     QPlainTextEdit, QTextEdit)
+        return isinstance(QApplication.focusWidget(), (
+            QAbstractSpinBox, QComboBox, QLineEdit, QPlainTextEdit, QTextEdit))
+
+    @staticmethod
+    def is_fit_key(event):
+        """Shift+5: on most layouts Qt reports it as '%' (Key_Percent), on
+        others as 5 with Shift. No other modifier (macOS's keypad flag aside)."""
+        modifiers = event.modifiers() & ~Qt.KeypadModifier
+        if modifiers & ~Qt.ShiftModifier:
+            return False
+        return (event.key() == Qt.Key_Percent
+                or (event.key() == Qt.Key_5 and bool(modifiers & Qt.ShiftModifier)))
+
+    def fit_textures(self):
+        """Shift+5: Fit -- the texture spans the face (the Surface Inspector's
+        Fit, with its repeat counts) -- on the face selected in the Surface
+        Inspector, or, with none, on every face of every selected brush. The
+        textures themselves are left as they are. Returns whether anything
+        was fitted."""
+        if self.view_3d is None or self.view_3d.play_mode:
+            return False
+        inspector = getattr(self, 'surface_inspector', None)
+        if self.selected_face_target() is not None:
+            inspector._apply_fit()
+            faces = inspector.target_faces()
+            self.show_toast(f"Fit: {faces[0][1]}" if len(faces) == 1
+                            else f"Fit: {len(faces)} faces")
+            return True
+        brushes = [b for b in (self._selected_brushes() or [])
+                   if isinstance(b, dict)]
+        if not brushes:
+            return False
+        repeat = ((inspector.fit_w.value(), inspector.fit_h.value())
+                  if inspector is not None else (1.0, 1.0))
+        self.save_state()
+        for brush in brushes:
+            for face_key in face_texture.face_keys(brush):
+                face_texture.apply_fit(brush, face_key, repeat)
+        self.state.mark_lighting_dirty(brushes)
+        self.unsaved_changes = True
+        self.update_views()
+        if inspector is not None and inspector.isVisible():
+            inspector.refresh_from_face()
+        self.show_toast("Fit: all faces" if len(brushes) == 1
+                        else f"Fit: all faces of {len(brushes)} brushes")
         return True
 
     def _nudge_decals(self, event):
@@ -2569,7 +2640,7 @@ class MainWindow(QMainWindow):
             self.surface_inspector.sync_face_button(active)
         
         if active:
-            self.show_toast("FACE MODE: Select a face to texture (Orange) — Page Up/Down rotates it", duration=3000)
+            self.show_toast("FACE MODE: Select a face to texture (Orange) — Shift+arrows or Page Up/Down rotate it", duration=3000)
             self.set_selected_objects([]) # Deselect current object to clear gizmos and allow clean hover
             
             # Change cursor to indicate mode
@@ -2632,6 +2703,28 @@ class MainWindow(QMainWindow):
         """
         delta = 90.0 if steps >= 0 else -90.0
 
+        # --- The Surface Inspector is open on a face: that face is what is
+        # being worked on, so it is what turns -- in Face Mode too, whatever
+        # the cursor happens to be over (and in "Whole brush" scope, every
+        # face it applies to). Before, Face Mode turned the hovered face.
+        inspector = getattr(self, 'surface_inspector', None)
+        target = self.selected_face_target()
+        if target is not None:
+            faces = inspector.target_faces()
+            self.save_state()
+            for brush, face_name in faces:
+                angle = self._bump_face_angle(brush, face_name, delta)
+            self.state.mark_lighting_dirty(
+                list({id(b): b for b, _ in faces}.values()))
+            self.face_texture_target = target
+            self.update_views()
+            inspector.refresh_from_face()
+            if len(faces) == 1:
+                self.show_toast(f"{faces[0][1]}: texture {int(angle)}°")
+            else:
+                self.show_toast(f"Brush textures rotated {int(delta):+d}°")
+            return
+
         # --- Face mode: rotate only the highlighted / last-textured face ---
         if self.view_3d.face_mode_active:
             target = self.view_3d.face_under_cursor() or self.face_texture_target
@@ -2648,25 +2741,8 @@ class MainWindow(QMainWindow):
             self.show_toast(f"{face_name}: texture {int(angle)}°")
             return
 
-        # --- The Surface Inspector is open on one face of the selection:
-        # that face is what is being worked on, so it is what turns. Without
-        # this, Page Up/Down outside face mode turned all six faces together
-        # and two faces could not be given different rotations.
-        selected = self.primary_selection()
-        inspector = getattr(self, 'surface_inspector', None)
-        if (inspector is not None and inspector.isVisible() and inspector.target
-                and inspector.scope_face.isChecked()
-                and inspector.target[0] is selected):
-            brush, face_name = inspector.target
-            self.save_state()
-            angle = self._bump_face_angle(brush, face_name, delta)
-            self.state.mark_lighting_dirty([brush])
-            self.update_views()
-            inspector.refresh_from_face()
-            self.show_toast(f"{face_name}: texture {int(angle)}°")
-            return
-
         # --- Otherwise: rotate every face of the selected brush together ---
+        selected = self.primary_selection()
         if isinstance(selected, dict):
             self.save_state()
             # Every face the brush has: a box's six sides, an angled brush's
@@ -2675,6 +2751,15 @@ class MainWindow(QMainWindow):
                 self._bump_face_angle(selected, face_name, delta)
             self.update_views()
             self.show_toast(f"Brush textures rotated {int(delta):+d}°")
+
+    def selected_face_target(self):
+        """``(brush, face key)`` the open Surface Inspector is bound to, or
+        None (closed, or bound to nothing). The selected face: what its
+        controls and Page Up/Down edit, and what the 3D view highlights."""
+        inspector = getattr(self, 'surface_inspector', None)
+        if inspector is None or not inspector.isVisible() or not inspector.target:
+            return None
+        return inspector.target
 
     def show_surface_inspector(self, brush=None, face_name=None,
                                raise_window=True):
@@ -2745,20 +2830,20 @@ class MainWindow(QMainWindow):
         """Point an open Surface Inspector at something worth editing.
 
         It can be opened with nothing selected, so it binds as soon as there
-        is a brush to bind to.  A panel already pointing into the selection
-        is left alone -- re-binding on every click would undo a face picked
-        from its dropdown -- and so is one whose brush has been deselected,
-        since dropping the target would blank the panel mid-edit.
+        is a brush to bind to. A face it is already bound to stays bound
+        whatever the selection does: it is changed by clicking another face
+        (Face Mode) or picking one from the panel's list, and released by
+        closing the panel -- so adjustments always go to the face that was
+        chosen, never to whatever was selected or hovered since.
         """
         inspector = getattr(self, 'surface_inspector', None)
         if inspector is None or not inspector.isVisible():
             return
+        if inspector.target is not None:
+            return
 
         brushes = self._selected_brushes()
         if not brushes:
-            return
-        target = inspector.target
-        if target is not None and target[0] in brushes:
             return
 
         keys = face_texture.face_keys(brushes[0])
