@@ -8,6 +8,7 @@ from PyQt5 import sip
 from PyQt5.QtGui import QFont, QTextCursor, QPainter, QPixmap, QDesktopServices
 from collections import deque
 import html
+import os
 import re
 
 
@@ -90,6 +91,76 @@ def _plain(message) -> str:
     return str(message).translate(_MARKUP_CHARS)
 
 
+#: How many messages the console history (the logger's buffer) keeps; older
+#: ones drop off the front. It is what a rebuilt console shows again and what
+#: ``condump`` writes. Kept well under DebugConsole.MAX_DOCUMENT_LINES, which
+#: rebuilds the document from this buffer when exceeded.
+HISTORY_LIMIT = 1000
+
+#: The buffer category of a command line typed into a console, echoed as
+#: ``] command``. Not a log category: it has no filter of its own.
+ECHO_CATEGORY = '\x02echo\x03'
+_ECHO_PREFIX = '] '
+_ECHO_HTML = "<br><span style='color: #F08000; font-weight: bold;'>] {}</span><br>"
+
+_RE_ANY_TAG = re.compile(r'</?[a-zA-Z][^>]*>')
+_RE_BR = re.compile(r'<br\s*/?>', re.IGNORECASE)
+
+
+def _html_to_text(text, tag_re) -> str:
+    """Console HTML as the plain text it shows: ``<br>`` a line break, the
+    other tags *tag_re* matches dropped, character references decoded."""
+    if tag_re.search(text):
+        # Rendered as HTML: source line breaks are only white space.
+        text = re.sub(r'[ \t]*\n\s*', ' ', text)
+        text = _RE_BR.sub('\n', text)
+        text = tag_re.sub('', text)
+        text = '\n'.join(line.strip() for line in text.split('\n')).strip('\n')
+    return html.unescape(text)
+
+
+def console_plain_text(category, message) -> str:
+    """One console history entry as the plain text the console shows for it.
+
+    Mirrors :meth:`DebugConsole._format_message`: a line logged with
+    :func:`debug_log_markup` (and the inert formatting of the Info and
+    MonsterAI categories) is turned from HTML into text; any other line is
+    shown literally, so it is returned as it is.
+    """
+    message = str(message)
+    if category == ECHO_CATEGORY:
+        return message
+    if message.startswith(_MARKUP):
+        return _html_to_text(message[len(_MARKUP):].translate(_MARKUP_CHARS), _RE_ANY_TAG)
+    message = message.translate(_MARKUP_CHARS)
+    if (category or 'Info') in _INERT_MARKUP_CATEGORIES:
+        return _html_to_text(message, _RE_INERT_TAG)
+    return message
+
+
+def write_console_dump(directory, entries, base='console', ext='.txt') -> str:
+    """Write console history *entries* as plain text to a new file in
+    *directory* and return its path.
+
+    The file is ``console.txt``, or ``console_1.txt``, ``console_2.txt``...
+    when that name is taken: an existing file is never overwritten (each name
+    is claimed with an exclusive create, so not even by a concurrent dump).
+    """
+    os.makedirs(directory, exist_ok=True)
+    text = ''.join(console_plain_text(category, message) + '\n'
+                   for category, message in entries)
+    index = 0
+    while True:
+        name = f'{base}{ext}' if index == 0 else f'{base}_{index}{ext}'
+        path = os.path.join(directory, name)
+        try:
+            with open(path, 'x', encoding='utf-8', newline='\n') as handle:
+                handle.write(text)
+            return path
+        except FileExistsError:
+            index += 1
+
+
 class DebugLogger(QObject):
     """
     Global singleton that collects debug messages and emits signals.
@@ -118,7 +189,7 @@ class DebugLogger(QObject):
         super().__init__()
         self._initialized = True
         self._enabled = True
-        self._buffer = deque(maxlen=1000)  # Keep last 1000 messages
+        self._buffer = deque(maxlen=HISTORY_LIMIT)  # the console history
 
     def log(self, category: str, message: str):
         """Log a message with a category tag."""
@@ -155,6 +226,32 @@ class DebugLogger(QObject):
         message = _plain(message)
         self._buffer.append(('', message))
         self.message_logged.emit('', message)
+
+    def log_command_echo(self, command: str):
+        """Keep a command typed into a console (shown there as ``] command``)
+        in the history, so a rebuilt console and ``condump`` have it too.
+
+        Not emitted: the console that took the command has drawn it already.
+        """
+        if not self._enabled:
+            return
+        self._buffer.append((ECHO_CATEGORY, _ECHO_PREFIX + _plain(command)))
+
+    @staticmethod
+    def is_command_echo(entry, command=None) -> bool:
+        """Whether history *entry* is a typed command's echo (of *command*,
+        matched by its first word, when given)."""
+        category, message = entry
+        if category != ECHO_CATEGORY:
+            return False
+        if command is None:
+            return True
+        words = str(message)[len(_ECHO_PREFIX):].split(maxsplit=1)
+        return bool(words) and words[0].lower() == command.lower()
+
+    def history_limit(self) -> int:
+        """How many messages the history keeps (older ones drop off)."""
+        return self._buffer.maxlen
 
     def set_enabled(self, enabled: bool):
         self._enabled = enabled
@@ -818,8 +915,8 @@ class DebugConsole(QWidget):
         # Echo the command to the console exactly like Quake
         cursor = self.console.textCursor()
         cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml(f"<br><span style='color: #F08000; font-weight: bold;'>] "
-                          f"{html.escape(cmd, quote=False)}</span><br>")
+        cursor.insertHtml(_ECHO_HTML.format(html.escape(cmd, quote=False)))
+        get_debug_logger().log_command_echo(cmd)
 
         # Add to local history and clear the line
         self.command_input.add_history(cmd)
@@ -946,6 +1043,10 @@ class DebugConsole(QWidget):
         a line logged with :func:`debug_log_markup` keeps its own tags.
         """
         message = str(message)
+        if category == ECHO_CATEGORY:
+            # A typed command, drawn as it was when entered (whatever the
+            # filters: the live echo ignores them too).
+            return _ECHO_HTML.format(html.escape(message[len(_ECHO_PREFIX):], quote=False))
         is_markup = message.startswith(_MARKUP)
         # The reserved characters mean nothing anywhere else in a line.
         message = (message[len(_MARKUP):] if is_markup else message).translate(_MARKUP_CHARS)
