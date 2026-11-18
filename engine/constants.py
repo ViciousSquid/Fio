@@ -25,7 +25,7 @@ PORTAL_B_TILE = 4
 RENDER_MODE_LIT = 0        # Phong Shading
 RENDER_MODE_UNLIT = 1      # Fullbright / Textured
 RENDER_MODE_WIREFRAME = 2  # Wireframe lines
-RENDER_MODE_VERTEX = 3     # Points
+RENDER_MODE_VERTEX = 3     # Vertices
 
 # --- Physics Constants ---
 #

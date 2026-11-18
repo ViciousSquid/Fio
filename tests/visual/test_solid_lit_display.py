@@ -1,6 +1,6 @@
-"""Visual tier: the 'Solid Lit' display shows nodraw brushes textured (what
-play will not draw stays plain to see) and never shows water textured: it
-is a shaded, see-through brush there, not the water surface."""
+"""Visual tier: the 'Solid Lit' display textures nothing -- nodraw brushes
+are shaded like every other brush -- and never shows water textured: it is
+a shaded, see-through brush there, not the water surface."""
 
 import numpy as np
 import pytest
@@ -49,7 +49,7 @@ def _paint(session, mode):
     return session.paint()
 
 
-def test_solid_lit_draws_nodraw_textured_and_water_untextured(session, monkeypatch):
+def test_solid_lit_textures_no_brush_and_shades_water(session, monkeypatch):
     renderer = session.view.renderer
     calls = {'water': 0, 'textured': [], 'lit': []}
     real_water = renderer.draw_water_brushes
@@ -79,8 +79,9 @@ def test_solid_lit_draws_nodraw_textured_and_water_untextured(session, monkeypat
             ((b['name'], b) for b in session.state.brushes)}
     textured_slots = set().union(*calls['textured']) if calls['textured'] else set()
     lit_slots = set().union(*calls['lit']) if calls['lit'] else set()
-    assert slot['nodraw_box'] in textured_slots                      # textured
-    assert slot['plain_box'] not in textured_slots and slot['plain_box'] in lit_slots
+    assert not textured_slots                                         # nothing textured
+    assert slot['nodraw_box'] in lit_slots                            # nodraw: shaded
+    assert slot['plain_box'] in lit_slots
     assert calls['water'] == 0                                        # never the water surface
     assert slot['pool'] in lit_slots                                  # a shaded brush instead
     calls.update(water=0, textured=[], lit=[])

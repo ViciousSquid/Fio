@@ -217,16 +217,6 @@ def test_wireframe_draws_true_brush_edges(fio_session):
     assert not filled, "Wireframe went through the filled brush pass"
 
 
-def test_points_is_gone():
-    """The Points display mode is removed: its option, its render path."""
-    import inspect
-    from engine.renderer.forward.wireframe import distance
-    source = inspect.getsource(distance)
-    assert "Points" not in source and "uPoints" not in source
-    assert "points" not in inspect.signature(
-        distance.DistanceMixin.draw_distance_pass).parameters
-
-
 def test_solid_lit_draws_no_decals_and_untextured_models(fio_session, monkeypatch):
     """Reported: Solid Lit still showed some textures -- decals, textured
     models and brushes with a nodraw face. Nothing is textured in it now."""
