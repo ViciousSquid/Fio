@@ -141,9 +141,13 @@ def square_rgba(data, size):
 def project_bytes(path):
     """The bytes of the desktop project's image at *path*, or None."""
     from engine.asset_archives import asset_bytes
-    from engine.asset_paths import project_asset_path
+    from engine.asset_paths import project_asset_path, warn_refused
+    # A map's name for the image is data from outside: confined to the
+    # project (POSIX and Windows rules alike, symlinks resolved) before
+    # anything is opened.
     safe = project_asset_path(path)
     if safe is None:
+        warn_refused(path, 'cookie image')
         return None
     try:
         return asset_bytes(safe)
