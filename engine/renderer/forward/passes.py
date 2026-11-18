@@ -19,10 +19,12 @@ from engine import shaders
 from engine.effect_table import FAMILY_EXPLOSION, FAMILY_PARTICLES
 from engine.entity_table import _CLOCK_ORIGIN
 from engine.render_keys import runs_in_order, sort_into_runs
+from engine.shaders import EXPLOSION_TIME_WRAP
 from ..api import WATER_QUALITIES
 from ..core.terrain_gl import TerrainGL
 from ..core.diagnostics import timed_pass
 from ..core.uniform_rows import uniform_rows
+from .explosion_rows import as_float32, explosion_rows, same_rows
 
 
 def _tinted(colour, tint):
@@ -971,63 +973,32 @@ class PassesMixin:
 
     def _draw_explosions_instanced(self, projection, view, table, slots,
                                    camera_pos):
-        """Draw the live EXPLOSION Effects among *slots*; their count."""
-        explosion = table.effect_type[slots] == 1
-        alive = table.effect_alive[slots]
-        slots = slots[explosion & alive]
+        """Draw the live EXPLOSION Effects among *slots* in one instanced
+        draw; their count.
+
+        A row is authored data only (explosion_rows.py), built by a loop for
+        the usual handful and by NumPy for many, and uploaded only when the
+        rows differ from the last upload; the shader takes the time from a
+        uniform. Soft-edged against the opaque scene's depth, which the
+        particles drawn next reuse. GL state is put back as it was found.
+        """
+        explosion = table.effect_type[slots] == FAMILY_EXPLOSION
+        slots = slots[explosion & table.effect_alive[slots]]
         if not len(slots) or 'effect_instanced' not in self.shaders:
             return 0
 
-        count = len(slots)
-        if len(self._effect_order_scratch) < count:
-            grown = max(64, len(self._effect_order_scratch) * 2, count)
-            self._effect_order_scratch = np.empty(grown, dtype=np.int32)
-            self._effect_depth_scratch = np.empty(grown, dtype=np.float64)
-            self._effect_depth_aux_scratch = np.empty(grown, dtype=np.float64)
-
-        depth = self._effect_depth_scratch[:count]
-        if camera_pos is None:
-            order = np.arange(count, dtype=np.int32)
-        else:
+        camera_xz = None
+        if camera_pos is not None:
             cx, _, cz = self._camera_xyz(camera_pos)
-            np.take(table.pos[:, 0], slots, out=depth)
-            np.subtract(depth, cx, out=depth)
-            np.square(depth, out=depth)
-            aux = self._effect_depth_aux_scratch[:count]
-            np.take(table.pos[:, 2], slots, out=aux)
-            np.subtract(aux, cz, out=aux)
-            np.square(aux, out=aux)
-            np.add(depth, aux, out=depth)
-            order = np.argsort(depth, kind='stable')[::-1]
-
-        sorted_slots = slots[order]
+            camera_xz = (float(cx), float(cz))
+        rows = explosion_rows(table, slots, camera_xz, _CLOCK_ORIGIN)
+        count = len(rows)
         self._ensure_effect_instance_buffer(count)
-        data = self._effect_instance_data[:count]
-
-        np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
-        np.take(table.effect_params[:, :2], sorted_slots, axis=0,
-               out=data[:, 3:5])
-        np.take(table.effect_elapsed, sorted_slots, out=data[:, 5])
-        np.take(table.effect_lifetime, sorted_slots, out=data[:, 6])
-        np.take(table.effect_seed, sorted_slots, out=data[:, 7])
-        data[:, 8] = 1.0
-        data[:, 9:11] = 0.0
-        np.take(table.sprite_size[:, 1], sorted_slots, out=data[:, 10])
-        np.take(table.effect_color, sorted_slots, axis=0,
-               out=data[:, 11:14])
-        data[:, 14] = 1.0
-        data[:, 15] = table.effect_preview[sorted_slots]
-
+        vao = self._ensure_effect_instance_vao()
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
-
-        blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
-        cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
-        if not blend_was:
-            gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        if cull_was:
-            gl.glDisable(gl.GL_CULL_FACE)
+        if not same_rows(rows, self._explosion_uploaded):
+            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, as_float32(rows))
+            self._explosion_uploaded = rows
 
         shader = self.shaders['effect_instanced']
         uniforms = self.uniforms['effect_instanced']
@@ -1035,30 +1006,78 @@ class PassesMixin:
         self._current_shader = shader
         self._upload_env_uniforms('effect_instanced')
         gl.glUniformMatrix4fv(
-            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
-        )
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(
-            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
-        )
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniform1f(uniforms['uTime'], float(
+            (time.perf_counter() - _CLOCK_ORIGIN) % EXPLOSION_TIME_WRAP))
+
         prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
+        # Explosions write no depth, so a copy made here is still the opaque
+        # scene's when the particles draw: _bind_scene_depth leaves it marked
+        # current for them.
+        self._bind_scene_depth(uniforms, projection)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         if self.effect_explosion_texture:
             gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
         gl.glUniform1i(uniforms['explosion_texture'], 0)
 
-        gl.glBindVertexArray(self._ensure_effect_instance_vao())
-        gl.glDrawArraysInstanced(
-            gl.GL_TRIANGLE_STRIP, 0, 4, count
-        )
-        self.render_stats.draw_calls += 1
-        self.render_stats.batched_draws += 1
-        gl.glBindVertexArray(0)
-        gl.glActiveTexture(prev_active_texture)
-        if cull_was:
-            gl.glEnable(gl.GL_CULL_FACE)
-        if not blend_was:
-            gl.glDisable(gl.GL_BLEND)
+        blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
+        cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
+        depth_test_was = bool(gl.glIsEnabled(gl.GL_DEPTH_TEST))
+        depth_mask_was = bool(gl.glGetBooleanv(gl.GL_DEPTH_WRITEMASK))
+        blend_func = tuple(int(gl.glGetIntegerv(name)) for name in (
+            gl.GL_BLEND_SRC_RGB, gl.GL_BLEND_DST_RGB,
+            gl.GL_BLEND_SRC_ALPHA, gl.GL_BLEND_DST_ALPHA))
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthMask(gl.GL_FALSE)
+        try:
+            gl.glBindVertexArray(vao)
+            gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
+            self.render_stats.draw_calls += 1
+            self.render_stats.batched_draws += 1
+        finally:
+            gl.glBindVertexArray(0)
+            gl.glBlendFuncSeparate(*blend_func)
+            if not blend_was:
+                gl.glDisable(gl.GL_BLEND)
+            if cull_was:
+                gl.glEnable(gl.GL_CULL_FACE)
+            if not depth_test_was:
+                gl.glDisable(gl.GL_DEPTH_TEST)
+            gl.glDepthMask(gl.GL_TRUE if depth_mask_was else gl.GL_FALSE)
+            gl.glActiveTexture(prev_active_texture)
         return count
+
+    def _bind_scene_depth(self, uniforms, projection):
+        """Give a soft-edged pass the opaque scene's depth: set its
+        ``uSoft``, ``uSceneDepth``, ``uViewport`` and ``uDepthParams``, and
+        bind the copy on the scene-depth unit. The decal pass's copy when it
+        made one this frame (``_scene_depth_current``), else a copy made now,
+        which is then marked current for the passes after. Perspective views
+        only. Returns whether the pass is soft."""
+        perspective = abs(float(projection[2][3])) > 0.5
+        soft = perspective and (
+            getattr(self, '_scene_depth_current', False)
+            or self._capture_scene_depth())
+        if soft:
+            self._scene_depth_current = True
+        unit = self._water_depth_texture_unit
+        gl.glUniform1i(uniforms['uSoft'], 1 if soft else 0)
+        gl.glUniform1i(uniforms['uSceneDepth'], unit)
+        if soft:
+            gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
+            viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+            gl.glUniform4f(uniforms['uViewport'], float(viewport[0]),
+                           float(viewport[1]), float(max(int(viewport[2]), 1)),
+                           float(max(int(viewport[3]), 1)))
+            gl.glUniform2f(uniforms['uDepthParams'], float(projection[3][2]),
+                           float(projection[2][2]))
+        return soft
 
     # --------------------------------------------------------------------------
     # Particle emitters
@@ -1182,27 +1201,12 @@ class PassesMixin:
         gl.glUniform2f(uniforms['uNearFade'], *self.PARTICLE_NEAR_FADE)
 
         prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
-        # Soft particles read the opaque depth: the decal pass's copy when it
-        # made one this frame, else a copy made now. Perspective only.
-        perspective = abs(float(projection[2][3])) > 0.5
-        soft = perspective and (
-            getattr(self, '_scene_depth_current', False)
-            or self._capture_scene_depth())
+        # Soft particles read the opaque depth: the decal pass's (or the
+        # explosions') copy when there is one this frame, else a copy now.
+        self._bind_scene_depth(uniforms, projection)
         # Consumed: a later frame (or a pass outside render_scene) copies
         # its own unless the decal pass has again.
         self._scene_depth_current = False
-        unit = self._water_depth_texture_unit
-        gl.glUniform1i(uniforms['uSoft'], 1 if soft else 0)
-        gl.glUniform1i(uniforms['uSceneDepth'], unit)
-        if soft:
-            gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
-            viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
-            gl.glUniform4f(uniforms['uViewport'], float(viewport[0]),
-                           float(viewport[1]), float(max(int(viewport[2]), 1)),
-                           float(max(int(viewport[3]), 1)))
-            gl.glUniform2f(uniforms['uDepthParams'], float(projection[3][2]),
-                           float(projection[2][2]))
 
         # Blended premultiplied, tested against depth but writing none,
         # both faces; every piece of state is put back as it was.

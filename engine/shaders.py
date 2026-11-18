@@ -638,141 +638,6 @@ void main() {
     FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);
 }""",
 
-    'effect.vert': """#version 330 core
-precision highp float;
-
-layout (location = 0) in vec2 aPos;
-layout (location = 1) in vec3 iEffectPos;
-layout (location = 2) in vec4 iEffectParams;  // width, intensity, elapsed, lifetime
-layout (location = 3) in vec4 iEffectMeta;    // seed, type, height, spare
-layout (location = 4) in vec4 iEffectColor;
-
-uniform mat4 projection;
-uniform mat4 view;
-
-out vec2 TexCoords;
-out vec3 FragPos;
-out vec4 EffectParams;
-out vec4 EffectMeta;
-out vec3 EffectColor;
-
-void main() {
-    float width = max(iEffectParams.x, 0.01);
-    float height = max(iEffectMeta.z, 0.01);
-    float elapsed = max(iEffectParams.z, 0.0);
-    float lifetime = max(iEffectParams.w, 0.001);
-    float t = clamp(elapsed / lifetime, 0.0, 1.0);
-    if (iEffectMeta.w > 0.5) {
-        // Keep editor Preview visually locked to animation frame 10.
-        t = (9.5 / 16.0);
-    }
-    float growth = mix(1.0, 3.0, smoothstep(0.0, 0.28, t));
-
-    vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));
-    const vec3 worldUp = vec3(0.0, 1.0, 0.0);
-    float vertical = aPos.y + 0.5;
-
-    vec3 worldPos = iEffectPos
-                  + cameraRight * aPos.x * width * growth
-                  + worldUp * vertical * height * growth;
-
-    TexCoords = aPos + 0.5;
-    FragPos = worldPos;
-    EffectParams = iEffectParams;
-    EffectMeta = iEffectMeta;
-    EffectColor = iEffectColor.rgb;
-    gl_Position = projection * view * vec4(worldPos, 1.0);
-}
-""",
-
-    'effect.frag': """#version 330 core
-precision mediump float;
-
-out vec4 FragColor;
-
-in highp vec2 TexCoords;
-in highp vec3 FragPos;
-in highp vec4 EffectParams;
-in highp vec4 EffectMeta;
-in highp vec3 EffectColor;
-
-uniform sampler2D explosion_texture;
-
-uniform int uFogEnabled;
-uniform vec3 uFogColor;
-uniform float uFogStart;
-uniform float uFogEnd;
-uniform float uFogDensity;
-uniform highp vec3 uFogCamPos;
-uniform vec3 uAmbient;
-
-const float EXPLOSION_SHEET_COLUMNS = 5.0;
-const float EXPLOSION_SHEET_ROWS = 4.0;
-const float EXPLOSION_FRAME_COUNT = 16.0;
-const float EXPLOSION_PREVIEW_FRAME_INDEX = 9.0; // authoring frame 10
-
-float fogFactor(highp vec3 fragPos) {
-    if (uFogEnabled == 0) return 0.0;
-    highp float d = length(fragPos - uFogCamPos);
-    float band = max(uFogEnd - uFogStart, 1e-4);
-    float f = clamp((d - uFogStart) / band, 0.0, 1.0);
-    if (uFogDensity > 0.0) {
-        float e = uFogDensity * max(d - uFogStart, 0.0);
-        f = max(f, clamp(1.0 - exp(-e * e), 0.0, 1.0));
-    }
-    return f;
-}
-
-vec3 applyFog(vec3 color, highp vec3 fragPos) {
-    return mix(color, uFogColor, fogFactor(fragPos));
-}
-
-vec2 explosionAtlasUV(vec2 localUV, float frameIndex) {
-    float column = mod(frameIndex, EXPLOSION_SHEET_COLUMNS);
-    float rowTop = floor(frameIndex / EXPLOSION_SHEET_COLUMNS);
-    float rowBottom = EXPLOSION_SHEET_ROWS - 1.0 - rowTop;
-    vec2 cellSize = vec2(
-        1.0 / EXPLOSION_SHEET_COLUMNS,
-        1.0 / EXPLOSION_SHEET_ROWS
-    );
-    return (vec2(column, rowBottom) + localUV) * cellSize;
-}
-
-void main() {
-    float visualIntensity = max(EffectParams.y, 0.0);
-    float elapsed = max(EffectParams.z, 0.0);
-    float lifetime = max(EffectParams.w, 0.001);
-    float t = clamp(elapsed / lifetime, 0.0, 1.0);
-    if (EffectMeta.w > 0.5) {
-        // Keep the visual envelope aligned with the static frame-10 preview.
-        t = (9.5 / 16.0);
-    }
-
-    float frame;
-    if (EffectMeta.w > 0.5) {
-        // Editor Preview is deliberately static: always show authoring frame 10.
-        frame = EXPLOSION_PREVIEW_FRAME_INDEX;
-    } else {
-        frame = min(
-            floor(t * EXPLOSION_FRAME_COUNT),
-            EXPLOSION_FRAME_COUNT - 1.0
-        );
-    }
-    vec4 sheet = texture(explosion_texture, explosionAtlasUV(TexCoords, frame));
-
-    if (sheet.a < 0.02 || visualIntensity <= 0.0) discard;
-
-    float envelope = 1.0 - smoothstep(0.70, 1.0, t);
-    float flash = exp(-t * t * 48.0);
-    float burst = 1.0 + flash * 2.2;
-    vec3 tint = mix(vec3(1.0), max(EffectColor, vec3(0.001)), 0.35);
-    vec3 rgb = sheet.rgb * tint * visualIntensity * burst;
-    float alpha = sheet.a * envelope;
-
-    if (alpha < 0.01) discard;
-    FragColor = vec4(applyFog(rgb, FragPos), alpha);
-}
-""",
     'fog.vert': """#version 330 core
 precision highp float;
 layout (location = 0) in vec3 a_pos;
@@ -3030,6 +2895,182 @@ void main() {
     frag_colour = vec4(textureLod(u_panorama, panoramaUV(normalize(d)), 0.0).rgb, 1.0);
 }
 """
+
+# ==============================================================================
+# EXPLOSION (the Effect's one-shot fireball)
+#
+# One instance row per playing (or previewed) explosion. The row is authored
+# data only -- where, how big, when it started -- and the shader works out the
+# playback position from the render clock (uTime), so a row is re-uploaded
+# only when an explosion starts, stops or moves, not every frame.
+#
+# EXPLOSION_INSTANCE_LAYOUT is the row's single definition: the attribute
+# declarations in effect.vert are generated from it, and the renderer fills
+# columns by these names (EXPLOSION_COLUMNS). Column numbers are never
+# written out by hand.
+# ==============================================================================
+from .effect_entity import (                                    # noqa: E402
+    EXPLOSION_CELL_UV, EXPLOSION_FRAME_COUNT, EXPLOSION_PREVIEW_T,
+    EXPLOSION_SHEET_COLUMNS, EXPLOSION_SHEET_TOP_UV)
+
+#: (attribute, its four components) per vec4 of an explosion instance row,
+#: from attribute location 1 (location 0 is the quad corner).
+EXPLOSION_INSTANCE_LAYOUT = (
+    ('iPosStart', ('x', 'y', 'z', 'start')),
+    ('iSize', ('width', 'height', 'intensity', 'lifetime')),
+    ('iMeta', ('seed', 'preview', 'spare_meta_z', 'spare_meta_w')),
+    ('iColor', ('r', 'g', 'b', 'spare_color_w')),
+)
+#: Column of each component in a row: EXPLOSION_COLUMNS['height'] is 5.
+EXPLOSION_COLUMNS = {
+    name: 4 * vec + comp
+    for vec, (_, names) in enumerate(EXPLOSION_INSTANCE_LAYOUT)
+    for comp, name in enumerate(names)
+}
+EXPLOSION_INSTANCE_FLOATS = 4 * len(EXPLOSION_INSTANCE_LAYOUT)
+
+#: The render clock wraps at this many seconds (as the particles' does), so
+#: float32 keeps millisecond precision however long the session runs.
+EXPLOSION_TIME_WRAP = 4096.0
+
+
+def _explosion_attribute_glsl():
+    return "\n".join(
+        "layout (location = %d) in vec4 %s;   // %s"
+        % (vec + 1, attribute, ", ".join(names))
+        for vec, (attribute, names) in enumerate(EXPLOSION_INSTANCE_LAYOUT))
+
+
+DEFAULT_SHADERS['effect.vert'] = """#version 330 core
+precision highp float;
+
+layout (location = 0) in vec2 aPos;
+""" + _explosion_attribute_glsl() + """
+
+uniform mat4 projection;
+uniform mat4 view;
+uniform highp float uTime;      // render clock, wrapped like iPosStart.w
+
+out highp vec2 vUV;
+out highp vec3 vWorldPos;
+out highp float vDepth;         // view depth, for the soft edge
+out highp float vSoftRange;
+out highp float vT;             // playback position 0..1
+out vec3 vColor;
+out float vIntensity;
+
+const float TIME_WRAP = %(wrap).1f;
+const float PREVIEW_T = %(preview_t).9f;
+
+void main() {
+    float width = max(iSize.x, 0.01);
+    float height = max(iSize.y, 0.01);
+    float lifetime = max(iSize.w, 0.001);
+    float t;
+    if (iMeta.y > 0.5) {
+        // The editor's Preview: one frame, whole and still.
+        t = PREVIEW_T;
+    } else {
+        float elapsed = uTime - iPosStart.w;
+        if (elapsed < 0.0) elapsed += TIME_WRAP;
+        t = clamp(elapsed / lifetime, 0.0, 1.0);
+    }
+    float growth = mix(1.0, 3.0, smoothstep(0.0, 0.28, t));
+    float w = width * growth;
+    float h = height * growth;
+
+    // Faces the camera from every angle (a fireball is round), centred half
+    // its height above the origin: from eye level its bottom edge stays on
+    // the origin and it rises as it grows, as before; from above it is a
+    // full fireball rather than an edge-on card.
+    vec3 right = normalize(vec3(view[0][0], view[1][0], view[2][0]));
+    vec3 up = normalize(vec3(view[0][1], view[1][1], view[2][1]));
+    vec3 centre = iPosStart.xyz + vec3(0.0, 0.5 * h, 0.0);
+    vec3 worldPos = centre + right * (aPos.x * w) + up * (aPos.y * h);
+    vec4 viewPos = view * vec4(worldPos, 1.0);
+    gl_Position = projection * viewPos;
+
+    vUV = aPos + 0.5;
+    vWorldPos = worldPos;
+    vDepth = -viewPos.z;
+    vSoftRange = max(0.25 * min(w, h), 1.0);
+    vT = t;
+    vColor = iColor.rgb;
+    vIntensity = iSize.z;
+}
+""" % {'wrap': EXPLOSION_TIME_WRAP, 'preview_t': EXPLOSION_PREVIEW_T}
+
+DEFAULT_SHADERS['effect.frag'] = """#version 330 core
+precision mediump float;
+
+out vec4 FragColor;
+
+in highp vec2 vUV;
+in highp vec3 vWorldPos;
+in highp float vDepth;
+in highp float vSoftRange;
+in highp float vT;
+in vec3 vColor;
+in float vIntensity;
+
+uniform sampler2D explosion_texture;
+uniform highp sampler2D uSceneDepth;
+uniform int uSoft;
+uniform highp vec4 uViewport;
+uniform highp vec2 uDepthParams;   // projection[3][2], projection[2][2]
+""" + FOG_GLSL + """
+const float SHEET_COLUMNS = %(columns).1f;
+const float FRAME_COUNT = %(frames).1f;
+const vec2 CELL = vec2(%(cell_u).6f, %(cell_v).6f);   // one frame, in UV
+const float SHEET_TOP = %(top).6f;   // sheet top edge to the first row, in UV
+
+vec2 atlasUV(vec2 localUV, float frame) {
+    float column = mod(frame, SHEET_COLUMNS);
+    float row = floor(frame / SHEET_COLUMNS);            // from the top
+    // The image's top edge is v = 1.
+    float cellTop = 1.0 - SHEET_TOP - row * CELL.y;
+    return vec2((column + localUV.x) * CELL.x,
+                cellTop - (1.0 - localUV.y) * CELL.y);
+}
+
+void main() {
+    if (vIntensity <= 0.0) discard;
+    float t = vT;
+
+    // Every frame, each blended into the next: frame n is whole at
+    // (n + 0.5) / FRAME_COUNT. Blended premultiplied, so a frame's clear
+    // texels add no colour to the other's.
+    float p = clamp(t * FRAME_COUNT - 0.5, 0.0, FRAME_COUNT - 1.0);
+    float f0 = floor(p);
+    float k = p - f0;
+    vec4 a = texture(explosion_texture, atlasUV(vUV, f0));
+    vec4 b = texture(explosion_texture, atlasUV(vUV, min(f0 + 1.0, FRAME_COUNT - 1.0)));
+    float sheetAlpha = mix(a.a, b.a, k);
+    if (sheetAlpha < 0.02) discard;
+    vec3 sheetRGB = mix(a.rgb * a.a, b.rgb * b.a, k) / sheetAlpha;
+
+    float envelope = 1.0 - smoothstep(0.70, 1.0, t);
+    float flash = exp(-t * t * 48.0);
+    float burst = 1.0 + flash * 2.2;
+    vec3 tint = mix(vec3(1.0), max(vColor, vec3(0.001)), 0.35);
+    vec3 rgb = sheetRGB * tint * vIntensity * burst;
+    float alpha = sheetAlpha * envelope;
+
+    if (uSoft != 0) {
+        // Soft edge: fade where the scene is just behind the fireball, so a
+        // floor or wall it passes through leaves no hard line.
+        highp vec2 uv = (gl_FragCoord.xy - uViewport.xy) / uViewport.zw;
+        highp float d = texture(uSceneDepth, uv).r * 2.0 - 1.0;
+        highp float sceneDepth = uDepthParams.x / (d + uDepthParams.y);
+        alpha *= clamp((sceneDepth - vDepth) / vSoftRange, 0.0, 1.0);
+    }
+    if (alpha < 0.01) discard;
+    FragColor = vec4(applyFog(rgb, vWorldPos), alpha);
+}
+""" % {'columns': EXPLOSION_SHEET_COLUMNS, 'frames': EXPLOSION_FRAME_COUNT,
+       'cell_u': EXPLOSION_CELL_UV[0], 'cell_v': EXPLOSION_CELL_UV[1],
+       'top': EXPLOSION_SHEET_TOP_UV}
+
 
 # ==============================================================================
 # STATELESS GPU PARTICLES (an Effect's emitter)

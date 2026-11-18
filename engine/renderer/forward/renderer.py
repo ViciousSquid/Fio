@@ -192,13 +192,14 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._sprite_warm_seen = {}
         # GPU-instanced EXPLOSION buffer. FIRE uses the ordinary instanced
         # billboard texture path, with one draw per animated texture frame.
+        # Explosion rows hold no time, so they are uploaded only when they
+        # change (_explosion_uploaded: the rows last uploaded, or None).
         self._effect_instance_vbo = None
         self._effect_instance_vao = None
         self._effect_instance_capacity = 0
-        self._effect_instance_data = np.empty((0, 16), dtype=np.float32)
-        self._effect_order_scratch = np.empty(0, dtype=np.int32)
-        self._effect_depth_scratch = np.empty(0, dtype=np.float64)
-        self._effect_depth_aux_scratch = np.empty(0, dtype=np.float64)
+        self._effect_instance_data = np.empty(
+            (0, self.EFFECT_INSTANCE_FLOATS), dtype=np.float32)
+        self._explosion_uploaded = None
         # Stateless particle emitters: one row per emitter, uploaded only when
         # a row or the draw order changes (draw_particles_instanced).
         self._particle_instance_vbo = None
@@ -1263,6 +1264,8 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._particle_instance_vao = None
         self._sprite_instance_vbo = None
         self._effect_instance_vbo = None
+        self._effect_instance_capacity = 0
+        self._explosion_uploaded = None
         self._particle_instance_vbo = None
         self._particle_instance_capacity = 0
         self._particle_uploaded = None

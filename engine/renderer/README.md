@@ -22,6 +22,7 @@ Inside `forward/`:
 | `overlay/` | The **Overlay** display mode: Textured with the triangles drawn over it. |
 | `passes.py` | Passes every mode shares: glow, terrain, models, sprites, effects, water, glass, fog. |
 | `instancing.py`, `lighting.py`, `shaders.py`, `decals.py`, `portals.py`, `occlusion.py` | Instance buffers, lights and shadows, shaders, decals, portals, occlusion queries. |
+| `explosion_rows.py` | EXPLOSION instance rows, laid out by `engine.shaders.EXPLOSION_INSTANCE_LAYOUT` (which also generates the shader's attributes); a loop for a handful, NumPy for many. |
 
 More detail is on the wiki:
 

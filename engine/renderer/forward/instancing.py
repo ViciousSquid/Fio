@@ -14,7 +14,7 @@ from OpenGL.raw.GL.VERSION.GL_2_0 import (
 
 from engine import change_detection, render_table
 from engine.render_keys import KeyLayout, sort_into_runs
-from engine.shaders import PARTICLES_PER_EMITTER
+from engine.shaders import EXPLOSION_INSTANCE_LAYOUT, PARTICLES_PER_EMITTER
 
 # The render key every brush pass sorts by. Two fields, because two things
 # cannot vary inside one draw: the bound texture, and which of the cube's six
@@ -579,6 +579,8 @@ class InstancingMixin:
             None,
             gl.GL_DYNAMIC_DRAW,
         )
+        # The buffer was reallocated: what it held is gone.
+        self._explosion_uploaded = None
 
     def _ensure_effect_instance_vao(self):
         if self._effect_instance_vao is not None:
@@ -590,16 +592,14 @@ class InstancingMixin:
         gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        # One vec4 per entry of EXPLOSION_INSTANCE_LAYOUT, from location 1:
+        # the layout effect.vert's declarations are generated from.
         stride = self.EFFECT_INSTANCE_FLOATS * 4
-        for location, size, offset in (
-            (1, 3, 0),
-            (2, 4, 12),
-            (3, 4, 28),
-            (4, 4, 44),
-        ):
+        for vec in range(len(EXPLOSION_INSTANCE_LAYOUT)):
+            location = vec + 1
             gl.glVertexAttribPointer(
-                location, size, gl.GL_FLOAT, gl.GL_FALSE,
-                stride, ctypes.c_void_p(offset)
+                location, 4, gl.GL_FLOAT, gl.GL_FALSE,
+                stride, ctypes.c_void_p(vec * 16)
             )
             gl.glEnableVertexAttribArray(location)
             gl.glVertexAttribDivisor(location, 1)

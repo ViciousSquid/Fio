@@ -264,9 +264,9 @@ def test_explosion_preview_is_editor_only_and_static_at_frame_ten():
     assert bool(table.effect_preview[0])
     assert not bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
-    # Human-facing frame 10 is atlas index 9; the midpoint of that frame keeps
-    # the shader's floor(t * 16) selection unambiguous.
-    expected_elapsed = 0.5 * (9.5 / 16.0)
+    # Human-facing frame 10 is atlas index 9, shown whole (unblended) at
+    # (10 - 0.5) / 17 of the lifetime: the sheet has 17 frames.
+    expected_elapsed = 0.5 * (9.5 / 17.0)
     assert abs(float(table.effect_elapsed[0]) - expected_elapsed) < 1e-6
 
     table.begin_frame([explosion], epoch=1, effect_runtime=True)
@@ -313,7 +313,11 @@ def test_fire_preview_flag_is_available_for_the_same_effect_primitive():
     np.testing.assert_allclose(table.sprite_size[0], (32.0, 46.0))
 
 
-def test_explosion_light_is_a_short_runtime_flash_not_a_constant_source():
+def test_explosion_light_flashes_then_fades_out_with_the_fireball():
+    """Off until triggered; a flash above the authored intensity; on for the
+    whole explosion, easing to nothing by its end (no step down while still
+    bright, as the old 0.12 s cut-off had); off once it is over."""
+    import time
     explosion = Effect(properties={
         "effect_type": EFFECT_EXPLOSION,
         "lifetime": 0.5,
@@ -322,19 +326,35 @@ def test_explosion_light_is_a_short_runtime_flash_not_a_constant_source():
     table.begin_frame([explosion], epoch=1, effect_runtime=True)
     assert not bool(table.effect_active[0])
     assert not bool(table.light_enabled[0])
+    base = float(table.effect_params[0, 2])
 
-    import time
-    table.effect_spawn_time[0] = time.perf_counter() - 0.02
-    table.effect_active[0] = True
-    table.begin_frame([explosion], epoch=1, effect_runtime=True)
-    assert bool(table.effect_alive[0])
-    assert bool(table.light_enabled[0])
-    assert float(table.light_params[0, 0]) > float(table.effect_params[0, 2])
+    def light_at(elapsed):
+        table.effect_spawn_time[0] = time.perf_counter() - elapsed
+        table.effect_active[0] = True
+        table.begin_frame([explosion], epoch=1, effect_runtime=True)
+        return bool(table.light_enabled[0]), float(table.light_params[0, 0])
 
-    table.effect_spawn_time[0] = time.perf_counter() - 0.25
-    table.effect_active[0] = True
-    table.begin_frame([explosion], epoch=1, effect_runtime=True)
-    assert not bool(table.light_enabled[0])
+    on, flash = light_at(0.02)
+    assert on and flash > base
+    on, middle = light_at(0.25)            # past the old cut-off: still lit
+    assert on and 0.0 < middle < flash
+    on, late = light_at(0.49)
+    assert on and late < 0.01 * base       # all but out just before the end
+    on, _ = light_at(0.6)
+    assert not on and not bool(table.effect_alive[0])
+
+
+def test_explosion_light_scale_is_continuous_and_ends_at_zero():
+    from engine.effect_entity import explosion_light_scale
+    life = 0.8
+    samples = [explosion_light_scale(life * i / 400.0, life) for i in range(401)]
+    assert samples[0] == pytest.approx(3.0)            # 1 + GAIN at the trigger
+    assert samples[-1] == 0.0
+    assert all(s >= 0.0 for s in samples)
+    # No jumps: neighbouring samples 2 ms apart differ by little.
+    assert max(abs(a - b) for a, b in zip(samples, samples[1:])) < 0.15
+    # Falls throughout: never brighter later.
+    assert all(b <= a + 1e-12 for a, b in zip(samples, samples[1:]))
 
 
 def test_effect_is_projected_as_one_dense_visual_and_light_primitive():

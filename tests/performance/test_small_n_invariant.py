@@ -67,6 +67,10 @@ CROSSOVERS = {
         "tests/performance/test_mover_threshold_benchmark.py",
     ("engine/terrain.py", "Terrain.STAMP_VECTOR_MIN"):
         "tests/performance/test_terrain_kernel_benchmark.py",
+    ("engine/renderer/forward/explosion_rows.py", "EXPLOSION_ROWS_VECTOR_FROM"):
+        "tests/engine/test_explosion.py::test_explosion_row_paths_agree",
+    ("engine/entity_table.py", "EXPLOSION_LIGHT_VECTOR_FROM"):
+        "tests/engine/test_explosion.py::test_explosion_light_paths_agree",
 }
 
 #: Base-class defaults that subclasses override (0: the base plans always).
@@ -251,3 +255,48 @@ def test_glow_remap_threshold_benchmark():
                               decals._remap_glow_rows_table(rows.copy(), shared, lut)))
         mark = "  <- loop" if loop < table else ""
         print(f" {n:6d} {loop:7.1f} us {table:7.1f} us{mark}")
+
+
+# ---------------------------------------------------------------------------
+# Explosions: their instance rows (engine/renderer/forward/explosion_rows.py)
+# and their lights (engine/entity_table.py). Both paths are held to the same
+# answers in tests/engine/test_explosion.py.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.benchmark
+@pytest.mark.slow
+def test_explosion_threshold_benchmark():
+    """The tables EXPLOSION_ROWS_VECTOR_FROM's and
+    EXPLOSION_LIGHT_VECTOR_FROM's comments quote. Nothing asserted."""
+    pytest.importorskip("PyQt5")
+    pytest.importorskip("OpenGL")
+    from editor.things import Effect
+    from engine.entity_table import EntityTable, _CLOCK_ORIGIN
+    from engine.renderer.forward import explosion_rows as er
+
+    def best(fn, repeat=5, number=2000):
+        times = []
+        for _ in range(repeat):
+            t0 = time.perf_counter()
+            for _ in range(number):
+                fn()
+            times.append((time.perf_counter() - t0) / number * 1e6)
+        return min(times)
+
+    print("\n explosions  rows: loop    NumPy   light: loop    NumPy")
+    for n in (1, 4, 8, 16, 32, 48, 128):
+        things = [Effect(pos=(i * 13.0, 0.0, -i * 7.0),
+                         properties={"effect_type": "EXPLOSION", "preview": True})
+                  for i in range(n)]
+        table = EntityTable()
+        table.begin_frame(things, epoch=1, effect_runtime=False)
+        slots = np.asarray(table.effect_slots, dtype=np.int32)
+        loop = best(lambda: er._rows_loop(table, slots, (5.0, 3.0), _CLOCK_ORIGIN))
+        vec = best(lambda: er._rows_table(table, slots, (5.0, 3.0), _CLOCK_ORIGIN))
+        e = np.linspace(0, 0.5, n).astype(np.float32)
+        life = np.full(n, 0.5, np.float32)
+        on = np.ones(n, bool)
+        power = np.full(n, 2.5, np.float32)
+        light_loop = best(lambda: table._explosion_lights_loop(slots, e, life, on, on, power))
+        light_vec = best(lambda: table._explosion_lights_table(slots, e, life, on, on, power))
+        print(f" {n:6d}  {loop:9.1f} us {vec:6.1f} us  {light_loop:9.1f} us {light_vec:6.1f} us")

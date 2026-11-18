@@ -11,7 +11,7 @@ import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 
 from engine import shaders
-from engine.shaders import DEFAULT_SHADERS
+from engine.shaders import DEFAULT_SHADERS, EXPLOSION_INSTANCE_FLOATS
 from engine.sprite_layers import SpriteLayers
 from ..core.resources import UniformCache, _RENDERER_PREFIX
 
@@ -455,8 +455,9 @@ vec3 woundedColour(vec3 colour, vec2 uv, vec2 wound) {
                                                            'use_fixed_facing']):
             print(f'{_RENDERER_PREFIX} Layered sprite shader compiled successfully.')
 
-    # One EXPLOSION Effect row per instance.
-    EFFECT_INSTANCE_FLOATS = 16
+    # One EXPLOSION Effect row per instance (engine.shaders'
+    # EXPLOSION_INSTANCE_LAYOUT).
+    EFFECT_INSTANCE_FLOATS = EXPLOSION_INSTANCE_FLOATS
 
     #: One emitter row per PARTICLES_PER_EMITTER particle instances: five
     #: vec4s (see particle.vert's iPosSeed .. iLight).
@@ -470,8 +471,11 @@ vec3 woundedColour(vec3 colour, vec2 uv, vec2 wound) {
             'effect_instanced',
             vert,
             frag,
-            extra_uniforms=['projection', 'view', 'explosion_texture'],
+            extra_uniforms=['projection', 'view', 'explosion_texture',
+                            'uTime', 'uSceneDepth', 'uSoft', 'uViewport',
+                            'uDepthParams'],
         ):
+            self.uniforms['effect_instanced'].preload(self.ENV_UNIFORMS)
             print(f'{_RENDERER_PREFIX} Effect instancing shader compiled successfully.')
         self._compile_instanced_particle_shader()
 

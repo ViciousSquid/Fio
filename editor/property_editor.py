@@ -12,7 +12,8 @@ from PyQt5.QtGui import QColor, QIcon
 from PyQt5 import sip
 from engine.items import ITEM_IDS
 from engine.effect_entity import (EFFECT_TYPES, EMITTER_NONE, EMITTER_PRESETS,
-                                  EMITTER_SCALE_RANGE, PARTICLES_DEFAULT_EMITTER,
+                                  EMITTER_SCALE_RANGE, EXPLOSION_DEFAULT_EMITTER,
+                                  PARTICLES_DEFAULT_EMITTER,
                                   PARTICLES_DEFAULT_SIZE)
 from engine.prop_entity import (MODEL_PRESETS, model_preset_name, model_settings,
                                  normalise_collect_type)
@@ -3084,6 +3085,10 @@ class PropertyEditor(QWidget):
                     lifetime = 0.5
                 if lifetime < 0.05:
                     self.update_object_prop('lifetime', 0.5)
+                # A burst of sparks with the fireball, unless the Effect
+                # already has an emitter of its own.
+                if thing.properties.get('emitter', EMITTER_NONE) == EMITTER_NONE:
+                    emitter_combo.setCurrentText(EXPLOSION_DEFAULT_EMITTER)
             refresh_lifetime()
 
         type_combo.currentTextChanged.connect(effect_type_changed)

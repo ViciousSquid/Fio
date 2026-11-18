@@ -527,14 +527,14 @@ class GLESRenderer:
         if int(table.effect_type[row]) != 1:
             return self._load_texture(name, elapsed, bool(table.effect_custom_loop[row]), phase), 1., (1,1,1,1)
         import math
+        from engine.effect_entity import EXPLOSION_FRAME_COUNT as frames, explosion_cell_box
         t = max(0., min(1., float(table.effect_elapsed[row])/max(.001,float(table.effect_lifetime[row]))))
-        index = min(15, int(t*16))
+        index = min(frames-1, int(t*frames))
         key = name+'#explosion'+str(index)
         if key not in self._images.cache:
             atlas = self._images.frames(name)[0][0]
-            w, h = atlas.width//5, atlas.height//4
-            x, y = (index%5)*w, (index//5)*h
-            self._images.cache[key] = ([atlas.crop((x,y,x+w,y+h))], [.1])
+            box = explosion_cell_box(index, atlas.width, atlas.height)
+            self._images.cache[key] = ([atlas.crop(box)], [.1])
         q = max(0., min(1., t/.28)); growth = 1+2*q*q*(3-2*q)
         fade = max(0., min(1., (t-.7)/.3)); alpha = 1-fade*fade*(3-2*fade)
         strength = float(table.effect_params[row,1])*(1+math.exp(-t*t*48)*2.2)

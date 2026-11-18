@@ -18,6 +18,7 @@ execution state and the renderer consumes it numerically.
 
 from __future__ import annotations
 
+import math
 import random
 
 try:
@@ -52,6 +53,62 @@ EMITTER_SCALE_RANGE = (0.1, 8.0)
 #: What a PARTICLES Effect starts as when the map does not say otherwise.
 PARTICLES_DEFAULT_EMITTER = "SMOKE"
 PARTICLES_DEFAULT_SIZE = (32.0, 8.0)
+#: What an EXPLOSION is given when the editor switches an Effect to it and it
+#: has no emitter of its own: a burst of sparks with the fireball.
+EXPLOSION_DEFAULT_EMITTER = "SPARKS"
+
+#: EXPLOSION's sprite sheet (assets/textures/effects/explosion.png): a grid of
+#: EXPLOSION_SHEET_COLUMNS x EXPLOSION_SHEET_ROWS square cells, read left to
+#: right, top to bottom, of which the first EXPLOSION_FRAME_COUNT hold frames
+#: (the last, a pale wisp of smoke, ends the animation; the rest are empty).
+#: The cells do not fill the sheet: each is EXPLOSION_CELL_UV of the sheet's
+#: width and height (160 x 160 of 800 x 800), and the grid starts
+#: EXPLOSION_SHEET_TOP_UV down from its top edge, with as much again below.
+#: Reading it as four rows filling the height cut every frame through its art.
+EXPLOSION_SHEET_COLUMNS = 5
+EXPLOSION_SHEET_ROWS = 4
+EXPLOSION_CELL_UV = (0.2, 0.2)
+EXPLOSION_SHEET_TOP_UV = 0.1
+
+
+def explosion_cell_box(frame, width, height):
+    """Frame *frame*'s cell (from 0) in a *width* x *height* pixel sheet, as
+    ``(left, top, right, bottom)`` pixels, top-left origin."""
+    column, row = frame % EXPLOSION_SHEET_COLUMNS, frame // EXPLOSION_SHEET_COLUMNS
+    cell_w = width * EXPLOSION_CELL_UV[0]
+    cell_h = height * EXPLOSION_CELL_UV[1]
+    left = column * cell_w
+    top = height * EXPLOSION_SHEET_TOP_UV + row * cell_h
+    return (int(round(left)), int(round(top)),
+            int(round(left + cell_w)), int(round(top + cell_h)))
+EXPLOSION_FRAME_COUNT = 17
+#: The editor's Preview shows this frame, numbered from 1 for authoring.
+EXPLOSION_PREVIEW_FRAME = 10
+#: Playback position (0..1) at which the Preview frame is shown whole: frame
+#: ``n`` (from 1) is unblended at ``(n - 0.5) / EXPLOSION_FRAME_COUNT``.
+EXPLOSION_PREVIEW_T = (EXPLOSION_PREVIEW_FRAME - 0.5) / EXPLOSION_FRAME_COUNT
+
+#: An explosion's light: ``light_intensity`` times a flash of
+#: (1 + GAIN * exp(-elapsed / DECAY)), easing to nothing from FADE_FROM of
+#: the lifetime to its end, where the fireball has faded too -- on for the
+#: whole explosion, and never switched off while still bright.
+EXPLOSION_FLASH_GAIN = 2.0
+EXPLOSION_FLASH_DECAY = 0.035
+EXPLOSION_LIGHT_FADE_FROM = 0.35
+
+
+def explosion_light_scale(elapsed, lifetime):
+    """How bright an explosion's light is, *elapsed* seconds into a
+    *lifetime*, as a multiple of its ``light_intensity`` (0 at the end)."""
+    t = elapsed / lifetime if lifetime > 0.0 else 1.0
+    if t >= 1.0:
+        return 0.0
+    flash = 1.0 + EXPLOSION_FLASH_GAIN * math.exp(
+        -max(elapsed, 0.0) / EXPLOSION_FLASH_DECAY)
+    if t <= EXPLOSION_LIGHT_FADE_FROM:
+        return flash
+    u = (t - EXPLOSION_LIGHT_FADE_FROM) / (1.0 - EXPLOSION_LIGHT_FADE_FROM)
+    return flash * (1.0 - u * u * (3.0 - 2.0 * u))
 EFFECT_ORB_LIGHT_COLOUR = [74, 155, 255]
 EFFECT_FIRE_TEXTURES = tuple(
     f"assets/textures/effects/fire{i:02d}.gif" for i in range(1, 6)

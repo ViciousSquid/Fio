@@ -80,3 +80,29 @@ def test_switching_to_particles_keeps_a_chosen_emitter(panel):
     type_combo.setCurrentText("PARTICLES")
     assert effect.properties["emitter"] == "SPARKS"
     assert emitter_combo.currentText() == "SPARKS"
+
+
+def test_switching_to_explosion_gives_a_burst_of_sparks(panel):
+    effect = Effect(properties={"effect_type": "FIRE"})
+    type_combo, emitter_combo, _ = _show(panel, effect)
+    type_combo.setCurrentText("EXPLOSION")
+    assert effect.properties["effect_type"] == "EXPLOSION"
+    assert effect.properties["emitter"] == "SPARKS"
+    assert emitter_combo.currentText() == "SPARKS"
+
+
+def test_switching_to_explosion_keeps_a_chosen_emitter(panel):
+    effect = Effect(properties={"effect_type": "FIRE", "emitter": "SMOKE"})
+    type_combo, emitter_combo, _ = _show(panel, effect)
+    type_combo.setCurrentText("EXPLOSION")
+    assert effect.properties["emitter"] == "SMOKE"
+    assert emitter_combo.currentText() == "SMOKE"
+
+
+def test_a_map_explosion_without_an_emitter_keeps_none(panel):
+    """Only the editor's switch adds sparks: an EXPLOSION loaded from a map
+    with no emitter shows NONE, and showing it changes nothing."""
+    effect = Effect(properties={"effect_type": "EXPLOSION"})
+    _, emitter_combo, _ = _show(panel, effect)
+    assert effect.properties["emitter"] == "NONE"
+    assert emitter_combo.currentText() == "NONE"

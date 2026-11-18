@@ -35,7 +35,8 @@ from engine.entity_table import EntityTable                     # noqa: E402
 
 
 def _per_tick_copy_advance(self, effect_runtime, effect_store=None):
-    """The previous _advance_effects, verbatim: copies every tick."""
+    """The previous _advance_effects, verbatim but for the explosion light
+    (one shared function since): copies every tick."""
     effect_ls = self.effect_slots
     now = et.time.perf_counter()
 
@@ -89,31 +90,19 @@ def _per_tick_copy_advance(self, effect_runtime, effect_store=None):
     if explosion.any():
         explosion_slots = effect_ls[explosion]
         if effect_runtime:
-            explosion_elapsed = elapsed[explosion]
-            flash_active = (
-                explosion_active[explosion]
-                & (explosion_elapsed < np.minimum(
-                    lifetime[explosion], 0.12))
-            )
-            decay = np.exp(-explosion_elapsed / 0.035).astype(
-                np.float32
-            )
-            self.light_enabled[explosion_slots] = (
-                self.effect_light_enabled[explosion_slots]
-                & flash_active
-            )
-            self.light_params[explosion_slots, 0] = (
-                self.effect_params[explosion_slots, 2]
-                * (1.0 + 2.0 * decay)
-            )
+            # The light curve itself is pinned by test_effect_primitive; here
+            # the reference lights through the same function, so this test
+            # keeps pinning what it is about: publication.
+            self._explosion_lights(
+                explosion_slots, elapsed[explosion], lifetime[explosion],
+                explosion_active[explosion],
+                self.effect_light_enabled[explosion_slots],
+                self.effect_params[explosion_slots, 2])
         else:
             self.light_enabled[explosion_slots] = False
 
     if preview_explosion.any():
-        preview_t = (
-            (float(et._EXPLOSION_PREVIEW_FRAME) - 0.5)
-            / et._EXPLOSION_FRAME_COUNT
-        )
+        preview_t = et.EXPLOSION_PREVIEW_T
         elapsed = np.where(
             preview_explosion,
             (lifetime * preview_t).astype(np.float32),
