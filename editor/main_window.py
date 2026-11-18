@@ -6310,7 +6310,8 @@ class MainWindow(QMainWindow):
         validation = validate_all_scene_connections(
             self.state.brushes,
             self.state.things,
-            find_group=lambda name: resolve_group_target(self.state, name),
+            find_group=lambda name, group_id='': resolve_group_target(
+                self.state, name, group_id),
         )
 
         problems = validation['problems']

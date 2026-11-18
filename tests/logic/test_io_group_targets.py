@@ -20,7 +20,8 @@ from editor.io_system import (                            # noqa: E402
     group_input_names, resolve_group_target, validate_connection,
     validate_scene_connections)
 from editor.things import Light, Speaker                  # noqa: E402
-from engine.io_groups import group_members, group_names   # noqa: E402
+from engine.io_groups import (                            # noqa: E402
+    group_members, group_members_by_id, group_names, groups)
 from engine.logic_thread import LogicThread               # noqa: E402
 from engine.threaded_game_state import ThreadedGameState  # noqa: E402
 from engine.view_filters import ViewFilters               # noqa: E402
@@ -49,6 +50,49 @@ def scene():
 def _wire(scene, target, input_name, **kw):
     io.add_connection(scene.button, OutputConnection(
         output_name="OnTrigger", target_name=target, input_name=input_name, **kw))
+
+
+def _hall(scene):
+    return scene.state.view_filters.visgroups[0]
+
+
+def test_a_group_has_its_own_uuid_saved_with_the_map(scene):
+    group = _hall(scene)
+    assert len(group.id) == 36 and group.id.count('-') == 4
+    saved = scene.state.view_filters.to_level_data()['visgroups'][0]
+    assert saved['id'] == group.id
+    again = ViewFilters()
+    again.load_level_data({'visgroups': [saved]})
+    assert again.visgroups[0].id == group.id
+    # A map from before group ids: each group is given one.
+    old = ViewFilters()
+    old.load_level_data({'visgroups': [{'name': 'x', 'ids': []}]})
+    assert old.visgroups[0].id
+
+
+def test_the_group_uuid_is_the_target_and_survives_a_rename(scene):
+    group = _hall(scene)
+    _wire(scene, "hall lights", "TurnOff", target_id=group.id)
+    scene.state.view_filters.rename_visgroup(group, "corridor")
+    scene.logic.io_manager.fire_output(scene.button, "OnTrigger")
+    assert [lamp.properties['state'] for lamp in scene.lamps] == ['off'] * 3
+
+
+def test_the_uuid_tells_apart_two_groups_with_one_name(scene):
+    other = scene.state.view_filters.add_visgroup("hall lights", [scene.outside])
+    _wire(scene, "hall lights", "TurnOff", target_id=other.id)
+    scene.logic.io_manager.fire_output(scene.button, "OnTrigger")
+    assert scene.outside.properties['state'] == 'off'
+    assert [lamp.properties['state'] for lamp in scene.lamps] == ['on'] * 3
+    assert group_members_by_id(scene.state, other.id) == [scene.outside]
+    assert (other.id, "hall lights") in groups(scene.state)
+
+
+def test_an_entity_uuid_still_wins(scene):
+    _wire(scene, "hall lights", "TurnOff", target_id=scene.outside.properties['id'])
+    scene.logic.io_manager.fire_output(scene.button, "OnTrigger")
+    assert scene.outside.properties['state'] == 'off'
+    assert [lamp.properties['state'] for lamp in scene.lamps] == ['on'] * 3
 
 
 def test_turn_off_reaches_every_light_in_the_group(scene):
@@ -154,17 +198,20 @@ def test_the_saved_visgroups_are_groups_in_the_standalone_player():
     """The player has no editor: it loads the map's visgroups itself
     (player/world.py), and group membership reads them the same way."""
     lamps = [make_thing(Light, f"lamp{i}") for i in range(2)]
-    data = {'visgroups': [{'name': 'bank', 'visible': True,
+    data = {'visgroups': [{'id': 'bank-uuid', 'name': 'bank', 'visible': True,
                            'ids': [lamp.properties['id'] for lamp in lamps]}]}
     filters = ViewFilters()
     filters.load_level_data(data)
     world = SimpleNamespace(view_filters=filters, brushes=[], things=lamps)
     assert group_members(world, 'bank') == lamps
+    assert group_members_by_id(world, 'bank-uuid') == lamps
 
 
 def test_validation_accepts_a_group_and_judges_its_inputs(scene):
     group = resolve_group_target(scene.state, "hall lights")
     assert isinstance(group, GroupTarget)
+    assert group.id == _hall(scene).id
+    assert resolve_group_target(scene.state, "", group.id).name == "hall lights"
     assert "TurnOff" in group_input_names(group.members)
 
     ok = OutputConnection(output_name="OnTrigger", target_name="hall lights",
@@ -178,11 +225,12 @@ def test_validation_accepts_a_group_and_judges_its_inputs(scene):
 
 
 def test_scene_validation_resolves_group_targets(scene):
+    _wire(scene, "renamed long ago", "TurnOff", target_id=_hall(scene).id)
     _wire(scene, "hall lights", "TurnOff")
     _wire(scene, "ghosts", "TurnOff")
     report = validate_scene_connections(
         scene.state.brushes, scene.state.things,
-        find_group=lambda name: resolve_group_target(scene.state, name))
+        find_group=lambda name, gid='': resolve_group_target(scene.state, name, gid))
     missing = [conn.target_name for _e, conn, code, _m in report
                if code == PROBLEM_MISSING_TARGET]
     assert missing == ["ghosts"]

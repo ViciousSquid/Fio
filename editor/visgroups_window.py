@@ -486,6 +486,9 @@ class VisgroupsWindow(QWidget):
             for group in self.filters.visgroups:
                 item = QTreeWidgetItem([group.name, str(self._member_count(group))])
                 item.setData(0, Qt.UserRole, group)
+                # The UUID an I/O connection targeting the group stores.
+                item.setToolTip(0, "Group ID: %s\nI/O can target this group: every "
+                                   "member receives the input." % group.id)
                 item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
                 item.setCheckState(0, Qt.Checked if group.visible else Qt.Unchecked)
                 self.group_tree.addTopLevelItem(item)

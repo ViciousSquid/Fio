@@ -446,27 +446,28 @@ class SceneHierarchy(QWidget):
                 for column in (0, 1):
                     item.setBackground(column, background)
 
-    def group_names_of(self, objects):
-        """The groups -- visgroups, then brush groups -- any of *objects* is
-        in, by name, without repeats."""
+    def groups_of(self, objects):
+        """``(id, name)`` of the groups any of *objects* is in: visgroups by
+        their UUID, then brush groups (id '')."""
         filters = self.main_window.state.view_filters
-        names = []
+        found = []
         for obj in objects:
             for group in filters.visgroups_of(obj):
-                if group.name not in names:
-                    names.append(group.name)
+                if (group.id, group.name) not in found:
+                    found.append((group.id, group.name))
         for obj in objects:
             name = brush_groups.group_of(obj) if isinstance(obj, dict) else ''
-            if name and name not in names:
-                names.append(name)
-        return names
+            if name and ('', name) not in found:
+                found.append(('', name))
+        return found
 
-    def select_group(self, name):
-        """Select every member of the group called *name* -- what an I/O
-        connection targeting that name reaches (engine.io_groups)."""
-        from engine.io_groups import group_members
+    def select_group(self, name='', group_id=''):
+        """Select every member of a group -- what an I/O connection targeting
+        it reaches (engine.io_groups): the visgroup whose UUID is *group_id*,
+        else the group called *name*."""
+        from engine.io_groups import resolve_group
         main_window = self.main_window
-        members = group_members(main_window.state, name) or []
+        members = resolve_group(main_window.state, name, group_id) or []
         main_window.set_selected_objects(members)
         main_window.update_views()
         return members
@@ -474,14 +475,15 @@ class SceneHierarchy(QWidget):
     def _add_select_group_actions(self, menu, objects):
         """"Select Group 'name'" for each group the clicked objects are in."""
         actions = []
-        for name in self.group_names_of(objects):
+        for group_id, name in self.groups_of(objects):
             action = menu.addAction("Select Group '%s'" % name)
             action.setToolTip(
-                "Select every member of this group. An I/O connection whose "
-                "target is '%s' sends its input to all of them; members "
-                "without that input ignore it." % name)
+                "Select every member of this group. An I/O connection that "
+                "targets the group sends its input to all of them; members "
+                "without that input ignore it."
+                + ("\nGroup ID: %s" % group_id if group_id else ""))
             action.triggered.connect(
-                lambda _checked=False, n=name: self.select_group(n))
+                lambda _checked=False, n=name, g=group_id: self.select_group(n, g))
             actions.append(action)
         return actions
 

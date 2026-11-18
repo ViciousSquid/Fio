@@ -36,7 +36,7 @@ except ImportError:
     class GroupTarget:          # never constructed without the I/O system
         pass
 
-    def resolve_group_target(state, name):
+    def resolve_group_target(state, name='', group_id=''):
         return None
 
     def group_input_names(members):
@@ -156,6 +156,8 @@ class IOConnectionDialog(QDialog):
         # Identity addressing: the entity explicitly picked as the target (if
         # any) so we can capture its stable UUID even if it is later renamed.
         self._picked_entity = None
+        #: (group UUID, name) of a group picked from the dropdown, or None.
+        self._picked_group = None
 
         self.setWindowTitle(
             "Edit Output Connection" if existing_connection else "Add Output Connection"
@@ -302,6 +304,8 @@ class IOConnectionDialog(QDialog):
         if self._picked_entity is not None and \
                 _entity_name(self._picked_entity) != target_name:
             self._picked_entity = None
+        if self._picked_group is not None and self._picked_group[1] != target_name:
+            self._picked_group = None
 
         self.input_combo.clear()
 
@@ -317,7 +321,7 @@ class IOConnectionDialog(QDialog):
             self.input_combo.addItems(inputs)
         elif target_entity is None:
             # A group: every input some member accepts (the others ignore it).
-            group = resolve_group_target(self.editor_state, target_name)
+            group = self._typed_group(target_name)
             if group is not None:
                 self.input_combo.addItems(group_input_names(group.members))
     
@@ -380,21 +384,23 @@ class IOConnectionDialog(QDialog):
                 menu.addAction(action)
 
         # Groups: one connection reaches every member (engine.io_groups).
-        from engine.io_groups import group_names
-        groups = group_names(self.editor_state) if self.editor_state else []
+        from engine.io_groups import groups as scene_groups
+        groups = scene_groups(self.editor_state) if self.editor_state else []
         if groups:
             if has_items:
                 menu.addSeparator()
             has_items = True
             menu.addSection("GROUPS")
             from functools import partial
-            for name in sorted(groups, key=str.lower):
-                group = resolve_group_target(self.editor_state, name)
+            for group_id, name in sorted(groups, key=lambda g: g[1].lower()):
+                group = resolve_group_target(self.editor_state, name, group_id)
                 count = len(group.members) if group is not None else 0
                 action = QAction(f"{name}  [group: {count}]", self)
-                action.setToolTip("Sends the input to every member; members "
-                                  "without that input ignore it")
-                action.triggered.connect(partial(self._set_target_group, name))
+                action.setToolTip(
+                    "Sends the input to every member; members without that "
+                    "input ignore it."
+                    + (f"\nGroup ID: {group_id}" if group_id else ""))
+                action.triggered.connect(partial(self._set_target_group, name, group_id))
                 menu.addAction(action)
 
         if not has_items:
@@ -407,12 +413,25 @@ class IOConnectionDialog(QDialog):
         if sender:
             menu.exec_(sender.mapToGlobal(sender.rect().bottomLeft()))
 
-    def _set_target_group(self, name):
-        """Target the group called *name*: by name, with no entity id."""
+    def _set_target_group(self, name, group_id=''):
+        """Target a group: its UUID is stored as the connection's target id
+        (a brush group has none, and is targeted by name)."""
         self._picked_entity = None
+        self._picked_group = (group_id, name)
         self.target_edit.setText(name)
         self.target_edit.editingFinished.emit()
         self._update_input_options(name)
+
+    def _typed_group(self, text):
+        """The group the Target field names: the one picked from the
+        dropdown, else a pasted group UUID, else a group name."""
+        if not self.editor_state or not text:
+            return None
+        if self._picked_group is not None and self._picked_group[1] == text:
+            group = resolve_group_target(self.editor_state, text, self._picked_group[0])
+            if group is not None:
+                return group
+        return resolve_group_target(self.editor_state, text, text)
 
     def _set_target_from_entity(self, entity):
         """Set the target from an entity reference, auto-naming if unnamed.
@@ -489,6 +508,15 @@ class IOConnectionDialog(QDialog):
                     # Keep the entity's real name for display when it has one;
                     # otherwise fall back to the UUID so the row isn't blank.
                     return (real_name or typed), typed
+
+        # 3b. A group: picked, its pasted UUID, or its name. Its UUID is
+        # stored, so renaming the group keeps the connection.
+        group = self._typed_group(typed)
+        if group is not None:
+            if self.existing_connection is not None and not group.id and \
+                    getattr(self.existing_connection, 'target_name', '') == typed:
+                return typed, getattr(self.existing_connection, 'target_id', '') or ''
+            return group.name, group.id
 
         # 4. Preserve existing target when editing and the field is unchanged
         if self.existing_connection is not None and \
@@ -767,10 +795,15 @@ class IOEditorWidget(QWidget):
             # stable UUID so a renamed target still shows its *current* name.
             resolved = self._resolve_connection_target(conn)
             if isinstance(resolved, GroupTarget):
-                target_item = QTableWidgetItem(conn.target_name)
-                target_item.setToolTip(
-                    "Group: %d member(s) receive this input; members without "
-                    "it ignore it" % len(resolved.members))
+                # By its UUID, a renamed group shows its current name.
+                target_item = QTableWidgetItem(resolved.name or conn.target_name)
+                tip = ("Group: %d member(s) receive this input; members without "
+                       "it ignore it" % len(resolved.members))
+                if resolved.id:
+                    tip += "\nGroup ID: %s" % resolved.id
+                if resolved.name and resolved.name != conn.target_name:
+                    tip += "\nResolved by ID (was '%s')" % conn.target_name
+                target_item.setToolTip(tip)
             elif resolved is not None:
                 current_name = self._entity_display_name(resolved)
                 target_item = QTableWidgetItem(current_name or conn.target_name)
@@ -842,9 +875,12 @@ class IOEditorWidget(QWidget):
         if not self.editor:
             return None
         state = self.editor.state
+        # As the runtime: entity id, group id, entity name, group name.
         target_id = getattr(conn, 'target_id', '')
         if target_id:
             ent = state.find_entity_by_id(target_id)
+            if ent is None:
+                ent = resolve_group_target(state, '', target_id)
             if ent is not None:
                 return ent
         target_name = getattr(conn, 'target_name', '')

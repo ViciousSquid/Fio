@@ -286,7 +286,7 @@ class IOManager:
         # Entity lookup function - set by logic_thread
         self._find_entity: Optional[Callable] = None
         self._find_entity_by_id: Optional[Callable] = None
-        # finder(name) -> the members of the group called *name* (a list,
+        # finder(name, group_id) -> the members of that group (a list,
         # possibly empty) or None when there is no such group. See
         # set_group_finder.
         self._find_group: Optional[Callable] = None
@@ -395,13 +395,14 @@ class IOManager:
 
     def set_group_finder(self, finder: Callable):
         """
-        Set the function used to find a *group* by name.
-        finder(name: str) -> list of member entities, or None for no group.
+        Set the function used to find a *group*.
+        finder(name: str, group_id: str) -> list of member entities (by the
+        group's UUID when *group_id* is given, else by name), or None.
 
-        A connection whose target names no entity but names a group (a
-        visgroup, or a brush group) delivers its input to every member, in
+        A connection whose target is a group (a visgroup, by its UUID or its
+        name; a brush group, by name) delivers its input to every member, in
         order. A member that does not accept the input ignores it, as any
-        entity does.
+        entity does. Resolution: entity id, group id, entity name, group name.
         """
         self._find_group = finder
     
@@ -591,24 +592,39 @@ class IOManager:
         # Prefer stable-ID lookup when available
         if target_id and self._find_entity_by_id:
             target = self._find_entity_by_id(target_id)
+        # A group's UUID: every member receives the input, each exactly as
+        # if it had been the target.
+        if target is None and target_id and self._find_group:
+            if self._deliver_to_group(self._find_group('', target_id), input_name,
+                                      parameter, source_entity, source_id,
+                                      activator_id):
+                return
         # Fallback to name lookup (legacy maps or missing ID)
         if target is None:
             target = self._find_entity(target_name)
+        # No entity by that name: a group of that name.
         if target is None and target_name and self._find_group:
-            # No entity by that name: a group of that name receives the input
-            # -- every member, each exactly as if it had been the target.
-            members = self._find_group(target_name)
-            if members is not None:
-                for member in list(members):
-                    # '' : the member's own name in loop reports.
-                    self._deliver_input(member, '', input_name, parameter,
-                                        source_entity, source_id, activator_id)
+            if self._deliver_to_group(self._find_group(target_name, ''), input_name,
+                                      parameter, source_entity, source_id,
+                                      activator_id):
                 return
         if target is None:
             debug_log("Error", f"I/O: Target '{target_name}' (id={target_id}) not found!")
             return
         self._deliver_input(target, target_name, input_name, parameter,
                             source_entity, source_id, activator_id)
+
+    def _deliver_to_group(self, members, input_name, parameter,
+                          source_entity, source_id, activator_id):
+        """Deliver to every member of a group; False when *members* is None
+        (there is no such group)."""
+        if members is None:
+            return False
+        for member in list(members):
+            # '' : the member's own name in loop reports.
+            self._deliver_input(member, '', input_name, parameter,
+                                source_entity, source_id, activator_id)
+        return True
 
     def _deliver_input(self, target, target_name, input_name, parameter,
                        source_entity, source_id, activator_id):
@@ -1578,19 +1594,28 @@ class GroupTarget:
     """A connection's target that names a group (engine.io_groups): every
     member receives the input; one without it ignores it."""
 
-    __slots__ = ('name', 'members')
+    __slots__ = ('name', 'id', 'members')
 
-    def __init__(self, name, members):
+    def __init__(self, name, members, group_id=''):
         self.name = name
+        self.id = group_id
         self.members = list(members)
 
 
-def resolve_group_target(state, name):
-    """The :class:`GroupTarget` called *name* in *state* (an editor or world
-    state), or None when no group has that name."""
-    from engine.io_groups import group_members
+def resolve_group_target(state, name='', group_id=''):
+    """The :class:`GroupTarget` a connection names in *state* (an editor or
+    world state): the visgroup whose UUID is *group_id*, else the group
+    called *name*; None when neither is a group. Its ``name`` is the group's
+    current name and its ``id`` its UUID ('' for a brush group)."""
+    from engine.io_groups import (group_id_of, group_members, group_members_by_id,
+                                  group_name_of)
+    members = group_members_by_id(state, group_id)
+    if members is not None:
+        return GroupTarget(group_name_of(state, group_id) or name, members, group_id)
     members = group_members(state, name)
-    return None if members is None else GroupTarget(name, members)
+    if members is None:
+        return None
+    return GroupTarget(name, members, group_id_of(state, name))
 
 
 def group_input_names(members):
@@ -1769,19 +1794,21 @@ def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=No
         # Brush groups live on the brushes; visgroups need the caller's state.
         from types import SimpleNamespace
         scene = SimpleNamespace(brushes=brushes, things=things)
-        find_group = lambda name: resolve_group_target(scene, name)
+        find_group = lambda name, group_id='': resolve_group_target(scene, name, group_id)
 
     def _resolve(conn):
+        # As the runtime does: entity id, group id, entity name, group name.
         target_id = getattr(conn, 'target_id', '')
         if target_id:
             found = find_by_id(target_id)
+            if found is None:
+                found = find_group('', target_id)
             if found is not None:
                 return found
         name = getattr(conn, 'target_name', '') or ''
         found = find_by_name(name)
         if found is None and name:
-            # As the runtime does: a name no entity has may be a group's.
-            found = find_group(name)
+            found = find_group(name, '')
         return found
 
     report = []
