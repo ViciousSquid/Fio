@@ -42,14 +42,6 @@ from .shaders import ShadersMixin
 
 
 
-def nodraw_brushes(table, slots):
-    """The brushes among *slots* with a ``nodraw`` face: 'Solid Lit' draws
-    them textured, so the faces play will not draw stay plain to see."""
-    if table is None or not len(slots):
-        return np.empty(0, dtype=np.int32)
-    ids = table.tex_name_id[slots]
-    return slots[(ids == render_table.TEX_ID_NODRAW).any(axis=1)]
-
 class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin, DecalsMixin,
                       DistanceMixin, OcclusionMixin, ShadersMixin, RendererCore):
     """Fio's forward OpenGL 3.3 renderer, registered as ``"Forward"``.
@@ -782,7 +774,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         if not self._probe_capture_pass and not self._portal_scene_pass:
             self._update_reflection_probes(config)
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
-        # 'Points' or 'Wireframe': geometry drawn for depth, then coloured by
+        # 'Wireframe': geometry drawn as lines for depth, then coloured by
         # distance in one pass over the frame (draw_distance_pass).
         look = self._distance_look(config, current_mode)
         gl.glEnable(gl.GL_DEPTH_TEST)
@@ -800,9 +792,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         # pixel they cover never shades it. It is drawn first, as it always
         # was, in a frame that may draw portal views (their empty parts show
         # the sky already on screen), in the line and point render modes (the
-        # frame's polygon mode is theirs by then) and in the Points and
-        # Wireframe looks (draw_distance_pass leaves the sky where nothing
-        # was hit).
+        # frame's polygon mode is theirs by then) and in the Wireframe look
+        # (draw_distance_pass leaves the sky where nothing was hit).
         portal_table = config.get('entity_table')
         sky_behind = not (
             look or current_mode not in (RENDER_MODE_LIT, RENDER_MODE_UNLIT)
@@ -833,7 +824,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self._set_point_size(4.0)
         else:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        if not look:            # Wireframe draws it after; Points never
+        if not look:            # Wireframe draws it after
             self.draw_grid(projection, view, self.grid_indices_count,
                            config.get('play_mode', False), config.get('grid_visible', True))
         # Broad-phase distance cull (main camera pass only): feed the main
@@ -965,8 +956,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
 
         if look:
             # Everything opaque up to draw_distance_pass is drawn for its depth
-            # only -- as surfaces for Points, as lines for Wireframe. Water and
-            # glass are brushes like any other here.
+            # only, as lines. Water and glass are brushes like any other here.
             gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
             opaque_brushes = np.concatenate(
                 (opaque_brushes, glow_brushes, water_brushes, glass_brushes))
@@ -1012,6 +1002,10 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_BLEND)
         brush_display_mode = config.get('brush_display_mode', 'Textured')
+        #: 'Solid Lit': nothing textured -- brushes, models and terrain are
+        #: shaded in their colours, and decals are not drawn.
+        self._solid_look = (current_mode == RENDER_MODE_LIT
+                            and brush_display_mode == 'Solid Lit')
         # Filled modes only: in wireframe and vertex modes the far edges and
         # corners are part of what the editor shows.
         self._opaque_cull_pass = (self.cull_opaque_back_faces and current_mode
@@ -1029,15 +1023,11 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
                     self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
                     self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
                 else:
-                    # 'Solid Lit': nodraw brushes keep their texture, so what
-                    # will not be drawn in play stays plain to see; water is
-                    # never textured -- a shaded brush in its colour, drawn
-                    # with the solid ones (see the water pass below).
-                    nodraw = nodraw_brushes(_tbl, opaque_brushes)
+                    # 'Solid Lit': every brush shaded in its colour, no
+                    # textures at all (a nodraw face included); water too --
+                    # a shaded brush drawn with the solid ones (see the
+                    # water pass below).
                     solid = opaque_brushes
-                    if len(nodraw):
-                        solid = opaque_brushes[np.isin(opaque_brushes, nodraw, invert=True)]
-                        self.draw_textured_brushes_optimized(projection, view, camera_pos, nodraw, lights, config, _tbl)
                     if len(water_brushes):
                         solid = np.concatenate((solid, water_brushes))
                     self.draw_lit_brushes_optimized(projection, view, camera_pos, solid, lights, config, table=_tbl)
@@ -1094,8 +1084,7 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
         if look:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
             gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-            if not self.draw_distance_pass(projection, view, camera_pos,
-                                           points=look == 'Points'):
+            if not self.draw_distance_pass(projection, view, camera_pos):
                 # No depth to read back: the brushes' edges in their colours.
                 self.draw_brush_edges(projection, view, opaque_brushes, config, _tbl)
             if look == 'Wireframe':
@@ -1121,7 +1110,8 @@ class ForwardRenderer(PassesMixin, LightingMixin, PortalsMixin, InstancingMixin,
             self.ensure_effect_frames(etable)
         # Projected decals (blood): onto the opaque world just drawn, before
         # anything blended, so they lie under water and glass.
-        self.draw_decals(projection, view, camera_pos, config.get('decals'))
+        if not self._solid_look:            # 'Solid Lit': no painted images
+            self.draw_decals(projection, view, camera_pos, config.get('decals'))
         # High-quality water reflects what is in the depth buffer: in a frame
         # that has some, effects write their solid part there too.
         self._reflected_effects = None

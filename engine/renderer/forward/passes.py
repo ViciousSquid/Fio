@@ -157,9 +157,14 @@ class PassesMixin:
                 and self._cube_vbo is not None and lit['item_slots'] is not None):
             # Every plain box brush in one submission; the angled minority
             # still needs its own mesh, so it falls through to the loop.
+            # Interior faces culled as in the textured pass (a no-op outside
+            # the opaque passes): from inside a brush, 'Solid Lit' showed its
+            # back faces where 'Textured' showed the room beyond.
+            self._portal_begin_cull(is_geo=False)
             self._draw_lit_brushes_instanced(
                 projection, view, lights, table, key, lit, selected_slot,
                 fill_mode)
+            self._portal_end_cull()
             gl.glUseProgram(shader)
             self._current_shader = shader
             gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
@@ -1038,6 +1043,8 @@ class PassesMixin:
         if terrain is None or not terrain.enabled:
             return
         terrain_gl = self._terrain_gl(terrain.key)
+        # 'Solid Lit': the ground shaded, not textured.
+        terrain_gl.untextured = bool(getattr(self, '_solid_look', False))
         # This renderer's program and ground textures, the first time it
         # draws this terrain.
         if terrain_gl.shader_program != self.shaders.get('terrain'):
@@ -1142,6 +1149,8 @@ class PassesMixin:
 
         recipes = table.model_recipes()
         current_shader = None
+        # 'Solid Lit': models shaded in their colours, no textures.
+        solid = bool(getattr(self, '_solid_look', False))
         for start, end in zip(starts[:-1], starts[1:]):
             if start == end:
                 continue
@@ -1149,6 +1158,8 @@ class PassesMixin:
             if recipe_id < 0 or recipe_id >= len(recipes):
                 continue
             model_path, manual_texture, override_color, tint = recipes[recipe_id]
+            if solid:
+                manual_texture = None
             obj = self.load_model(model_path)
             if not obj or not obj.is_loaded:
                 continue
@@ -1210,7 +1221,8 @@ class PassesMixin:
 
             for group in groups:
                 shader_kind = (
-                    'textured' if group.textured and self.shaders.get('textured_instanced')
+                    'textured' if (group.textured and not solid
+                                   and self.shaders.get('textured_instanced'))
                     else 'lit' if self.shaders.get('lit_instanced') else None)
                 if not shader_kind:
                     continue
@@ -1262,6 +1274,9 @@ class PassesMixin:
             return 0
 
         model_path, manual_texture, override_color, tint = recipes[recipe_id]
+        solid = bool(getattr(self, '_solid_look', False))   # 'Solid Lit'
+        if solid:
+            manual_texture = None
         obj = self.load_model(model_path)
         if not obj or not obj.is_loaded:
             return 0
@@ -1307,7 +1322,8 @@ class PassesMixin:
             # A whole-model draw (no groups, or a manual texture) takes the
             # row's own colour and texture; a group, its material's.
             if group is not None:
-                use_texture, colour, alpha = group.textured, group.colour, group.alpha
+                use_texture, colour, alpha = (group.textured and not solid,
+                                              group.colour, group.alpha)
             else:
                 use_texture = bool(manual_texture)
                 colour, alpha = override_color or (0.8, 0.8, 0.8), 1.0

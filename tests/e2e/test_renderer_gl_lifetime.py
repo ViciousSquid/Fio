@@ -147,7 +147,7 @@ def _exercise(session):
     """Draw with everything the renderer has a resource for."""
     window = session.window
     session.publish()
-    for mode in ("Textured", "Solid Lit", "Wireframe", "Points", "Overlay", "Textured"):
+    for mode in ("Textured", "Solid Lit", "Wireframe", "Overlay", "Textured"):
         window.display_mode_combobox.setCurrentText(mode)
         session.paint()
     window.set_selected_objects([window.state.brushes[-4]])     # the crate

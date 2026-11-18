@@ -949,10 +949,10 @@ class QtGameView(QOpenGLWidget):
         self._view_ptr = glm.value_ptr(self.view_matrix)
         self._render_config["culling_enabled"] = self.culling_enabled
         # The Display box is published as-is while editing. In Play the game
-        # is drawn textured; only the debug views (Wireframe, Points, Overlay)
+        # is drawn textured; only the debug views (Wireframe, Overlay)
         # carry over.
         _display = self.brush_display_mode
-        if self.play_mode and _display not in ("Wireframe", "Points", "Overlay"):
+        if self.play_mode and _display not in ("Wireframe", "Overlay"):
             _display = "Textured"
         self._render_config["brush_display_mode"] = _display
         self._render_config["show_triggers_as_solid"] = self.show_triggers_as_solid

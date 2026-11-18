@@ -95,12 +95,13 @@ FRAME_INPUT = {
                           'single-view GPU occlusion history must not run',
     'render_mode': 'one of engine.constants.RENDER_MODE_* (lit, unlit, wireframe, vertex)',
     'brush_display_mode': "the editor's Display box: 'Textured' (everything as "
-                          "normal), 'Solid Lit' (brushes shaded, no textures), "
-                          "'Wireframe' (the world as lines), 'Points' (the "
-                          "world as points) or 'Overlay' (Textured with the "
-                          "world's wireframe drawn over it). How each looks is "
-                          "the renderer's choice. The host publishes 'Textured' "
-                          "in play unless Wireframe, Points or Overlay is on",
+                          "normal), 'Solid Lit' (everything shaded in its "
+                          "colours, nothing textured), 'Wireframe' (the world "
+                          "as lines) or 'Overlay' (Textured with the world's "
+                          "wireframe drawn over it). How each looks is the "
+                          "renderer's choice; one it does not know is drawn "
+                          "as 'Textured'. The host publishes 'Textured' in "
+                          "play unless Wireframe or Overlay is on",
     'show_triggers_as_solid': 'bool: draw trigger volumes filled rather than outlined',
     'show_sprites_in_play_mode': 'bool: keep editor entity sprites visible in play',
     'grid_visible': 'bool: draw the editor grid',

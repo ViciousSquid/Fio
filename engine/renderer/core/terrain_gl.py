@@ -835,7 +835,9 @@ class TerrainGL:
         # Textures off in flat mode, or while they are not loaded.
         textures_loaded = (self.grass_tex != 0 and self.rock_tex != 0
                            and self.sand_tex != 0 and self.snow_tex != 0)
-        use_tex = 0 if frame.flat_mode or not textures_loaded else (1 if frame.use_textures else 0)
+        use_tex = (0 if frame.flat_mode or not textures_loaded
+                   or getattr(self, 'untextured', False)
+                   else (1 if frame.use_textures else 0))
         gl.glUniform1i(u['use_textures'], use_tex)
 
         # Distance fog + global ambient (engine.shaders.FOG_GLSL): this
