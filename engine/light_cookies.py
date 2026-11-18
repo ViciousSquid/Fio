@@ -155,6 +155,36 @@ def project_bytes(path):
         return None
 
 
+def bind_placeholder(gl, unit, cache):
+    """Bind a complete 1x1 RGBA ``GL_TEXTURE_2D_ARRAY`` to *unit*, made once
+    and kept in *cache* (a dict the caller owns, one per GL context).
+
+    Every lit program declares the cookie sampler. While no light has a
+    cookie nothing samples it, but a driver may still check each active
+    sampler at draw time: macOS logs "unit N GLD_TEXTURE_INDEX_2D_ARRAY is
+    unloadable" and substitutes zeros when the unit holds nothing usable.
+    The shadow samplers keep a placeholder cube map for the same reason.
+    """
+    texture = cache.get('cookie_placeholder')
+    if texture is None:
+        texture = int(gl.glGenTextures(1))
+        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
+        from OpenGL.raw.GL.VERSION.GL_1_2 import glTexImage3D
+        pixel = ctypes.create_string_buffer(b'\xff\xff\xff\xff', 4)
+        glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_RGBA8, 1, 1, 1, 0,
+                     gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, ctypes.cast(pixel, ctypes.c_void_p))
+        # One level and no mipmap filter: complete as it is.
+        for pname, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST),
+                             (gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)):
+            gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, pname, value)
+        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+        cache['cookie_placeholder'] = texture
+    gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
+    gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
+    gl.glActiveTexture(gl.GL_TEXTURE0)
+    return texture
+
+
 class CookieArray:
     """The one ``GL_TEXTURE_2D_ARRAY`` that holds every cookie image.
 

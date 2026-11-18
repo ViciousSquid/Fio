@@ -50,14 +50,23 @@ class LightBuffer:
         None, and nothing loaded or bound, when no light has a cookie."""
         ids = [int(light.get('cookie', 0) or 0) for light in lights]
         if not any(ids):
+            self._bind_cookie_placeholder()
             return None
         if self.cookies is None:
             from engine.light_cookies import COOKIE_SIZE_LOW_POWER, CookieArray
             self.cookies = CookieArray(self.gl, read=self.read or (lambda _path: None),
                                        size=COOKIE_SIZE_LOW_POWER)
         layers = self.cookies.layers(ids)
-        self.cookies.bind(COOKIE_TEXTURE_UNIT)
+        if not self.cookies.bind(COOKIE_TEXTURE_UNIT):
+            self._bind_cookie_placeholder()
         return layers
+
+    def _bind_cookie_placeholder(self):
+        """A complete 1x1 array on the cookie unit while no cookie array is
+        bound: a driver may check every active sampler at draw time."""
+        from engine.light_cookies import bind_placeholder
+        cache = self.__dict__.setdefault('_cookie_gl_cache', {})
+        bind_placeholder(self.gl, COOKIE_TEXTURE_UNIT, cache)
 
     def upload(self, lights, shadows):
         """Called with the world program current."""

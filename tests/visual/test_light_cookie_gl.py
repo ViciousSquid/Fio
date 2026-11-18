@@ -421,3 +421,42 @@ def test_casting_shadows_stays_independent_of_the_cookie():
     assert table.light_casts_shadows[0]
     assert table.light_cookie[0] == intern_cookie(QUADRANTS)
     assert table.light_cookie_floor[0] == pytest.approx(0.4)
+
+
+# ---------------------------------------------------------------------------
+# The cookie unit always holds a complete array
+# ---------------------------------------------------------------------------
+
+def _cookie_unit_texture():
+    from OpenGL import GL as gl
+    from engine.shaders import COOKIE_TEXTURE_UNIT
+    gl.glActiveTexture(gl.GL_TEXTURE0 + COOKIE_TEXTURE_UNIT)
+    try:
+        texture = int(gl.glGetIntegerv(gl.GL_TEXTURE_BINDING_2D_ARRAY))
+        complete = None
+        if texture:
+            width = gl.glGetTexLevelParameteriv(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_TEXTURE_WIDTH)
+            complete = int(width) > 0
+        return texture, complete
+    finally:
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+
+
+def test_the_cookie_sampler_has_a_complete_array_with_no_cookie_light(scene):
+    """Every lit program declares the cookie sampler. With no cookie light
+    in view a complete 1x1 array stands on its unit, so a driver that checks
+    every active sampler (macOS: "GLD_TEXTURE_INDEX_2D_ARRAY is unloadable")
+    finds one; with a cookie light, the cookie array is there instead."""
+    made, context = scene
+    matrices = _matrices((0.0, 400.0, 0.0), (0, -1, 0), (0, 0, -1))
+    _frame(made, context, _room(floor_only=True), [_lamp((0.0, 256.0, 0.0))], matrices)
+    placeholder, complete = _cookie_unit_texture()
+    assert placeholder and complete, "no complete array on the cookie unit"
+
+    cookie = _lamp((0.0, 256.0, 0.0), cookie_enabled=True, cookie_texture=QUADRANTS)
+    _frame(made, context, _room(floor_only=True), [cookie], matrices)
+    texture, complete = _cookie_unit_texture()
+    assert texture and complete and texture != placeholder
+
+    _frame(made, context, _room(floor_only=True), [_lamp((0.0, 256.0, 0.0))], matrices)
+    assert _cookie_unit_texture()[0] == placeholder, "back to the placeholder"

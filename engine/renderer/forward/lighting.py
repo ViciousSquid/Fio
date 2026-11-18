@@ -241,10 +241,9 @@ class LightingMixin:
         cookie in play the array is bound to its unit here, once per lit
         pass -- never per light or per draw."""
         cookies = getattr(table, 'light_cookie', None)
-        if cookies is None or not len(slots):
-            return None
-        ids = cookies[slots]
-        if not ids.any():
+        ids = cookies[slots] if cookies is not None and len(slots) else None
+        if ids is None or not ids.any():
+            self._bind_cookie_placeholder()
             return None
         array = self._light_cookies
         if array is None:
@@ -253,8 +252,17 @@ class LightingMixin:
             array = self._light_cookies = CookieArray(
                 gl, size=COOKIE_SIZE_LOW_POWER if self.lowpower_mode else COOKIE_SIZE)
         layers = array.layers(ids)
-        array.bind(shaders.COOKIE_TEXTURE_UNIT)
+        if not array.bind(shaders.COOKIE_TEXTURE_UNIT):
+            self._bind_cookie_placeholder()     # no image could be read
         return layers
+
+    def _bind_cookie_placeholder(self):
+        """A complete 1x1 array on the cookie unit while there is no cookie
+        array to bind (engine.light_cookies.bind_placeholder). Once per
+        frame's light packing: nothing else binds that unit."""
+        from engine.light_cookies import bind_placeholder
+        cache = self.__dict__.setdefault('_cookie_gl_cache', {})
+        bind_placeholder(gl, shaders.COOKIE_TEXTURE_UNIT, cache)
 
     def _bind_light_cookies(self, uniforms):
         """Point a lighting program's cookie sampler at its own unit.
