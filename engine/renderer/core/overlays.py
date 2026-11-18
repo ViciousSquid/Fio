@@ -412,6 +412,23 @@ class OverlaysMixin:
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(0)
 
+    def draw_lens_water(self, drops, viewport) -> int:
+        """Water on the camera's lens (engine.lens_water): *drops*
+        ``[(x, y, radius, wetness, stretch)]`` (screen fractions, y down) over
+        the finished frame in *viewport* ``(x, y, w, h)``; how many were drawn.
+
+        An optional extra, not part of the locked renderer contract: the host
+        calls it when a renderer has it (every renderer built on RendererCore
+        does). The pass is made on first use; with no drops nothing is done
+        (core.lens_water_gl)."""
+        lens = getattr(self, '_lens_water_pass', None)
+        if not drops:
+            return 0
+        if lens is None:
+            from .lens_water_gl import LensWaterPass
+            lens = self._lens_water_pass = LensWaterPass()
+        return lens.draw(drops, viewport)
+
     def draw_component_overlay(self, projection, view, overlay, version=None):
         """Draw vertex/edge/face handles for the brushes being component-edited.
 

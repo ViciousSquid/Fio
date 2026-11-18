@@ -471,9 +471,7 @@ class QtGameView(QOpenGLWidget):
         lens = getattr(self, '_lens_water', None)
         if lens is None:
             from engine.lens_water import LensWater
-            from engine.renderer.core.lens_water_gl import LensWaterPass
             lens = self._lens_water = LensWater()
-            self._lens_pass = LensWaterPass()
             self._lens_was_under = False
             self._lens_clock = None
             self._lens_look = None
@@ -517,7 +515,12 @@ class QtGameView(QOpenGLWidget):
         width = max(1, int(self.width() * ratio))
         height = max(1, int(self.height() * ratio))
         viewport = (0, 0, width // 2, height) if splitscreen else (0, 0, width, height)
-        self._lens_pass.draw(drops, viewport)
+        # Optional, like animate_textures and draw_face_hover: a renderer that
+        # does not offer it (it is not in the locked contract) shows none.
+        # The built-in one has it from engine.renderer.core.
+        draw = getattr(self.renderer, 'draw_lens_water', None)
+        if draw is not None:
+            draw(drops, viewport)
 
     def _clear_play_mode_hint(self):
         self._play_mode_hint = ""
