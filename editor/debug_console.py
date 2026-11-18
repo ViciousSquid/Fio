@@ -632,6 +632,35 @@ class DebugConsole(QWidget):
     FONT_SIZE_MAX = 24
     FONT_SIZE_DEFAULT = 9
 
+    #: The toolbar's buttons (-, +, Clear, the filter menu) share one width.
+    TOOLBAR_BUTTON_WIDTH = 52
+    #: The filter-menu button: Fio orange, as the selected tab is.
+    FILTER_BUTTON_STYLE = """
+        QPushButton {
+            background-color: #F08000;
+            color: white;
+            border: 1px solid #F08000;
+            border-radius: 3px;
+            padding: 3px 6px;
+            font-weight: bold;
+        }
+        QPushButton:hover { background-color: #FF9A2E; border-color: #FF9A2E; }
+        QPushButton:pressed { background-color: #C06600; }
+    """
+    #: ...and while the filter column is open: pressed in, a darker orange.
+    FILTER_BUTTON_OPEN_STYLE = """
+        QPushButton {
+            background-color: #C06600;
+            color: white;
+            border: 1px solid #FFB060;
+            border-radius: 3px;
+            padding: 3px 6px;
+            font-weight: bold;
+        }
+        QPushButton:hover { background-color: #D87200; }
+        QPushButton:pressed { background-color: #A05500; }
+    """
+
     # Pre-compiled regex patterns (avoids re.compile on every _append_message call)
     _RE_IO_ENTITY    = re.compile(r'^\[IO\]\s+([a-zA-Z0-9_]+)\.')
     _RE_ENTITY_DOT   = re.compile(r'(?<!=)\b([a-zA-Z0-9_]+)(?=\.)')
@@ -740,11 +769,7 @@ class DebugConsole(QWidget):
         sep2.setStyleSheet("color: #444;")
         toolbar.addWidget(sep2)
 
-        # Font size controls
-        font_label = QLabel("Size:")
-        font_label.setStyleSheet("color: #888;")
-        toolbar.addWidget(font_label)
-
+        # Font size controls (the size itself is in their tooltips)
         font_btn_style = """
             QPushButton {
                 background-color: #444;
@@ -764,36 +789,26 @@ class DebugConsole(QWidget):
         """
 
         decrease_btn = QPushButton("−")
-        decrease_btn.setFixedWidth(28)
-        decrease_btn.setToolTip("Decrease font size")
+        decrease_btn.setFixedWidth(self.TOOLBAR_BUTTON_WIDTH)
         decrease_btn.clicked.connect(self._decrease_font_size)
         decrease_btn.setStyleSheet(font_btn_style)
         toolbar.addWidget(decrease_btn)
-
-        self.font_size_label = QLabel(str(self.font_size))
-        self.font_size_label.setFixedWidth(24)
-        self.font_size_label.setAlignment(Qt.AlignCenter)
-        self.font_size_label.setStyleSheet("color: #aaa;")
-        toolbar.addWidget(self.font_size_label)
+        self._decrease_btn = decrease_btn
 
         increase_btn = QPushButton("+")
-        increase_btn.setFixedWidth(28)
-        increase_btn.setToolTip("Increase font size")
+        increase_btn.setFixedWidth(self.TOOLBAR_BUTTON_WIDTH)
         increase_btn.clicked.connect(self._increase_font_size)
         increase_btn.setStyleSheet(font_btn_style)
         toolbar.addWidget(increase_btn)
+        self._increase_btn = increase_btn
+        self._show_font_size()
 
-        toolbar.addStretch()
-
-        # Message count label
-        self.count_label = QLabel("0 messages")
-        self.count_label.setStyleSheet("color: #666;")
-        toolbar.addWidget(self.count_label)
-
-        # Clear button
+        # Clear button (the message count is in its tooltip)
         clear_btn = QPushButton("Clear")
-        clear_btn.setFixedWidth(60)
+        clear_btn.setFixedWidth(self.TOOLBAR_BUTTON_WIDTH)
         clear_btn.clicked.connect(self.clear)
+        self._clear_btn = clear_btn
+        self._show_message_count()
         clear_btn.setStyleSheet("""
             QPushButton {
                 background-color: #444;
@@ -810,27 +825,12 @@ class DebugConsole(QWidget):
 
         # Toggle filter-panel button (far right)
         self._filter_btn = QPushButton("☰")
-        self._filter_btn.setFixedWidth(28)
+        self._filter_btn.setFixedWidth(self.TOOLBAR_BUTTON_WIDTH)
         self._filter_btn.setToolTip("Show / hide entity filters")
         self._filter_btn.clicked.connect(self._toggle_filter_panel)
-        self._filter_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #444;
-                color: #ccc;
-                border: 1px solid #555;
-                border-radius: 3px;
-                padding: 3px 6px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #555;
-                border-color: #F08000;
-            }
-            QPushButton:pressed {
-                background-color: #333;
-            }
-        """)
+        self._filter_btn.setStyleSheet(self.FILTER_BUTTON_STYLE)
         toolbar.addWidget(self._filter_btn)
+        toolbar.addStretch()
 
         # The toolbar is a dozen controls on one row, and their minimums add
         # up to something wider than the console has any need to be.  Left as
@@ -1056,9 +1056,18 @@ class DebugConsole(QWidget):
             self.font_size -= 1
             self._apply_font_size()
 
+    def _show_font_size(self):
+        """The font size, in the size buttons' tooltips."""
+        self._decrease_btn.setToolTip(f"Decrease font size ({self.font_size} pt)")
+        self._increase_btn.setToolTip(f"Increase font size ({self.font_size} pt)")
+
+    def _show_message_count(self):
+        """The message count, in the Clear button's tooltip."""
+        self._clear_btn.setToolTip(f"Clear {self.message_count} messages")
+
     def _apply_font_size(self):
         """Apply the current font size to the console and reload all HTML."""
-        self.font_size_label.setText(str(self.font_size))
+        self._show_font_size()
         self.console.setFont(QFont("IBM Plex Mono", self.font_size))
         self.command_input.setFont(QFont("IBM Plex Mono", self.font_size))
         self._refresh_console()
@@ -1461,7 +1470,7 @@ class DebugConsole(QWidget):
             self.console.ensureCursorVisible()
         self.message_count += len(lines)
         self._document_lines += len(lines)
-        self.count_label.setText(f"{self.message_count} messages")
+        self._show_message_count()
         if self._document_lines > self.MAX_DOCUMENT_LINES:
             self._refresh_console()
 
@@ -1816,7 +1825,7 @@ class DebugConsole(QWidget):
         self.message_count = 0
         self._document_lines = 0
         self._pending = []
-        self.count_label.setText("0 messages")
+        self._show_message_count()
         get_debug_logger().clear_buffer()
 
     def toggle(self):
@@ -1832,40 +1841,12 @@ class DebugConsole(QWidget):
         """Show or hide the right-side filter column."""
         if self._filter_panel.isVisible():
             self._filter_panel.hide()
-            self._filter_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #444;
-                    color: #ccc;
-                    border: 1px solid #555;
-                    border-radius: 3px;
-                    padding: 3px 6px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #555;
-                    border-color: #F08000;
-                }
-                QPushButton:pressed { background-color: #333; }
-            """)
+            self._filter_btn.setStyleSheet(self.FILTER_BUTTON_STYLE)
         else:
             self._filter_panel.show()
             pw = self._filter_panel_width
             self._splitter.setSizes([self.width() - pw, pw])
-            self._filter_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #3a3312;
-                    color: #F08000;
-                    border: 1px solid #F08000;
-                    border-radius: 3px;
-                    padding: 3px 6px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #4a4322;
-                    border-color: #F08000;
-                }
-                QPushButton:pressed { background-color: #2a2308; }
-            """)
+            self._filter_btn.setStyleSheet(self.FILTER_BUTTON_OPEN_STYLE)
 
     def closeEvent(self, event):
         """Handle close - just hide instead of destroying."""
