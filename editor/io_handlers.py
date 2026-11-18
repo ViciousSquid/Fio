@@ -15,7 +15,9 @@ import glm
 import os
 import time
 
-from engine.effect_entity import EFFECT_FIRE_TEXTURES, EFFECT_ORB_TEXTURES, EFFECT_TYPES
+from engine.effect_entity import (
+    EFFECT_FIRE_TEXTURES, EFFECT_ORB_TEXTURES, EFFECT_TYPES, EMITTER_IDS,
+    EMITTER_NONE, PARTICLES_DEFAULT_EMITTER)
 
 # Import debug logger - with fallback to print if not available
 try:
@@ -222,6 +224,10 @@ def register_all_input_handlers(io_manager: IOManager):
         if effect_type == "ORB":
             entity.properties["width"] = 32.0
             entity.properties["height"] = 32.0
+        elif (effect_type == "PARTICLES"
+              and entity.properties.get("emitter", EMITTER_NONE) == EMITTER_NONE):
+            # PARTICLES is the emitter alone: give it something to emit.
+            entity.properties["emitter"] = PARTICLES_DEFAULT_EMITTER
         logic.session_runtime.effect_store.set_type(entity, effect_type)
         logic.io_manager.fire_output(
             entity, 'OnChanged', value=entity.properties['effect_type']
@@ -257,6 +263,17 @@ def register_all_input_handlers(io_manager: IOManager):
             entity, 'OnChanged', value=str(loop).lower()
         )
 
+    def effect_set_emitter(entity, param, logic):
+        """Set the Effect's particle emitter preset by name (NONE turns it
+        off). An unknown name is ignored."""
+        emitter = str(param or "").strip().upper()
+        if emitter not in EMITTER_IDS:
+            return
+        if entity.properties.get("emitter") == emitter:
+            return
+        entity.properties["emitter"] = emitter
+        logic.io_manager.fire_output(entity, 'OnChanged', value=emitter)
+
     def effect_explode(entity, param, logic):
         """Switch an Effect to EXPLOSION permanently and play it once."""
         now = time.perf_counter()
@@ -291,6 +308,7 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('effect', 'setorbtexture', effect_set_orb_texture)
     io_manager.register_input_handler('effect', 'setcustomgif', effect_set_custom_gif)
     io_manager.register_input_handler('effect', 'setloop', effect_set_loop)
+    io_manager.register_input_handler('effect', 'setemitter', effect_set_emitter)
     io_manager.register_input_handler('effect', 'explode', effect_explode)
 
     # DOOR INPUTS

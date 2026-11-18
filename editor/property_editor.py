@@ -11,6 +11,9 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon
 from PyQt5 import sip
 from engine.items import ITEM_IDS
+from engine.effect_entity import (EFFECT_TYPES, EMITTER_NONE, EMITTER_PRESETS,
+                                  EMITTER_SCALE_RANGE, PARTICLES_DEFAULT_EMITTER,
+                                  PARTICLES_DEFAULT_SIZE)
 from engine.prop_entity import (MODEL_PRESETS, model_preset_name, model_settings,
                                  normalise_collect_type)
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
@@ -2772,7 +2775,7 @@ class PropertyEditor(QWidget):
         props = thing.properties
 
         type_combo = QComboBox()
-        type_combo.addItems(["FIRE", "ORB", "EXPLOSION", "CUSTOM"])
+        type_combo.addItems(list(EFFECT_TYPES))
         type_combo.setCurrentText(
             str(props.get('effect_type', 'FIRE')).upper()
         )
@@ -2982,6 +2985,46 @@ class PropertyEditor(QWidget):
             "Lifetime", "lifetime", 0.05, 3.0, 0.5, "{:.2f} s"
         )
 
+        # Particle emitter: optional on every type, the whole of PARTICLES.
+        emitter_combo = QComboBox()
+        emitter_combo.addItems(list(EMITTER_PRESETS))
+        emitter_combo.setToolTip(
+            "Stateless GPU particles drawn with this Effect. On a PARTICLES "
+            "Effect, Width and Height are the emitter's extent."
+        )
+        current_emitter = str(props.get("emitter", EMITTER_NONE)).upper()
+        if current_emitter not in EMITTER_PRESETS:
+            current_emitter = EMITTER_NONE
+        emitter_combo.setCurrentText(current_emitter)
+        form.addRow("Emitter:", emitter_combo)
+        rate_slider, _ = add_scaled_slider(
+            "Rate", "emitter_rate", 0.0, 1.0, 1.0, "{:.2f}"
+        )
+        rate_slider.setToolTip("Fraction of the emitter's particles alive at once.")
+        scale_slider, _ = add_scaled_slider(
+            "Particle Scale", "emitter_scale",
+            EMITTER_SCALE_RANGE[0], EMITTER_SCALE_RANGE[1], 1.0, "{:.2f}x"
+        )
+        scale_slider.setToolTip("Scales particle size, speed and spread.")
+        tint_widget = self.add_color_picker_widget(
+            form, thing, 'emitter_tint',
+            label="Particle Tint:",
+            dialog_title="Choose Particle Tint",
+        )
+
+        def refresh_emitter():
+            on = str(thing.properties.get("emitter", EMITTER_NONE)) != EMITTER_NONE
+            rate_slider.setEnabled(on)
+            scale_slider.setEnabled(on)
+            if tint_widget is not None:
+                tint_widget.setEnabled(on)
+
+        def emitter_changed(value):
+            self.update_object_prop("emitter", str(value).upper())
+            refresh_emitter()
+
+        emitter_combo.currentTextChanged.connect(emitter_changed)
+
         def refresh_lifetime():
             explosion = str(
                 thing.properties.get('effect_type', 'FIRE')
@@ -3012,6 +3055,26 @@ class PropertyEditor(QWidget):
                     slider.setValue(3200)
                     slider.blockSignals(False)
                     label.setText("32.0")
+            elif value == 'PARTICLES':
+                # The emitter alone: width/height become its extent, it has
+                # no light of its own, and it emits something.
+                sizes = PARTICLES_DEFAULT_SIZE
+                self.update_object_prop('width', float(sizes[0]))
+                self.update_object_prop('height', float(sizes[1]))
+                for slider, label, size in (
+                    (width_slider, width_label, sizes[0]),
+                    (height_slider, height_label, sizes[1]),
+                ):
+                    slider.blockSignals(True)
+                    slider.setValue(int(round(max(4.0, size) * 100)))
+                    slider.blockSignals(False)
+                    label.setText(f"{size:.1f}")
+                self.update_object_prop('light_enabled', False)
+                light_check.blockSignals(True)
+                light_check.setChecked(False)
+                light_check.blockSignals(False)
+                if thing.properties.get('emitter', EMITTER_NONE) == EMITTER_NONE:
+                    emitter_combo.setCurrentText(PARTICLES_DEFAULT_EMITTER)
 
             refresh_fire_texture()
             if value == 'EXPLOSION':
@@ -3026,6 +3089,7 @@ class PropertyEditor(QWidget):
         type_combo.currentTextChanged.connect(effect_type_changed)
         refresh_fire_texture()
         refresh_lifetime()
+        refresh_emitter()
 
     def _build_attach_to_mover(self, form, thing, prefix=''):
         """Shared attach-to-mover logic for Light and Portal."""
@@ -5809,6 +5873,7 @@ class PropertyEditor(QWidget):
         update_swatch()
         h.addWidget(swatch)
         form_layout.addRow(label, widget)
+        return widget
 
     def _add_tint_widget(self, form_layout, thing, key='prop_tint_button',
                          tooltip="Multiplies the model's colour. White leaves it as it is."):

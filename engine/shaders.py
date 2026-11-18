@@ -646,7 +646,6 @@ layout (location = 1) in vec3 iEffectPos;
 layout (location = 2) in vec4 iEffectParams;  // width, intensity, elapsed, lifetime
 layout (location = 3) in vec4 iEffectMeta;    // seed, type, height, spare
 layout (location = 4) in vec4 iEffectColor;
-layout (location = 5) in float iParticleIndex;
 
 uniform mat4 projection;
 uniform mat4 view;
@@ -3029,6 +3028,368 @@ void main() {
     else if (u_face == 4) d = vec3( st.x, -st.y,  1.0);
     else                  d = vec3(-st.x, -st.y, -1.0);
     frag_colour = vec4(textureLod(u_panorama, panoramaUV(normalize(d)), 0.0).rgb, 1.0);
+}
+"""
+
+# ==============================================================================
+# STATELESS GPU PARTICLES (an Effect's emitter)
+#
+# No particle has CPU state. One instance row per emitter feeds
+# PARTICLES_PER_EMITTER instances (glVertexAttribDivisor), and the vertex
+# shader derives particle i of emitter e from (seed, i, time) alone:
+#
+#   t     = elapsed + phase + i / count * life     (looping)
+#   cycle = floor(t / life), age = t - cycle * life
+#   hash(seed, i, cycle) -> fresh randoms each time the particle respawns
+#
+# A burst (an EXPLOSION's emitter) does not wrap: age = elapsed - jitter, and
+# the particle is gone once age passes its life.
+# ==============================================================================
+from .effect_entity import EMITTER_MAX_PARTICLES as PARTICLES_PER_EMITTER  # noqa: E402
+from .effect_entity import EMITTER_PRESETS as _EMITTER_PRESETS             # noqa: E402
+
+#: The render clock the particle shader runs on wraps at this many seconds, so
+#: float32 keeps millisecond precision however long the session runs. A
+#: looping emitter reshuffles its particles once per wrap (about 68 minutes).
+PARTICLE_TIME_WRAP = 4096.0
+
+#: vec4s per preset in the shader's ``uPresets`` table.
+PARTICLE_PRESET_VEC4S = 6
+
+#: Preset parameters, world units and seconds. Per preset:
+#:   life, speed, spread (cone half-angle as a fraction of pi), drag (1/s)
+#:   gravity (+ rises), turbulence, start size, end size
+#:   colour rgb, opacity (1 = alpha blended, 0 = additive)
+#:   peak alpha, fade-in (fraction of life), fade-out start, lit (0 emissive)
+#:   shape (0 disc, 1 line along the width), spin (rad/s), streak (s), noise
+#:   glow from the Effect's light near the base, hardness, -, -
+PARTICLE_PRESETS = {
+    'SMOKE': ((3.0, 28.0, 0.22, 0.45),
+              (14.0, 10.0, 12.0, 48.0),
+              (0.42, 0.42, 0.42, 1.0),
+              (0.42, 0.12, 0.35, 1.0),
+              (0.0, 0.6, 0.0, 1.0),
+              (0.55, 0.0, 0.0, 0.0)),
+    'STEAM': ((1.2, 95.0, 0.16, 1.6),
+              (24.0, 14.0, 6.0, 44.0),
+              (0.95, 0.96, 0.98, 1.0),
+              (0.32, 0.08, 0.25, 1.0),
+              (0.0, 1.0, 0.0, 0.8),
+              (0.2, 0.0, 0.0, 0.0)),
+    'SPARKS': ((0.8, 180.0, 0.32, 0.7),
+               (-420.0, 4.0, 3.2, 1.2),
+               (1.0, 0.55, 0.16, 0.0),
+               (1.0, 0.02, 0.45, 0.0),
+               (0.0, 0.0, 0.035, 0.0),
+               (0.0, 0.8, 0.0, 0.0)),
+    'SPLASH': ((0.7, 200.0, 0.22, 0.6),
+               (-480.0, 6.0, 4.0, 16.0),
+               (0.90, 0.94, 1.0, 0.8),
+               (0.6, 0.05, 0.4, 1.0),
+               (1.0, 1.5, 0.02, 0.2),
+               (0.0, 0.6, 0.0, 0.0)),
+    'MIST': ((4.0, 6.0, 1.0, 0.3),
+             (2.0, 8.0, 40.0, 80.0),
+             (0.85, 0.88, 0.92, 1.0),
+             (0.16, 0.3, 0.5, 1.0),
+             (0.0, 0.15, 0.0, 1.0),
+             (0.0, 0.0, 0.0, 0.0)),
+}
+
+
+def particle_preset_table():
+    """The ``uPresets`` uniform: PARTICLE_PRESET_VEC4S vec4s per preset id,
+    in EMITTER_PRESETS order (NONE's rows are zero)."""
+    import numpy as _np
+    table = _np.zeros((len(_EMITTER_PRESETS) * PARTICLE_PRESET_VEC4S, 4),
+                      dtype=_np.float32)
+    for index, name in enumerate(_EMITTER_PRESETS):
+        rows = PARTICLE_PRESETS.get(name)
+        if rows is not None:
+            base = index * PARTICLE_PRESET_VEC4S
+            table[base:base + PARTICLE_PRESET_VEC4S] = rows
+    return table
+
+
+def particle_preset_lives():
+    """Each preset id's particle life, seconds (0 for NONE)."""
+    import numpy as _np
+    return _np.asarray([PARTICLE_PRESETS.get(name, ((0.0,),))[0][0]
+                        for name in _EMITTER_PRESETS], dtype=_np.float64)
+
+
+_PARTICLE_CONSTANTS = """
+const int PARTICLES_PER_EMITTER = %d;
+const int PARTICLE_PRESET_COUNT = %d;
+const int PARTICLE_PRESET_VEC4S = %d;
+const float PARTICLE_TIME_WRAP = %.1f;
+""" % (PARTICLES_PER_EMITTER, len(_EMITTER_PRESETS), PARTICLE_PRESET_VEC4S,
+       PARTICLE_TIME_WRAP)
+
+DEFAULT_SHADERS['particle.vert'] = """#version 330 core
+precision highp float;
+""" + _PARTICLE_CONSTANTS + """
+layout (location = 0) in vec2 aPos;
+// One row per emitter; glVertexAttribDivisor(loc, PARTICLES_PER_EMITTER).
+layout (location = 1) in vec4 iPosSeed;   // position, seed
+layout (location = 2) in vec4 iEmit;      // preset id, count, scale, mode
+layout (location = 3) in vec4 iExtent;    // width, height, start, host lift
+layout (location = 4) in vec4 iTint;      // tint rgb, light glow on/off
+layout (location = 5) in vec4 iLight;     // the Effect's light colour, -
+
+uniform mat4 projection;
+uniform mat4 view;
+uniform float uTime;                       // render clock, wrapped
+uniform vec4 uPresets[PARTICLE_PRESET_COUNT * PARTICLE_PRESET_VEC4S];
+uniform float uMaxScreen;                  // largest particle, fraction of view height
+uniform vec2 uNearFade;                    // view depth: invisible .. full
+
+out vec2 vUV;
+out vec4 vColor;      // base rgb, lit amount
+out vec4 vGlow;       // additive light rgb, opacity
+out vec4 vShape;      // alpha, hardness, noise, soft range
+out vec3 vWorldPos;
+out float vDepth;
+out vec2 vNoiseOffset;
+
+const float TAU = 6.28318530718;
+const float PI = 3.14159265359;
+
+uint hashU(uint x) {
+    x ^= x >> 16u;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    x ^= x >> 16u;
+    return x;
+}
+
+vec4 rand4(uint seed, uint index, uint cycle, uint salt) {
+    uint h = hashU(seed ^ hashU(index * 0x9E3779B9u
+                                ^ hashU(cycle * 0x85EBCA6Bu + salt)));
+    uint a = hashU(h);
+    uint b = hashU(a ^ 0x68E31DA4u);
+    uint c = hashU(b ^ 0xB5297A4Du);
+    uint d = hashU(c ^ 0x1B56C4E9u);
+    return vec4(uvec4(a, b, c, d)) * (1.0 / 4294967295.0);
+}
+
+void collapse() {
+    // All four corners at the origin with w = 0: clipped, nothing rasterised.
+    gl_Position = vec4(0.0);
+    vUV = vec2(0.0);
+    vColor = vec4(0.0);
+    vGlow = vec4(0.0);
+    vShape = vec4(0.0);
+    vWorldPos = vec3(0.0);
+    vDepth = 0.0;
+    vNoiseOffset = vec2(0.0);
+}
+
+void main() {
+    int i = gl_InstanceID % PARTICLES_PER_EMITTER;
+    int preset = int(iEmit.x + 0.5);
+    int count = int(iEmit.y + 0.5);
+    if (i >= count || preset <= 0 || preset >= PARTICLE_PRESET_COUNT) {
+        collapse();
+        return;
+    }
+    int b = preset * PARTICLE_PRESET_VEC4S;
+    vec4 p0 = uPresets[b];
+    vec4 p1 = uPresets[b + 1];
+    vec4 p2 = uPresets[b + 2];
+    vec4 p3 = uPresets[b + 3];
+    vec4 p4 = uPresets[b + 4];
+    vec4 p5 = uPresets[b + 5];
+
+    float scale = iEmit.z;
+    float mode = iEmit.w;                 // 0 loop, 1 burst, 2 frozen burst
+    float life = max(p0.x, 0.05);
+    uint seed = uint(iPosSeed.w);
+    uint index = uint(i);
+
+    float elapsed = uTime - iExtent.z;
+    if (elapsed < 0.0) elapsed += PARTICLE_TIME_WRAP;
+
+    float age;
+    uint cycle;
+    if (mode < 0.5) {
+        float phase = rand4(seed, 0xFFFFu, 0u, 7u).x * life;
+        float t = elapsed + phase + float(i) / float(count) * life;
+        float c = floor(t / life);
+        age = t - c * life;
+        cycle = uint(c);
+    } else {
+        cycle = 0u;
+        age = mode > 1.5 ? life * 0.35 : elapsed;
+    }
+    vec4 r0 = rand4(seed, index, cycle, 0u);
+    vec4 r1 = rand4(seed, index, cycle, 1u);
+    vec4 r2 = rand4(seed, index, cycle, 2u);
+    if (mode > 0.5) {
+        age -= r1.w * life * 0.15;        // a burst is not one frame
+    }
+    float particleLife = life * (0.7 + 0.3 * r0.w);
+    if (age < 0.0 || age > particleLife) {
+        collapse();
+        return;
+    }
+    float a = age / particleLife;
+
+    // Spawn across the extent: a disc (or a line along the width) as wide as
+    // the Effect and as tall as its height, centred on it -- or, above a
+    // flame or explosion (host lift > 0), a smaller patch at its crown.
+    float w = iExtent.x;
+    float h = iExtent.y;
+    vec3 offset;
+    if (p4.x > 0.5) {
+        offset = vec3((r0.x - 0.5) * w, (r0.y - 0.5) * h,
+                      (r0.z - 0.5) * min(w * 0.05, 8.0));
+    } else {
+        float radius = sqrt(r0.x) * 0.5 * w;
+        float angle = r0.y * TAU;
+        offset = vec3(cos(angle) * radius, (r0.z - 0.5) * h,
+                      sin(angle) * radius);
+    }
+    if (iExtent.w > 0.0) {
+        offset *= vec3(0.45, 0.15, 0.45);
+        offset.y += h * iExtent.w;
+    }
+
+    // Motion: a cone about +Y, drag in closed form, gravity, turbulence.
+    float cosT = 1.0 - r1.x * (1.0 - cos(p0.z * PI));
+    float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
+    float phi = r1.y * TAU;
+    vec3 dir = vec3(cos(phi) * sinT, cosT, sin(phi) * sinT);
+    float speed = p0.y * (0.6 + 0.8 * r1.z) * scale;
+    float drag = max(p0.w, 1e-3);
+    float decay = exp(-drag * age);
+    float gravity = p1.x * scale;
+    vec3 pos = iPosSeed.xyz + offset
+             + dir * speed * (1.0 - decay) / drag
+             + vec3(0.0, 0.5 * gravity * age * age, 0.0);
+    vec3 vel = dir * speed * decay + vec3(0.0, gravity * age, 0.0);
+    float turbulence = p1.y * scale;
+    vec3 ph = r2.xyz * TAU;
+    pos += turbulence * age * vec3(sin(age * 1.7 + ph.x),
+                                   0.35 * sin(age * 2.3 + ph.y),
+                                   cos(age * 1.3 + ph.z));
+
+    float grow = 1.0 - (1.0 - a) * (1.0 - a);
+    float size = mix(p1.z, p1.w, grow) * (0.7 + 0.6 * r2.w) * scale;
+    float alpha = p3.x * smoothstep(0.0, max(p3.y, 1e-3), a)
+                * (1.0 - smoothstep(p3.z, 1.0, a));
+
+    vec4 centre = view * vec4(pos, 1.0);
+    float depth = -centre.z;
+    // Fade out at the near plane rather than fill the screen with one puff.
+    alpha *= smoothstep(uNearFade.x, uNearFade.y, depth);
+    if (alpha < 0.002 || depth <= 0.0) {
+        collapse();
+        return;
+    }
+    // No particle grows past uMaxScreen of the view's height (overdraw).
+    float maxSize = uMaxScreen * 2.0 * depth / max(projection[1][1], 1e-4);
+
+    float rotation = r1.w * TAU + (r2.x - 0.5) * 2.0 * p4.y * age;
+    vec2 axisX = vec2(cos(rotation), sin(rotation));
+    vec2 axisY = vec2(-axisX.y, axisX.x);
+    float sizeX = size;
+    float sizeY = size;
+    if (p4.z > 0.0) {
+        // Streak along the velocity seen on screen (sparks, droplets).
+        vec2 v = (mat3(view) * vel).xy;
+        float speedOnScreen = length(v);
+        if (speedOnScreen > 1e-3) {
+            axisY = v / speedOnScreen;
+            axisX = vec2(axisY.y, -axisY.x);
+            sizeY = size + speedOnScreen * p4.z;
+        }
+    }
+    sizeX = min(sizeX, maxSize);
+    sizeY = min(sizeY, maxSize);
+    vec2 corner = axisX * aPos.x * sizeX + axisY * aPos.y * sizeY;
+    gl_Position = projection * (centre + vec4(corner, 0.0, 0.0));
+
+    vUV = aPos * 2.0;
+    vColor = vec4(p2.rgb * iTint.rgb, p3.w);
+    float glow = p5.x * iTint.w * (1.0 - a) * (1.0 - a) * (1.0 - a);
+    vGlow = vec4(iLight.rgb * glow, p2.w);
+    vShape = vec4(alpha, p5.y, p4.w, max(min(sizeX, sizeY) * 0.5, 1.0));
+    vWorldPos = pos;
+    vDepth = depth;
+    vNoiseOffset = r2.yz * 37.0;
+}
+"""
+
+DEFAULT_SHADERS['particle.frag'] = """#version 330 core
+precision mediump float;
+
+out vec4 FragColor;
+
+in highp vec2 vUV;
+in vec4 vColor;
+in vec4 vGlow;
+in highp vec4 vShape;
+in highp vec3 vWorldPos;
+in highp float vDepth;
+in highp vec2 vNoiseOffset;
+
+uniform highp sampler2D uSceneDepth;
+uniform int uSoft;
+uniform highp vec4 uViewport;
+uniform highp vec2 uDepthParams;   // projection[3][2], projection[2][2]
+""" + FOG_GLSL + """
+// Ambient the particle catches before the map's global ambient is added; the
+// world's lit shaders bake 0.1, but a puff of smoke is mostly lit from all
+// round, so it starts brighter.
+const vec3 PARTICLE_BASE_LIGHT = vec3(0.75);
+
+highp float hash12(highp vec2 p) {
+    highp vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+highp float valueNoise(highp vec2 p) {
+    highp vec2 i = floor(p);
+    highp vec2 f = fract(p);
+    highp vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x),
+               mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x),
+               u.y);
+}
+
+void main() {
+    highp float r2 = dot(vUV, vUV);
+    if (r2 >= 1.0) discard;
+
+    // Procedural sprite: radial falloff times a little value noise.
+    float hardness = vShape.y;
+    float falloff = pow(1.0 - r2, 1.0 + 2.0 * hardness);
+    highp vec2 q = vUV * 1.7 + vNoiseOffset;
+    float n = 0.65 * valueNoise(q) + 0.35 * valueNoise(q * 2.3 + 11.0);
+    float mask = falloff * mix(1.0, clamp(n * 1.6 - 0.15, 0.0, 1.0), vShape.z);
+    float alpha = vShape.x * mask;
+
+    if (uSoft != 0) {
+        // Soft particles: fade where the scene is just behind the particle.
+        highp vec2 uv = (gl_FragCoord.xy - uViewport.xy) / uViewport.zw;
+        highp float d = texture(uSceneDepth, uv).r * 2.0 - 1.0;
+        highp float sceneDepth = uDepthParams.x / (d + uDepthParams.y);
+        alpha *= clamp((sceneDepth - vDepth) / vShape.w, 0.0, 1.0);
+    }
+    if (alpha < 0.003) discard;
+
+    vec3 light = mix(vec3(1.0), min(PARTICLE_BASE_LIGHT + uAmbient, vec3(1.5)),
+                     vColor.a);
+    vec3 rgb = vColor.rgb * light + vGlow.rgb;
+    float opacity = vGlow.a;
+    // Alpha-blended particles fade into the fog colour; additive ones fade out.
+    float fog = fogFactor(vWorldPos);
+    rgb = mix(rgb * (1.0 - fog), mix(rgb, uFogColor, fog), opacity);
+    // Premultiplied: opacity 1 blends like alpha, 0 adds.
+    FragColor = vec4(rgb * alpha, alpha * opacity);
 }
 """
 

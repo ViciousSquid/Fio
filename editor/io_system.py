@@ -1189,13 +1189,15 @@ def register_default_io():
     # === EFFECT ===
     # Effect TYPE selects the behaviour family. FIRE and ORB each have five
     # authored GIF variants; those variants are independent of effect_type.
+    # Any type may also carry a particle emitter; PARTICLES is one alone.
     register_io('effect',
         inputs=[
-            IODef('SetType', 'Set the Effect TYPE (FIRE, ORB, EXPLOSION, or CUSTOM)', 'string'),
+            IODef('SetType', 'Set the Effect TYPE (FIRE, ORB, EXPLOSION, CUSTOM, or PARTICLES)', 'string'),
             IODef('SetFireTexture', 'Select FIRE variant number 1-5', 'string'),
             IODef('SetOrbTexture', 'Select ORB variant number 1-5', 'string'),
             IODef('SetCustomGif', 'Set the CUSTOM GIF path', 'string'),
             IODef('SetLoop', 'Set whether a CUSTOM GIF loops', 'bool'),
+            IODef('SetEmitter', 'Set the particle emitter (NONE, SMOKE, STEAM, SPARKS, SPLASH, or MIST)', 'string'),
             IODef('Hide', 'Hide this Effect'),
             IODef('Show', 'Show this Effect'),
             IODef('ToggleVisibility', 'Toggle Effect visibility'),

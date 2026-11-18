@@ -16,6 +16,7 @@ from .effect_entity import (
     EFFECT_EXPLOSION,
     EFFECT_FIRE,
     EFFECT_ORB,
+    EFFECT_PARTICLES,
 )
 from .soa import grow_soa_arrays
 
@@ -24,12 +25,16 @@ FAMILY_FIRE = 0
 FAMILY_EXPLOSION = 1
 FAMILY_ORB = 2
 FAMILY_CUSTOM = 3
+#: The emitter alone. Active from the start and looping, like FIRE; every
+#: family other than EXPLOSION is.
+FAMILY_PARTICLES = 4
 
 _FAMILY_IDS = {
     EFFECT_FIRE: FAMILY_FIRE,
     EFFECT_EXPLOSION: FAMILY_EXPLOSION,
     EFFECT_ORB: FAMILY_ORB,
     EFFECT_CUSTOM: FAMILY_CUSTOM,
+    EFFECT_PARTICLES: FAMILY_PARTICLES,
 }
 
 

@@ -649,7 +649,10 @@ class GLESRenderer:
                         width, height = table.sprite_size[row]
                         position = np.array(table.pos[row], dtype=float)
                         if kind == 'effect':
-                            if not table.effect_alive[row]:
+                            # PARTICLES (family 4) is an emitter alone, which
+                            # this renderer does not draw.
+                            if (not table.effect_alive[row]
+                                    or int(table.effect_type[row]) == 4):
                                 continue
                             growth = 1.
                             if int(table.effect_type[row]) == 1:

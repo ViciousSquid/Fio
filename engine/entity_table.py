@@ -97,6 +97,7 @@ except ImportError:                                   # pragma: no cover
     Thing = PathNode = Portal = Prop = Monster = Effect = None
     LogicGate = LogicRelay = LogicTimer = LevelChanger = Light = None
     LogicSpawner = LogicCamera = ReflectionProbe = None
+from .effect_entity import EMITTER_SCALE_RANGE, emitter_id
 
 
 # --------------------------------------------------------------------------
@@ -688,6 +689,13 @@ _COLUMNS = (
     ('effect_custom_loop', (), bool, True),
     ('effect_preview', (), bool, False),
     ('effect_params', (4,), np.float32, 0.0),
+    #: The Effect's particle emitter: preset id (0 = none, see
+    #: effect_entity.EMITTER_PRESETS), (rate 0..1, scale, extent width,
+    #: extent height) and tint 0..1. Authored, so resolved with the other
+    #: static Effect columns and never touched by the clock.
+    ('effect_emitter', (), np.uint8, 0),
+    ('effect_emitter_params', (4,), np.float32, 0.0),
+    ('effect_emitter_tint', (3,), np.float32, 1.0),
     ('effect_color', (3,), np.float32, 1.0),
     ('effect_light_color', (3,), np.float32, 1.0),
     ('effect_light_enabled', (), bool, False),
@@ -1520,6 +1528,7 @@ class EntityTable:
                     1 if effect_type == 'EXPLOSION'
                     else 2 if effect_type == 'ORB'
                     else 3 if effect_type == 'CUSTOM'
+                    else 4 if effect_type == 'PARTICLES'
                     else 0
                 )
             self.effect_fire_variant[slot] = (
@@ -1560,6 +1569,17 @@ class EntityTable:
 
             self.effect_params[slot] = (
                 width, visual_intensity, light_intensity, light_radius
+            )
+            self.effect_emitter[slot] = emitter_id(props)
+            self.effect_emitter_params[slot] = (
+                max(0.0, min(1.0, _effect_float(props, 'emitter_rate', 1.0))),
+                max(EMITTER_SCALE_RANGE[0], min(EMITTER_SCALE_RANGE[1],
+                    _effect_float(props, 'emitter_scale', 1.0))),
+                width,
+                height,
+            )
+            self.effect_emitter_tint[slot] = _effect_colour(
+                props, 'emitter_tint', [255, 255, 255]
             )
             self.effect_color[slot] = _effect_colour(
                 props, 'colour', [255, 110, 25]
@@ -1630,6 +1650,9 @@ class EntityTable:
             self.effect_custom_loop[slot] = True
             self.effect_preview[slot] = False
             self.effect_params[slot].fill(0.0)
+            self.effect_emitter[slot] = 0
+            self.effect_emitter_params[slot].fill(0.0)
+            self.effect_emitter_tint[slot] = 1.0
             self.effect_color[slot] = 1.0
             self.effect_light_color[slot] = 1.0
             self.effect_light_enabled[slot] = False

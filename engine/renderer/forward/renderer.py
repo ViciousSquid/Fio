@@ -199,8 +199,21 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._effect_order_scratch = np.empty(0, dtype=np.int32)
         self._effect_depth_scratch = np.empty(0, dtype=np.float64)
         self._effect_depth_aux_scratch = np.empty(0, dtype=np.float64)
-        self._effect_expand_slots_scratch = np.empty(0, dtype=np.int32)
-        self._effect_expand_particle_scratch = np.empty(0, dtype=np.float32)
+        # Stateless particle emitters: one row per emitter, uploaded only when
+        # a row or the draw order changes (draw_particles_instanced).
+        self._particle_instance_vbo = None
+        self._particle_instance_vao = None
+        self._particle_instance_capacity = 0
+        self._particle_instance_data = np.empty(
+            (0, self.PARTICLE_INSTANCE_FLOATS), dtype=np.float32)
+        self._particle_uploaded = None
+        self._particle_presets_sent = None
+        #: The scene depth copy (_capture_scene_depth) holds this frame's
+        #: opaque depth: made by the decal pass, reused by the particles.
+        self._scene_depth_current = False
+        #: Depth copies made so far (_capture_scene_depth), to tell whether
+        #: the decal pass made one.
+        self._scene_depth_copies = 0
         self.effect_custom_frames = {}
         self.effect_custom_cumulative = {}
         # Capacity-stable scratch for the numeric sprite filter. The renderer
@@ -810,6 +823,9 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         # the unlit passes (sprites) and the terrain are not handed a camera.
         self._frame_camera_pos = self._camera_xyz(camera_pos)
         self.render_stats.reset()
+        # Set only by this frame's decal pass (and spent by the particles):
+        # a portal view drawn before it must not read last frame's copy.
+        self._scene_depth_current = False
         self.render_stats.total_brushes = len(config.get('all_brush_slots', ()))
         if not getattr(self, '_portal_scene_pass', False):
             self._stream_calls.clear()
@@ -1112,9 +1128,13 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         if etable is not None and len(etable.effect_slots):
             self.ensure_effect_frames(etable)
         # Projected decals (blood): onto the opaque world just drawn, before
-        # anything blended, so they lie under water and glass.
+        # anything blended, so they lie under water and glass. A depth copy
+        # they make is still this frame's opaque depth when the particles
+        # draw (nothing between writes depth), so those reuse it.
+        copies = self._scene_depth_copies
         if not self._solid_look:            # 'Solid Lit': no painted images
             self.draw_decals(projection, view, camera_pos, config.get('decals'))
+        self._scene_depth_current = self._scene_depth_copies != copies
         # High-quality water reflects what is in the depth buffer: in a frame
         # that has some, effects write their solid part there too.
         self._reflected_effects = None
@@ -1230,16 +1250,22 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._selected_payloads.clear()
         self._distance_culls.clear()
         self.__dict__.pop('_occlusion_kept', None)
-        for vao in (self._sprite_instance_vao, self._effect_instance_vao):
+        for vao in (self._sprite_instance_vao, self._effect_instance_vao,
+                    self._particle_instance_vao):
             if vao:
                 gl.glDeleteVertexArrays(1, [vao])
-        for vbo in (self._sprite_instance_vbo, self._effect_instance_vbo):
+        for vbo in (self._sprite_instance_vbo, self._effect_instance_vbo,
+                    self._particle_instance_vbo):
             if vbo:
                 gl.glDeleteBuffers(1, [vbo])
         self._sprite_instance_vao = None
         self._effect_instance_vao = None
+        self._particle_instance_vao = None
         self._sprite_instance_vbo = None
         self._effect_instance_vbo = None
+        self._particle_instance_vbo = None
+        self._particle_instance_capacity = 0
+        self._particle_uploaded = None
         # Portal resources. The mask and rim programs are not in ``shaders``.
         if self._portal_quad_vao:
             gl.glDeleteVertexArrays(1, [self._portal_quad_vao])
