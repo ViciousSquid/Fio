@@ -55,7 +55,7 @@ def main():
     import bench_collision as bc
     import perf_probes as pp
     from engine import brush_geometry as bg
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     from engine.player import Player
 
     source = pp._runtime_source()

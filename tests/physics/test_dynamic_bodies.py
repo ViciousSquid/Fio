@@ -1,4 +1,4 @@
-"""Engine-level dynamic body physics (engine.physics.PhysicsWorld).
+"""Engine-level dynamic body physics (engine.physics.soma.PhysicsWorld).
 
 Runs against the real SpatialGrid so the static-cell cache, the batched
 floor query and the push response are exercised exactly as in play mode.
@@ -6,7 +6,8 @@ floor query and the push response are exercised exactly as in play mode.
 import glm
 import pytest
 
-from engine.physics import PhysicsWorld, SpatialGrid
+from engine.physics.soma import PhysicsWorld
+from engine.spatial_grid import SpatialGrid
 from engine.player import Player
 from engine.prop_entity import Prop
 from engine.spatial import set_authored_flag, set_live_flag

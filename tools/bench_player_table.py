@@ -118,7 +118,7 @@ class World:
         from editor.editor_state import EditorState
         from engine import brush_geometry as bg
         from engine.logic_thread import LogicThread
-        from engine.physics import SpatialGrid
+        from engine.spatial_grid import SpatialGrid
         from engine.player import Player
         from engine.threaded_game_state import ThreadedGameState
         self.glm = glm

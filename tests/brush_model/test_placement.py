@@ -31,7 +31,7 @@ from engine import render_table as rt
 from engine.constants import brush_aabb_bounds
 from engine.logic_render import LogicRender
 from engine.mover_table import travel_range
-from engine.physics import SpatialGrid
+from engine.spatial_grid import SpatialGrid
 from engine.render_table import RenderTable
 from engine.view_filters import brush_bounds
 from plugins.bigworld.cell import cells_for_aabb

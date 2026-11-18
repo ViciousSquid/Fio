@@ -23,7 +23,7 @@ from engine.player import Player
 from engine.logic_thread import LogicThread
 from engine.monster_ai import MonsterAI
 from engine.monster_constants import MONSTER_SHOOT_INTERVAL
-from engine.physics import SpatialGrid
+from engine.spatial_grid import SpatialGrid
 from engine.threaded_game_state import ThreadedGameState
 from tests.helpers.worlds import box_brush, make_thing
 

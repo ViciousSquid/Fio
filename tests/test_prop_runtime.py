@@ -10,7 +10,8 @@ from editor.editor_state import EditorState                    # noqa: E402
 from editor.things import Light                                 # noqa: E402
 from editor.io_system import OutputConnection, add_connection  # noqa: E402
 from engine.logic_thread import LogicThread                     # noqa: E402
-from engine.physics import PhysicsWorld, SpatialGrid            # noqa: E402
+from engine.physics.soma import PhysicsWorld            # noqa: E402
+from engine.spatial_grid import SpatialGrid              # noqa: E402
 from engine.player import Player                                 # noqa: E402
 from engine.prop_entity import Prop                              # noqa: E402
 from engine.prop_runtime import PropSession                      # noqa: E402

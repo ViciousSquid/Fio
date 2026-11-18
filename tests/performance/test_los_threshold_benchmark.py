@@ -32,7 +32,7 @@ pytest.importorskip("glm")
 
 import glm                                                   # noqa: E402
 
-from engine.physics import SpatialGrid                       # noqa: E402
+from engine.spatial_grid import SpatialGrid                       # noqa: E402
 from tests.helpers.worlds import box_brush                    # noqa: E402
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.slow]

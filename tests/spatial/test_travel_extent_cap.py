@@ -18,7 +18,7 @@ import pytest
 from engine import brush_placement as bp
 from engine import spatial_grid
 from engine.mover_table import travel_range
-from engine.physics import SpatialGrid
+from engine.spatial_grid import SpatialGrid
 from engine.spatial import cell_range
 from tests.helpers.worlds import box_brush
 

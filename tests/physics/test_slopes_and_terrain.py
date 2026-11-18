@@ -9,7 +9,8 @@ way; and gravity pulls along it, against the body's friction.
 import numpy as np
 import pytest
 
-from engine.physics import PhysicsWorld, SpatialGrid
+from engine.physics.soma import PhysicsWorld
+from engine.spatial_grid import SpatialGrid
 from engine.terrain import Terrain
 from tests.helpers.runtime import drive, release
 from tests.helpers.worlds import angled_brush, box_brush

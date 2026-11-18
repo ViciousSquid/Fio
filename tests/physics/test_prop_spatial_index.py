@@ -205,7 +205,8 @@ def test_carrying_refiles_the_held_prop():
 
 def _real_physics_world(prop):
     """Build the production PhysicsWorld around a real Prop entity."""
-    from engine.physics import PhysicsWorld, SpatialGrid
+    from engine.physics.soma import PhysicsWorld
+    from engine.spatial_grid import SpatialGrid
 
     grid = SpatialGrid()
     grid.populate([])
@@ -260,7 +261,8 @@ def test_a_quiet_frame_refiles_nothing():
 # ---------------------------------------------------------------------------
 
 def _physics_world_with(positions):
-    from engine.physics import PhysicsWorld, SpatialGrid
+    from engine.physics.soma import PhysicsWorld
+    from engine.spatial_grid import SpatialGrid
     grid = SpatialGrid()
     grid.populate([])
     world = PhysicsWorld(grid)

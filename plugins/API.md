@@ -154,9 +154,10 @@ History:
   awake body every tick in case). Use `set_flag` / `clear_flag`; the physics
   engine prints a warning naming an entity changed any other way.
 
-  `SpatialGrid` — engine core — moved to `engine.spatial_grid`;
-  `from engine.physics import SpatialGrid, PhysicsWorld` still works. The
-  shipped plugins declare `api_version = "2.0.0"`.
+  `engine.physics` exports the physics boundary only. `SpatialGrid` (engine
+  core) is in `engine.spatial_grid`; Soma's classes (`Soma`, `PhysicsBody`)
+  are in `engine.physics.soma`. The shipped plugins declare
+  `api_version = "2.0.0"`.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin

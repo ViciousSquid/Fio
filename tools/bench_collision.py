@@ -129,7 +129,7 @@ def scenario(bg, kind):
 def run(kind, ticks, measure_allocations):
     import glm
     from engine import brush_geometry as bg
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     from engine.player import Player
     try:
         from engine import brush_placement as bp

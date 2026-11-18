@@ -42,7 +42,8 @@ def level(rng):
 
 
 def build(count, rng, statics):
-    from engine.physics import PhysicsWorld, SpatialGrid
+    from engine.physics.soma import PhysicsWorld
+    from engine.spatial_grid import SpatialGrid
     from engine.prop_entity import Prop
 
     grid = SpatialGrid(cell_size=512.0)

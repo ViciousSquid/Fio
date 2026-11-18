@@ -79,7 +79,7 @@ def test_a_ground_monster_directly_below_its_target_does_not_produce_nan():
     from engine.monster_ai import MonsterAI
     from engine.player import Player
     from engine.threaded_game_state import ThreadedGameState
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     from tests.helpers.worlds import make_thing
 
     ground = [box_brush("ground", (0, -16, 0), (4096, 32, 4096))]
@@ -117,7 +117,7 @@ def test_a_monster_parked_on_its_only_patrol_node_announces_it_once():
     from engine.monster_ai import MonsterAI
     from engine.player import Player
     from engine.threaded_game_state import ThreadedGameState
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     import glm
     from tests.helpers.worlds import make_thing
 

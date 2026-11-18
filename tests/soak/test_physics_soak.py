@@ -17,7 +17,8 @@ import numpy as np
 import pytest
 
 from engine.change_journal import JOURNAL, touch
-from engine.physics import PhysicsWorld, SpatialGrid
+from engine.physics.soma import PhysicsWorld
+from engine.spatial_grid import SpatialGrid
 from engine.prop_entity import Prop
 from engine.spatial import set_authored_flag
 from tests.helpers.soak import Soak, cycles

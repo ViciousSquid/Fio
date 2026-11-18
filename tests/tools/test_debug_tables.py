@@ -78,7 +78,7 @@ def monster_window(window):
     from editor.things import Monster
     from engine.logic_thread import LogicThread
     from engine.monster_ai import MonsterAIThread
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     from engine.player import Player
     from engine.threaded_game_state import ThreadedGameState
     from tests.helpers.worlds import box_brush, make_thing

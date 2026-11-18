@@ -16,7 +16,7 @@ from editor.things import Monster, PathNode
 from editor.io_handlers import register_all_input_handlers
 from engine.logic_thread import LogicThread
 from engine.monster_ai import MonsterAI
-from engine.physics import SpatialGrid
+from engine.spatial_grid import SpatialGrid
 from engine.player import Player
 from engine.threaded_game_state import ThreadedGameState
 from tests.helpers.worlds import make_thing

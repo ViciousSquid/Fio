@@ -22,7 +22,7 @@ from editor.io_system import OutputConnection       # noqa: E402
 from editor.things import Light, Monster            # noqa: E402
 from engine.constants import brush_aabb_bounds      # noqa: E402
 from engine.logic_thread import LogicThread         # noqa: E402
-from engine.physics import SpatialGrid              # noqa: E402
+from engine.spatial_grid import SpatialGrid              # noqa: E402
 from engine.threaded_game_state import ThreadedGameState  # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing, pillar_grid, room  # noqa: E402
 

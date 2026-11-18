@@ -552,3 +552,19 @@ def test_a_store_finds_its_entity_once_and_again_when_the_level_changes():
     finally:
         registry.clear()
         registry.update(saved)
+
+
+def test_the_physics_package_exports_the_boundary_only():
+    """No compatibility names: the world and Soma's classes are imported from
+    their own modules (engine.spatial_grid, engine.physics.soma)."""
+    import engine.physics as boundary
+    from engine.physics import soma
+    from engine import spatial_grid
+
+    assert not hasattr(boundary, '__getattr__')
+    for name in ('SpatialGrid', 'Soma', 'PhysicsWorld', 'PhysicsBody',
+                 'quat_from_rotation', 'rotation_from_quat'):
+        assert name not in vars(boundary), name
+        with pytest.raises(ImportError):
+            exec(f'from engine.physics import {name}', {})
+    assert spatial_grid.SpatialGrid and soma.Soma and soma.PhysicsBody

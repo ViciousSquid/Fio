@@ -16,12 +16,10 @@ built-in physics: Soma. The world is not physics' to hold: where its brushes, mo
 doors and water are is :class:`engine.spatial_grid.SpatialGrid`'s to say --
 engine core, which a physics is created with and asks. Importing this package needs neither NumPy nor PyGLM.
 
-``SpatialGrid``, ``PhysicsWorld`` (now ``Soma``) and ``PhysicsBody`` used to
-live in a module of this name; they are still importable from here (resolved on first use) so
-existing imports keep working. New code names their real homes.
+This package exports the boundary only. ``SpatialGrid`` is imported from
+:mod:`engine.spatial_grid`; Soma's own classes (``Soma``, ``PhysicsBody``)
+and helpers from :mod:`engine.physics.soma`.
 """
-
-import importlib
 
 from .api import (
     BODY_BRUSH, BODY_PROPERTIES, CRUSH_DAMAGE, HEAVY_MASS, NO_PHYSICS,
@@ -39,22 +37,3 @@ __all__ = [
     'selected_physics', 'available_physics', 'physics_factory',
     'unload_physics',
 ]
-
-#: Names that moved out of the old ``engine.physics`` module, and where to.
-_MOVED = {
-    'SpatialGrid': 'engine.spatial_grid',
-    'Soma': 'engine.physics.soma',
-    'PhysicsWorld': 'engine.physics.soma',
-    'PhysicsBody': 'engine.physics.soma',
-    'quat_from_rotation': 'engine.physics.soma',
-    'rotation_from_quat': 'engine.physics.soma',
-}
-
-
-def __getattr__(name):
-    home = _MOVED.get(name)
-    if home is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(importlib.import_module(home), name)
-    globals()[name] = value
-    return value

@@ -17,7 +17,7 @@ import re
 
 import pytest
 
-from engine.physics import PhysicsWorld
+from engine.physics.soma import PhysicsWorld
 from engine.spatial import (SIM_TIER_KEY, TIER_DISTANT, clear_live_flag,
                             set_authored_flag, set_live_flag)
 from engine.spatial_grid import SpatialGrid

@@ -127,8 +127,8 @@ from engine.spatial import set_live_flag as _set_live_flag
 #:   - :meth:`EditorAPI.register_physics` / :meth:`EditorAPI.select_physics`:
 #:     the physics engine can be swapped out the way the renderer can.
 #:
-#:   ``SpatialGrid`` lives in ``engine.spatial_grid`` (still importable from
-#:   ``engine.physics``, as ``PhysicsWorld`` is).
+#:   ``SpatialGrid`` lives in ``engine.spatial_grid`` and Soma's classes in
+#:   ``engine.physics.soma``; ``engine.physics`` exports the boundary only.
 API_VERSION = "2.0.0"
 API_VERSION_INFO = (2, 0, 0)
 

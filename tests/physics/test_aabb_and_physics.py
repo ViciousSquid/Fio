@@ -15,7 +15,7 @@ import glm
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from engine.constants import AABB_RUNTIME_KEYS, brush_aabb_bounds  # noqa: E402
-from engine.physics import SpatialGrid  # noqa: E402
+from engine.spatial_grid import SpatialGrid  # noqa: E402
 
 
 def _brush(pos, size):

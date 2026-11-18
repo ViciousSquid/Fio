@@ -11,7 +11,8 @@ import numpy as np
 import pytest
 
 from engine import mesh_columns
-from engine.physics import PhysicsWorld, SpatialGrid
+from engine.physics.soma import PhysicsWorld
+from engine.spatial_grid import SpatialGrid
 from tests.physics.test_dynamic_bodies import (DRUM_HALF_Y, DRUM_SIZE, _drum_brush,
                                                _floor, _prop, _run)
 

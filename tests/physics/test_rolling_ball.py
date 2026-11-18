@@ -5,8 +5,8 @@ import pytest
 
 from engine.entity_table import _model_recipe, _model_transform_columns
 from engine.obj_loader import OBJLoader
-from engine.physics import (PhysicsWorld, SpatialGrid, quat_from_rotation,
-                            rotation_from_quat)
+from engine.physics.soma import PhysicsWorld, quat_from_rotation, rotation_from_quat
+from engine.spatial_grid import SpatialGrid
 from engine.player import Player
 from engine.prop_entity import BALL_MODEL_PATH, BALL_NUMBERS_MODEL_PATH, Prop
 from engine.shaders import DEFAULT_SHADERS

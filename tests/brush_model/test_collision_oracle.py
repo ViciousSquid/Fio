@@ -32,7 +32,7 @@ import glm                                            # noqa: E402
 from engine import brush_geometry as bg               # noqa: E402
 from engine import brush_placement as bp              # noqa: E402
 from engine.constants import brush_aabb_bounds        # noqa: E402
-from engine.physics import SpatialGrid                # noqa: E402
+from engine.spatial_grid import SpatialGrid                # noqa: E402
 from engine.player import Player                      # noqa: E402
 from tests.helpers import runtime                     # noqa: E402
 from tests.helpers.worlds import angled_brush, box_brush  # noqa: E402
