@@ -103,18 +103,44 @@ def test_a_card_turns_faint_and_stays(main_window, console):
     assert "Saved" in console.console.toPlainText()
 
 
-def test_hover_or_click_highlights_it_with_a_close_button(main_window, console):
+class _Clock:
+    """time.monotonic, stepped by the test: the card's wait and its fades
+    are measured by it, so nothing here depends on how fast this machine is."""
+
+    def __init__(self, monkeypatch):
+        import time
+        self.now = time.monotonic()
+        monkeypatch.setattr(time, 'monotonic', lambda: self.now)
+
+    def advance(self, console, seconds, steps=10):
+        """*seconds* pass, the console's timers ticking *steps* times."""
+        for _ in range(steps):
+            self.now += seconds / steps
+            console._fade_toasts()
+            console._ease_toasts()
+
+
+def test_hover_or_click_highlights_it_with_a_close_button(main_window, console, monkeypatch):
+    clock = _Clock(monkeypatch)
     main_window.show_toast("Failed to save", is_error=True)
-    QTest.qWait(1000)                                        # faint by now
+    QTest.qWait(150)                                         # drawn
     serial = dc.get_debug_logger().toasts()[-1][0]
+    clock.advance(console, 1.5)                              # its wait, then the fade
     faint = _card_colour(console, serial)
     _mouse(console, QEvent.MouseMove, _point_on(console, serial))
     assert serial in console._toast_highlighted
-    assert _card_colour(console, serial) != faint           # full colour again
-    _mouse(console, QEvent.Leave if False else QEvent.MouseMove, QPoint(880, 380))
+    # It lights up over TOAST_TRANSITION_SECONDS (0.5 s), not in one jump.
+    assert _card_colour(console, serial) == faint           # not yet
+    clock.advance(console, 0.25, steps=3)
+    halfway = _card_colour(console, serial)
+    assert halfway != faint, "it should be lighting up"
+    clock.advance(console, 0.3, steps=3)
+    full = _card_colour(console, serial)
+    assert full not in (faint, halfway)                     # full colour again
     console.eventFilter(console.console.viewport(), QEvent(QEvent.Leave))
     assert serial not in console._toast_highlighted
-    QTest.qWait(900)
+    assert _card_colour(console, serial) == full            # no jump back either
+    clock.advance(console, 1.5)                              # its wait, then the fade
     assert _card_colour(console, serial) == faint           # faint again
     _mouse(console, QEvent.MouseButtonPress, _point_on(console, serial))
     assert serial in console._toast_highlighted             # a click too
@@ -135,6 +161,26 @@ def test_the_close_button_removes_the_card(main_window, console):
     assert _toasts() == [('success', "Saved")]
     assert "Failed to save" not in console.console.toPlainText()
     assert console.console.toHtml().count("<table") == 1
+
+
+def test_a_card_dims_again_with_a_fade_not_a_jump(main_window, console, monkeypatch):
+    """Turning faint (after its wait, or once no longer hovered) eases over
+    TOAST_TRANSITION_SECONDS too, and the easing stops when it is done."""
+    clock = _Clock(monkeypatch)
+    main_window.show_toast("Saved", level='success')
+    QTest.qWait(150)
+    serial = dc.get_debug_logger().toasts()[-1][0]
+    full = _card_colour(console, serial)
+    console._toast_faint.add(serial)
+    console._restyle_toast(serial)
+    assert _card_colour(console, serial) == full            # no jump
+    clock.advance(console, 0.25, steps=3)
+    between = _card_colour(console, serial)
+    assert between != full
+    clock.advance(console, 0.3, steps=3)
+    faint = _card_colour(console, serial)
+    assert faint not in (full, between)
+    assert not console._toast_easing.isActive()             # stops when done
 
 
 def test_the_close_button_is_hidden_until_highlighted(main_window, console):

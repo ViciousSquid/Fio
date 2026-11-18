@@ -38,8 +38,12 @@ _toast_serials = __import__('itertools').count(1)
 #: Seconds a console toast stays in full colour before it turns faint (it is
 #: never removed by itself: only its close button removes it).
 TOAST_FADE_SECONDS = 3.0
-#: How far a faint card's colours sink toward the console background.
-TOAST_FAINT = 0.62
+#: How far a faint (dormant) card's colours sink toward the console
+#: background: well back, so a card that is new or hovered stands out.
+TOAST_FAINT = 0.8
+#: Seconds a card takes to light up (hovered) or dim again: a fade, both
+#: ways, never a jump.
+TOAST_TRANSITION_SECONDS = 0.5
 #: A toast with the same level and words as one logged less than this many
 #: seconds before (its last repeat) is not a new card: that card counts it,
 #: shows the count (``×3``), and turns full colour again.
@@ -891,6 +895,15 @@ class DebugConsole(QWidget):
         self._toast_fader = QTimer(self)
         self._toast_fader.setInterval(250)
         self._toast_fader.timeout.connect(self._fade_toasts)
+        #: serial -> (faint, close) as drawn now, each 0..1: how far the card
+        #: has sunk toward faint, and how far its close button shows. A
+        #: change of state eases them to the new one over
+        #: TOAST_TRANSITION_SECONDS (_toast_easing), never in one jump.
+        self._toast_shown = {}
+        self._toast_easing = QTimer(self)
+        self._toast_easing.setInterval(30)
+        self._toast_easing.timeout.connect(self._ease_toasts)
+        self._toast_eased_at = None
         self.console.setMouseTracking(True)
         self.console.viewport().setMouseTracking(True)
         self.console.viewport().installEventFilter(self)
@@ -1143,15 +1156,21 @@ class DebugConsole(QWidget):
             return 'highlighted'
         return 'faint' if serial in self._toast_faint else 'new'
 
+    #: Each state's (faint, close) amounts.
+    _TOAST_TARGETS = {'new': (0.0, 0.0), 'faint': (1.0, 0.0), 'highlighted': (0.0, 1.0)}
+
     @staticmethod
-    def _toast_colours(level, state):
-        """``(accent, text, body, close button)`` colours of a card."""
+    def _toast_colours(level, state, amounts=None):
+        """``(accent, text, body, close button)`` colours of a card, for
+        *state*, or for *amounts* ``(faint, close)`` part way between."""
         border, ink, body, _icon = TOAST_STYLES.get(level, TOAST_STYLES['info'])
-        if state == 'faint':
-            border = _mix(border, _CONSOLE_BG, TOAST_FAINT).name()
-            ink = _mix(ink, _CONSOLE_BG, TOAST_FAINT).name()
-            body = _mix(body, _CONSOLE_BG, TOAST_FAINT).name()
-        close = ink if state == 'highlighted' else body
+        faint, shown = (amounts if amounts is not None
+                        else DebugConsole._TOAST_TARGETS.get(state, (0.0, 0.0)))
+        if faint > 0.0:
+            border = _mix(border, _CONSOLE_BG, TOAST_FAINT * faint).name()
+            ink = _mix(ink, _CONSOLE_BG, TOAST_FAINT * faint).name()
+            body = _mix(body, _CONSOLE_BG, TOAST_FAINT * faint).name()
+        close = _mix(body, ink, shown).name() if shown > 0.0 else body
         return border, ink, body, close
 
     def _toast_paragraphs(self, serial, level, text, ink, close_ink):
@@ -1205,7 +1224,9 @@ class DebugConsole(QWidget):
         if text is None:
             return
         level = self._toast_levels.get(serial, 'info')
-        _border, ink, _body, close_ink = self._toast_colours(level, self._toast_state(serial))
+        state = self._toast_state(serial)
+        _border, ink, _body, close_ink = self._toast_colours(level, state)
+        self._toast_shown[serial] = self._TOAST_TARGETS[state]
         edit = QTextCursor(self.console.document())
         edit.beginEditBlock()
         try:
@@ -1216,7 +1237,8 @@ class DebugConsole(QWidget):
             words.setPosition(cell.lastCursorPosition().position(), QTextCursor.KeepAnchor)
             words.insertHtml(self._toast_paragraphs(
                 serial, level, text.translate(_MARKUP_CHARS), ink, close_ink))
-            self._restyle_toast(serial)
+            # Logged again: back in full colour now, words and card alike.
+            self._paint_toast(serial, self._toast_shown[serial])
         finally:
             edit.endEditBlock()
         self._toast_cursors.pop(serial, None)
@@ -1262,7 +1284,47 @@ class DebugConsole(QWidget):
         return None
 
     def _restyle_toast(self, serial):
-        """Recolour toast *serial*'s card in place, for its state."""
+        """Ease toast *serial*'s card to its state's colours, over
+        TOAST_TRANSITION_SECONDS (a card not drawn yet takes them at once)."""
+        target = self._TOAST_TARGETS[self._toast_state(serial)]
+        if self._toast_shown.get(serial) is None:
+            self._toast_shown[serial] = target
+            self._paint_toast(serial, target)
+            return
+        if self._toast_shown[serial] != target and not self._toast_easing.isActive():
+            import time
+            self._toast_eased_at = time.monotonic()
+            self._toast_easing.start()
+
+    def _ease_toasts(self):
+        """One step of every card easing toward its state's colours; stop
+        when none is left between two states."""
+        import time
+        from PyQt5.QtGui import QTextCursor
+        now = time.monotonic()
+        step = (now - (self._toast_eased_at or now)) / TOAST_TRANSITION_SECONDS
+        self._toast_eased_at = now
+        moving = False
+        edit = QTextCursor(self.console.document())
+        edit.beginEditBlock()           # every card that moved: one layout
+        try:
+            for serial, shown in list(self._toast_shown.items()):
+                target = self._TOAST_TARGETS[self._toast_state(serial)]
+                if shown == target:
+                    continue
+                eased = tuple(
+                    t if abs(t - v) <= step else v + step * (1.0 if t > v else -1.0)
+                    for v, t in zip(shown, target))
+                self._toast_shown[serial] = eased
+                self._paint_toast(serial, eased)
+                moving = moving or eased != target
+        finally:
+            edit.endEditBlock()
+        if not moving:
+            self._toast_easing.stop()
+
+    def _paint_toast(self, serial, amounts):
+        """Recolour toast *serial*'s card in place, at *amounts*."""
         from PyQt5.QtGui import QColor, QTextCharFormat, QTextCursor
         table = self._toast_table(serial)
         if table is None:
@@ -1271,7 +1333,7 @@ class DebugConsole(QWidget):
         if level is None:
             level = next((lv for sr, lv, _t in get_debug_logger().toasts() if sr == serial),
                          'info')
-        border, ink, body, close = self._toast_colours(level, self._toast_state(serial))
+        border, ink, body, close = self._toast_colours(level, None, amounts)
         for column, colour in ((0, border), (1, body)):
             cell = table.cellAt(0, column)
             fmt = cell.format()
@@ -1367,6 +1429,7 @@ class DebugConsole(QWidget):
         self._toast_cursors.pop(serial, None)
         self._toast_faint.discard(serial)
         self._toast_highlighted.discard(serial)
+        self._toast_shown.pop(serial, None)
 
     def eventFilter(self, obj, event):
         if obj is self.console.viewport():
@@ -1518,8 +1581,9 @@ class DebugConsole(QWidget):
             self._toast_levels[serial] = level
             if serial not in self._toast_faint and serial not in self._toast_highlighted:
                 self._wake_fader()
-            border, ink, body, close_ink = self._toast_colours(
-                level, self._toast_state(serial))
+            state = self._toast_state(serial)
+            border, ink, body, close_ink = self._toast_colours(level, state)
+            self._toast_shown[serial] = self._TOAST_TARGETS[state]
             document = self.console.document()
             from PyQt5.QtGui import QTextDocument
             if document.resource(QTextDocument.ImageResource, QUrl(_TOAST_COPY_IMAGE)) is None:
@@ -1821,6 +1885,8 @@ class DebugConsole(QWidget):
         self._toast_levels.clear()
         self._toast_cursors.clear()
         self._toast_fader.stop()
+        self._toast_shown.clear()
+        self._toast_easing.stop()
         self.console.clear()
         self.message_count = 0
         self._document_lines = 0
