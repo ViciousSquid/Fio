@@ -8,7 +8,7 @@ from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixma
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import (Thing, Light, PlayerStart, Speaker, ReflectionProbe, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
-                          LogicCamera, LogicSpawner, Portal, LogicState, Effect)
+                          LogicCamera, LogicSpawner, Portal, LogicState, Effect, Shake)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
 from engine import brush_placement
 from engine.constants import brush_aabb_bounds, PLAYER_HULL_SIZE
@@ -4053,6 +4053,8 @@ class View2D(QWidget):
         add_logic_spawner_action = menu.addAction("Spawner")
         add_levelchanger_action = menu.addAction("LevelChanger")
         add_probe_action = menu.addAction("Reflection Probe")
+        add_shake_action = menu.addAction("Shaker")
+        add_shake_action.setToolTip("Shakes the screen when its Shake input fires")
         
         menu.addSeparator()
         
@@ -4156,6 +4158,8 @@ class View2D(QWidget):
             new_thing = Speaker(pos=pos_3d)
         elif action == add_probe_action:
             new_thing = ReflectionProbe(pos=pos_3d)
+        elif action == add_shake_action:
+            new_thing = Shake(pos=pos_3d)
         elif action == add_levelchanger_action:
             new_thing = LevelChanger(pos=pos_3d)
             new_thing.properties['target_map'] = ""
