@@ -1635,23 +1635,39 @@ class MainWindow(QMainWindow):
 
 
     def tint_selected_brush(self):
-        """Open colour picker dialog to tint the selected brush - unified with property editor."""
-        if not isinstance(self.primary_selection(), dict):
+        """The Asset Browser's Tint button: pick the selected brush's colour --
+        the one colour a brush has (:meth:`set_brush_colour`), the same as
+        Appearance > Brush Colour and, for a Glow brush, its Glow Color."""
+        brush = self.primary_selection()
+        if not isinstance(brush, dict):
             self.show_toast("Select a brush first", is_error=True)
             return
-        
-        self.save_state()
-        brush = self.primary_selection()
-        
-        # Get current colour (0.0-1.0 range) and convert to 0-255
-        current = brush.get('colour', [0.8, 0.8, 0.8])
-        current_qcolor = QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255))
-        
-        color = QColorDialog.getColor(current_qcolor, self, "Choose Brush Colour")
+        current = self.brush_colour(brush)
+        color = QColorDialog.getColor(
+            QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255)),
+            self, "Choose Brush Colour")
         if color.isValid():
-            # Store as 0.0-1.0 range
-            brush['colour'] = [color.redF(), color.greenF(), color.blueF()]
-            self.update_all_ui()
+            self.save_state()
+            self.set_brush_colour(brush, [color.redF(), color.greenF(), color.blueF()])
+
+    @staticmethod
+    def brush_colour(brush):
+        """The colour *brush* is drawn (and, a Glow brush, glows) in, 0-1:
+        its tint if one was set (the console's ``tint``), else its colour."""
+        from engine.constants import normalize_color
+        return list(normalize_color(brush.get('tint') or brush.get('colour'),
+                                    default=[0.8, 0.8, 0.8]))
+
+    def set_brush_colour(self, brush, rgb):
+        """Give *brush* colour *rgb* (0-1): the one colour setting a brush
+        has, whichever control sets it -- the Asset Browser's Tint,
+        Appearance > Brush Colour, a Glow brush's Glow Color. A tint left
+        from the console, which would hide it, goes."""
+        brush['colour'] = [float(c) for c in rgb]
+        brush.pop('tint', None)
+        self.state.mark_world_changed([brush])
+        self.mark_as_modified()
+        self.update_all_ui()
 
 
     def add_model_to_scene(self, filepath, rotation, scale):

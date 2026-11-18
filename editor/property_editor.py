@@ -1791,8 +1791,13 @@ class PropertyEditor(QWidget):
         layout.setSpacing(8)
         form = QFormLayout()
 
-        color_btn = self._color_button(brush.get('glow_color', [1.0, 0.9, 0.7]),
-                                       lambda: self._pick_color('glow_color', color_btn, [1.0, 0.9, 0.7]))
+        # The brush's one colour (Appearance > Brush Colour, the Asset
+        # Browser's Tint): what it glows in, and lights with when emissive.
+        color_btn = self._color_button(self.editor.brush_colour(brush),
+                                       lambda: self._pick_brush_colour(color_btn))
+        color_btn.setToolTip("The brush's colour -- the same setting as Appearance >\n"
+                             "Brush Colour and the Asset Browser's Tint button: what it\n"
+                             "glows in, and lights its surroundings with when Emissive.")
         form.addRow("Glow Color:", color_btn)
         self._widgets['glow_color_btn'] = color_btn
 
@@ -2087,8 +2092,8 @@ class PropertyEditor(QWidget):
         form = QFormLayout()
         form.setSpacing(8)
 
-        current = brush.get('colour', [0.8, 0.8, 0.8])
-        btn = self._color_button(current, lambda: self._pick_color('colour', btn, [0.8, 0.8, 0.8]), size=(140, 32))
+        current = self.editor.brush_colour(brush)
+        btn = self._color_button(current, lambda: self._pick_brush_colour(btn), size=(140, 32))
         reset = QPushButton("Reset")
         reset.setFixedSize(60, 32)
         reset.setToolTip("Reset to default grey")
@@ -5152,13 +5157,28 @@ class PropertyEditor(QWidget):
             self._update_color_button(button, new_color)
             self.editor.update_all_ui()
 
+    def _pick_brush_colour(self, button):
+        """Pick the brush's one colour (MainWindow.set_brush_colour): its
+        Brush Colour, its Glow Color and the Asset Browser's Tint alike."""
+        brush = self.current_object
+        if not isinstance(brush, dict):
+            return
+        current = self.editor.brush_colour(brush)
+        color = QColorDialog.getColor(
+            QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255)),
+            self, "Choose Brush Colour")
+        if color.isValid():
+            rgb = [color.redF(), color.greenF(), color.blueF()]
+            self.editor.save_state()
+            self._update_color_button(button, rgb)
+            self.editor.set_brush_colour(brush, rgb)
+
     def _reset_brush_colour(self, button):
-        if self.current_object is None:
+        if not isinstance(self.current_object, dict):
             return
         default = [0.8, 0.8, 0.8]
-        self.current_object['colour'] = default
         self._update_color_button(button, default)
-        self.editor.update_all_ui()
+        self.editor.set_brush_colour(self.current_object, default)
 
     def _repaint_viewport(self):
         for attr in ('gl_widget', 'viewport', 'canvas', 'render_widget', 'opengl_widget', 'view_3d'):
