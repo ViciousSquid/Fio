@@ -40,6 +40,10 @@ _toast_serials = __import__('itertools').count(1)
 TOAST_FADE_SECONDS = 3.0
 #: How far a faint card's colours sink toward the console background.
 TOAST_FAINT = 0.62
+#: A toast with the same level and words as one logged less than this many
+#: seconds before (its last repeat) is not a new card: that card counts it,
+#: shows the count (``×3``), and turns full colour again.
+TOAST_REPEAT_SECONDS = 2.0
 _CONSOLE_BG = '#1a1a1a'
 
 
@@ -200,7 +204,9 @@ def console_plain_text(category, message) -> str:
     if category == ECHO_CATEGORY:
         return message
     if message.startswith(_TOAST):
-        return _toast_parts(message)[2].translate(_MARKUP_CHARS)
+        _level, serial, text = _toast_parts(message)
+        count = get_debug_logger().toast_count(serial)
+        return text.translate(_MARKUP_CHARS) + (f'  \u00d7{count}' if count > 1 else '')
     if message.startswith(_NO_LINKS):
         return message[len(_NO_LINKS):].translate(_MARKUP_CHARS)
     if message.startswith(_MARKUP):
@@ -240,6 +246,8 @@ class DebugLogger(QObject):
     This allows the io_system to log without direct widget dependencies.
     """
     message_logged = pyqtSignal(str, str)  # (category, message)
+    #: A toast was logged again while its card was recent: (serial, count).
+    toast_repeated = pyqtSignal(str, int)
 
     _instance = None
 
@@ -263,6 +271,12 @@ class DebugLogger(QObject):
         self._initialized = True
         self._enabled = True
         self._buffer = deque(maxlen=HISTORY_LIMIT)  # the console history
+        #: (level, words) -> [serial, when last logged]: the recent toasts a
+        #: repeat is counted on (TOAST_REPEAT_SECONDS).
+        self._toast_recent = {}
+        #: serial -> how many times that toast was logged, when more than once.
+        self._toast_counts = {}
+        self._toast_lock = __import__('threading').Lock()
 
     def log(self, category: str, message: str):
         """Log a message with a category tag."""
@@ -291,9 +305,35 @@ class DebugLogger(QObject):
         if not self._enabled:
             return
         level = level if level in TOAST_STYLES else 'info'
-        full_msg = f"{_TOAST}{level}|{next(_toast_serials)}|{_plain(message)}"
+        words = _plain(message)
+        key = (level, words)
+        now = __import__('time').monotonic()
+        with self._toast_lock:
+            recent = self._toast_recent.get(key)
+            if recent is not None and now - recent[1] < TOAST_REPEAT_SECONDS:
+                # Again, and quickly: counted on its card, not a new one.
+                recent[1] = now
+                serial = recent[0]
+                count = self._toast_counts.get(serial, 1) + 1
+                self._toast_counts[serial] = count
+            else:
+                serial = str(next(_toast_serials))
+                count = 0
+                if len(self._toast_recent) > 64:
+                    self._toast_recent = {
+                        k: v for k, v in self._toast_recent.items()
+                        if now - v[1] < TOAST_REPEAT_SECONDS}
+                self._toast_recent[key] = [serial, now]
+        if count:
+            self.toast_repeated.emit(serial, count)
+            return
+        full_msg = f"{_TOAST}{level}|{serial}|{words}"
         self._buffer.append(('Info', full_msg))
         self.message_logged.emit('Info', full_msg)
+
+    def toast_count(self, serial) -> int:
+        """How many times toast *serial* was logged (its card's ``×N``)."""
+        return self._toast_counts.get(str(serial), 1)
 
     def toasts(self):
         """``[(serial, level, text)]`` of the toasts in the history, oldest
@@ -309,6 +349,10 @@ class DebugLogger(QObject):
         """Take the toast logged as *serial* out of the history (its close
         button): a rebuilt console does not bring it back."""
         serial = str(serial)
+        with self._toast_lock:
+            self._toast_counts.pop(serial, None)
+            self._toast_recent = {k: v for k, v in self._toast_recent.items()
+                                  if v[0] != serial}
         kept = [entry for entry in self._buffer
                 if not (str(entry[1]).startswith(_TOAST)
                         and _toast_parts(entry[1])[1] == serial)]
@@ -392,6 +436,9 @@ class DebugLogger(QObject):
     def clear_buffer(self):
         """Clear the message buffer."""
         self._buffer.clear()
+        with self._toast_lock:
+            self._toast_recent = {}
+            self._toast_counts = {}
 
 
 # Global logger instance
@@ -836,10 +883,14 @@ class DebugConsole(QWidget):
         self._toast_seen = {}            # serial -> when first drawn
         self._toast_faint = set()        # serials drawn faint
         self._toast_highlighted = set()  # serials hovered or clicked
+        self._toast_levels = {}          # serial -> level, as drawn
+        #: serial -> a cursor in its card: found again in O(1) -- a cursor
+        #: follows the edits around it -- and checked before it is trusted.
+        self._toast_cursors = {}
+        #: Runs only while a card is waiting to turn faint.
         self._toast_fader = QTimer(self)
         self._toast_fader.setInterval(250)
         self._toast_fader.timeout.connect(self._fade_toasts)
-        self._toast_fader.start()
         self.console.setMouseTracking(True)
         self.console.viewport().setMouseTracking(True)
         self.console.viewport().installEventFilter(self)
@@ -1025,6 +1076,7 @@ class DebugConsole(QWidget):
         """Connect to the global debug logger."""
         logger = get_debug_logger()
         logger.message_logged.connect(self._on_message)
+        logger.toast_repeated.connect(self._on_toast_repeated)
 
     def _load_buffer(self):
         """Load any buffered messages that were logged before the console opened."""
@@ -1093,20 +1145,100 @@ class DebugConsole(QWidget):
         close = ink if state == 'highlighted' else body
         return border, ink, body, close
 
+    def _toast_paragraphs(self, serial, level, text, ink, close_ink):
+        """The words of toast *serial*'s card as HTML paragraphs: its text, a
+        ``×N`` after the first line when it was logged N times, an error's
+        copy button and the close button."""
+        # One paragraph a line: with <br> between them, Qt sized the box
+        # as if all the lines were one, far wider than the longest.
+        # Leading spaces (an indented list) are kept.
+        def _line(line):
+            stripped = line.lstrip(' ')
+            return ('&nbsp;' * (len(line) - len(stripped))
+                    + html.escape(stripped, quote=False))
+        rows = [_line(line) for line in text.split('\n')]
+        count = get_debug_logger().toast_count(serial)
+        if count > 1:
+            rows[0] += f'&nbsp;&nbsp;<b>\u00d7{count}</b>'
+        # Only an error has the copy button (to put it on the clipboard);
+        # a success, warning or note is just its words.
+        copy = (f'&nbsp;&nbsp;<a href="{_TOAST_COPY_LINK}{serial}" '
+                f'title="Copy the error">'
+                f'<img src="{_TOAST_COPY_IMAGE}" width="16" height="16" '
+                f'style="vertical-align: middle;"></a>'
+                if level == 'error' else '')
+        # The close button: tiny, and shown (in the text's colour) only
+        # while the card is highlighted -- otherwise drawn in the card's
+        # own colour, and a click on it does nothing.
+        close = (f'&nbsp;&nbsp;<a href="{_TOAST_CLOSE_LINK}{serial}" '
+                 f'title="Remove this toast" style="color: {close_ink}; '
+                 f'text-decoration: none; font-size: small;">\u2715</a>')
+        return ''.join(
+            f'<p style="margin: 0; color: {ink};">'
+            + (f'<a name="fio-toast-{serial}"></a>' if i == 0 else '')
+            + row
+            + (copy + close if i == len(rows) - 1 else '') + '</p>'
+            for i, row in enumerate(rows))
+
+    def _on_toast_repeated(self, serial, count):
+        """Toast *serial* was logged again: its card shows the count and is
+        in full colour again (its fade starts over). A card not drawn yet
+        (still queued) shows the count when it is."""
+        import time
+        from PyQt5.QtGui import QTextCursor
+        serial = str(serial)
+        self._toast_seen[serial] = time.monotonic()
+        self._toast_faint.discard(serial)
+        table = self._toast_table(serial)
+        if table is None:
+            return
+        text = get_debug_logger().toast_text(serial)
+        if text is None:
+            return
+        level = self._toast_levels.get(serial, 'info')
+        _border, ink, _body, close_ink = self._toast_colours(level, self._toast_state(serial))
+        edit = QTextCursor(self.console.document())
+        edit.beginEditBlock()
+        try:
+            # The card's words again, with the count: inside its cell, so
+            # the card itself (and everything around it) stays as it is.
+            cell = table.cellAt(0, 1)
+            words = cell.firstCursorPosition()
+            words.setPosition(cell.lastCursorPosition().position(), QTextCursor.KeepAnchor)
+            words.insertHtml(self._toast_paragraphs(
+                serial, level, text.translate(_MARKUP_CHARS), ink, close_ink))
+            self._restyle_toast(serial)
+        finally:
+            edit.endEditBlock()
+        self._toast_cursors.pop(serial, None)
+        self._wake_fader()
+
     def _toast_table(self, serial):
-        """The console document's table drawing toast *serial*, or None."""
-        from PyQt5.QtGui import QTextTable
-        wanted = f"fio-toast-{serial}"
+        """The console document's table drawing toast *serial*, or None.
+
+        From the cursor kept in its card when there is one and it still
+        points into that card; else every card is found again in one walk
+        of the document (after a rebuild, say) and their cursors kept, so a
+        burst of cards fading together costs one walk, not one each."""
+        serial = str(serial)
+        cursor = self._toast_cursors.get(serial)
+        if cursor is not None:
+            table = cursor.currentTable()
+            if table is not None and self._toast_serial_of(table) == serial:
+                return table
+        from PyQt5.QtGui import QTextCursor, QTextTable
+        self._toast_cursors = {}
+        found = None
         for frame in self.console.document().rootFrame().childFrames():
-            if not isinstance(frame, QTextTable) or frame.columns() < 2:
+            if not isinstance(frame, QTextTable):
                 continue
-            block = frame.cellAt(0, 1).firstCursorPosition().block()
-            it = block.begin()
-            while not it.atEnd():
-                if wanted in it.fragment().charFormat().anchorNames():
-                    return frame
-                it += 1
-        return None
+            number = self._toast_serial_of(frame)
+            if number is None:
+                continue
+            self._toast_cursors[number] = QTextCursor(frame.cellAt(0, 1).firstCursorPosition())
+            if number == serial:
+                found = frame
+        return found
 
     def _toast_serial_of(self, table):
         if table is None or table.columns() < 2:
@@ -1126,7 +1258,10 @@ class DebugConsole(QWidget):
         table = self._toast_table(serial)
         if table is None:
             return
-        level = next((lv for sr, lv, _t in get_debug_logger().toasts() if sr == serial), 'info')
+        level = self._toast_levels.get(serial)
+        if level is None:
+            level = next((lv for sr, lv, _t in get_debug_logger().toasts() if sr == serial),
+                         'info')
         border, ink, body, close = self._toast_colours(level, self._toast_state(serial))
         for column, colour in ((0, border), (1, body)):
             cell = table.cellAt(0, column)
@@ -1149,30 +1284,63 @@ class DebugConsole(QWidget):
             mark.mergeCharFormat(close_fmt)
 
     def _fade_toasts(self):
-        """Turn faint the cards that have been in full colour long enough."""
+        """Turn faint the cards that have been in full colour long enough;
+        stop the timer when no card is waiting."""
         import time
         now = time.monotonic()
+        waiting = False
+        due = []
         for serial, since in list(self._toast_seen.items()):
-            if (serial in self._toast_faint or serial in self._toast_highlighted
-                    or now - since < TOAST_FADE_SECONDS):
+            if serial in self._toast_faint or serial in self._toast_highlighted:
                 continue
-            self._toast_faint.add(serial)
-            self._restyle_toast(serial)
+            if now - since < TOAST_FADE_SECONDS:
+                waiting = True
+                continue
+            due.append(serial)
+        if due:
+            # One edit: the document is laid out again once, from the first
+            # card changed, not once a card (each from there to the end).
+            from PyQt5.QtGui import QTextCursor
+            edit = QTextCursor(self.console.document())
+            edit.beginEditBlock()
+            try:
+                for serial in due:
+                    self._toast_faint.add(serial)
+                    self._restyle_toast(serial)
+            finally:
+                edit.endEditBlock()
+        if not waiting:
+            self._toast_fader.stop()
+
+    def _wake_fader(self):
+        """A card is in full colour and will turn faint: tick until it has."""
+        if not self._toast_fader.isActive():
+            self._toast_fader.start()
 
     def _highlight_toast(self, serial):
         """Full colour and a close button for *serial*; the card that was
         highlighted fades again in TOAST_FADE_SECONDS."""
         import time
-        for other in list(self._toast_highlighted):
-            if other != serial:
+        from PyQt5.QtGui import QTextCursor
+        others = [other for other in self._toast_highlighted if other != serial]
+        new = serial is not None and serial not in self._toast_highlighted
+        if not (others or new):
+            return                      # the same card, or none: nothing to redraw
+        edit = QTextCursor(self.console.document())
+        edit.beginEditBlock()           # both cards: one layout
+        try:
+            for other in others:
                 self._toast_highlighted.discard(other)
                 self._toast_seen[other] = time.monotonic()
                 self._toast_faint.discard(other)
                 self._restyle_toast(other)
-        if serial is not None and serial not in self._toast_highlighted:
-            self._toast_highlighted.add(serial)
-            self._toast_faint.discard(serial)
-            self._restyle_toast(serial)
+                self._wake_fader()
+            if new:
+                self._toast_highlighted.add(serial)
+                self._toast_faint.discard(serial)
+                self._restyle_toast(serial)
+        finally:
+            edit.endEditBlock()
 
     def remove_toast(self, serial):
         """Remove toast *serial*'s card from the console and its history."""
@@ -1186,6 +1354,8 @@ class DebugConsole(QWidget):
             cursor.removeSelectedText()
         get_debug_logger().remove_toast(serial)
         self._toast_seen.pop(serial, None)
+        self._toast_levels.pop(serial, None)
+        self._toast_cursors.pop(serial, None)
         self._toast_faint.discard(serial)
         self._toast_highlighted.discard(serial)
 
@@ -1336,6 +1506,9 @@ class DebugConsole(QWidget):
             level, serial, text = _toast_parts(message)
             text = text.translate(_MARKUP_CHARS)
             self._toast_seen.setdefault(serial, __import__('time').monotonic())
+            self._toast_levels[serial] = level
+            if serial not in self._toast_faint and serial not in self._toast_highlighted:
+                self._wake_fader()
             border, ink, body, close_ink = self._toast_colours(
                 level, self._toast_state(serial))
             document = self.console.document()
@@ -1343,33 +1516,7 @@ class DebugConsole(QWidget):
             if document.resource(QTextDocument.ImageResource, QUrl(_TOAST_COPY_IMAGE)) is None:
                 document.addResource(QTextDocument.ImageResource,
                                      QUrl(_TOAST_COPY_IMAGE), _toast_copy_image())
-            # One paragraph a line: with <br> between them, Qt sized the box
-            # as if all the lines were one, far wider than the longest.
-            # Leading spaces (an indented list) are kept.
-            def _line(line):
-                stripped = line.lstrip(' ')
-                return ('&nbsp;' * (len(line) - len(stripped))
-                        + html.escape(stripped, quote=False))
-            rows = [_line(line) for line in text.split('\n')]
-            # Only an error has the copy button (to put it on the clipboard);
-            # a success, warning or note is just its words.
-            copy = (f'&nbsp;&nbsp;<a href="{_TOAST_COPY_LINK}{serial}" '
-                    f'title="Copy the error">'
-                    f'<img src="{_TOAST_COPY_IMAGE}" width="16" height="16" '
-                    f'style="vertical-align: middle;"></a>'
-                    if level == 'error' else '')
-            # The close button: tiny, and shown (in the text's colour) only
-            # while the card is highlighted -- otherwise drawn in the card's
-            # own colour, and a click on it does nothing.
-            close = (f'&nbsp;&nbsp;<a href="{_TOAST_CLOSE_LINK}{serial}" '
-                     f'title="Remove this toast" style="color: {close_ink}; '
-                     f'text-decoration: none; font-size: small;">\u2715</a>')
-            paragraphs = ''.join(
-                f'<p style="margin: 0; color: {ink};">'
-                + (f'<a name="fio-toast-{serial}"></a>' if i == 0 else '')
-                + row
-                + (copy + close if i == len(rows) - 1 else '') + '</p>'
-                for i, row in enumerate(rows))
+            paragraphs = self._toast_paragraphs(serial, level, text, ink, close_ink)
             # A card, as the pop-up toasts are: a tinted body with an accent
             # bar down its left side. (A cell takes a background; Qt ignores
             # a table's.)
@@ -1662,6 +1809,9 @@ class DebugConsole(QWidget):
         self._toast_seen.clear()
         self._toast_faint.clear()
         self._toast_highlighted.clear()
+        self._toast_levels.clear()
+        self._toast_cursors.clear()
+        self._toast_fader.stop()
         self.console.clear()
         self.message_count = 0
         self._document_lines = 0

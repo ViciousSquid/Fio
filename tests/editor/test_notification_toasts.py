@@ -76,11 +76,15 @@ def test_loads_saves_warnings_and_errors_are_console_cards(main_window, console)
 
 def test_there_is_no_pop_up_toast(main_window, console):
     """Reported: a map load showed its console card and a pop-up toast too."""
+    from PyQt5 import sip
     from PyQt5.QtWidgets import QWidget
-    before = {id(w) for w in main_window.findChildren(QWidget)}
+    # By the C++ widget: Qt can hand back a fresh Python wrapper (a new
+    # id()) for a widget that was there all along.
+    before = {sip.unwrapinstance(w) for w in main_window.findChildren(QWidget)}
     main_window.show_toast("Loaded _SHOWCASE.json", level='success')
     QTest.qWait(400)
-    new = [w for w in main_window.findChildren(QWidget) if id(w) not in before]
+    new = [w for w in main_window.findChildren(QWidget)
+           if sip.unwrapinstance(w) not in before]
     assert not [w for w in new if w.isVisible()]          # nothing popped up
     assert not hasattr(main_window, 'toast_manager')
     import importlib.util
@@ -171,3 +175,99 @@ def test_toasts_cannot_be_turned_off(main_window, console):
         assert not [b for b in dialog.findChildren(QCheckBox) if 'toast' in b.text().lower()]
     finally:
         dialog.deleteLater()
+
+
+# -- the same toast again, quickly: a multiplier, not another card ----------
+
+def _card_text(console, serial):
+    table = console._toast_table(serial)
+    cell = table.cellAt(0, 1)
+    from PyQt5.QtGui import QTextCursor
+    cursor = cell.firstCursorPosition()
+    cursor.setPosition(cell.lastCursorPosition().position(), QTextCursor.KeepAnchor)
+    return cursor.selectedText()
+
+
+def test_repeats_show_a_multiplier_not_new_cards(main_window, console):
+    for _ in range(3):                                       # before it is drawn
+        main_window.show_toast("Saved", level='success')
+    QTest.qWait(200)
+    serial = dc.get_debug_logger().toasts()[-1][0]
+    assert _toasts() == [('success', "Saved")]
+    assert console.console.toHtml().count("<table") == 1
+    assert "×3" in _card_text(console, serial)
+    for _ in range(2):                                       # drawn: updated in place
+        main_window.show_toast("Saved", level='success')
+    QTest.qWait(100)
+    assert _toasts() == [('success', "Saved")]
+    assert console.console.toHtml().count("<table") == 1
+    text = _card_text(console, serial)
+    assert "×5" in text and "×3" not in text
+    assert text.startswith("Saved")
+
+
+def test_a_repeat_after_a_pause_is_a_new_card(main_window, console, monkeypatch):
+    monkeypatch.setattr(dc, 'TOAST_REPEAT_SECONDS', 0.2)
+    main_window.show_toast("Saved", level='success')
+    QTest.qWait(400)
+    main_window.show_toast("Saved", level='success')
+    QTest.qWait(200)
+    assert _toasts() == [('success', "Saved"), ('success', "Saved")]
+    assert console.console.toHtml().count("<table") == 2
+    assert "×" not in console.console.toPlainText()
+
+
+def test_other_words_or_another_level_are_their_own_cards(main_window, console):
+    main_window.show_toast("Saved", level='success')
+    main_window.show_toast("Saved", level='warning')
+    main_window.show_toast("Saved twice", level='success')
+    main_window.show_toast("Saved", level='success')
+    QTest.qWait(200)
+    assert _toasts() == [('success', "Saved"), ('warning', "Saved"),
+                         ('success', "Saved twice")]
+    first = dc.get_debug_logger().toasts()[0][0]
+    assert "×2" in _card_text(console, first)
+
+
+def test_a_repeat_brings_a_faint_card_back_to_full_colour(main_window, console):
+    main_window.show_toast("Failed to save", is_error=True)
+    QTest.qWait(150)
+    serial = dc.get_debug_logger().toasts()[-1][0]
+    bright = _card_colour(console, serial)
+    QTest.qWait(900)                                          # faint (fade 0.4 s)
+    assert _card_colour(console, serial) != bright
+    dc.get_debug_logger()._toast_recent[('error', "Failed to save")][1] = \
+        __import__('time').monotonic()                       # still "quickly"
+    main_window.show_toast("Failed to save", is_error=True)
+    QTest.qWait(50)
+    assert _card_colour(console, serial) == bright
+    assert "×2" in _card_text(console, serial)
+    assert re_search_copy(console, serial)                    # the copy button stays
+
+
+def re_search_copy(console, serial):
+    return f'copytoast:{serial}' in console.console.toHtml()
+
+
+def test_a_closed_card_is_not_counted_on(main_window, console):
+    main_window.show_toast("Saved", level='success')
+    QTest.qWait(150)
+    serial = dc.get_debug_logger().toasts()[-1][0]
+    console.remove_toast(serial)
+    main_window.show_toast("Saved", level='success')
+    QTest.qWait(150)
+    assert _toasts() == [('success', "Saved")]
+    assert dc.get_debug_logger().toasts()[-1][0] != serial
+    assert "×" not in console.console.toPlainText()
+
+
+def test_the_count_survives_a_rebuild_and_a_condump(main_window, console):
+    for _ in range(4):
+        main_window.show_toast("Loaded room_12.json", level='success')
+    QTest.qWait(200)
+    console._refresh_console()                               # a filter change does this
+    serial = dc.get_debug_logger().toasts()[-1][0]
+    assert "×4" in _card_text(console, serial)
+    entries = dc.get_debug_logger().get_buffer()
+    plain = [dc.console_plain_text(c, m) for c, m in entries]
+    assert "Loaded room_12.json  ×4" in plain
