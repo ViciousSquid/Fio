@@ -559,6 +559,10 @@ def register_console_command(self, name: str, callback, help_text: str = "") -> 
 receives `main_window`. `register_console_command` adds a plugin-owned debug
 console command; its callback receives `(args, main_window, logic, play_mode)`.
 Both are gated by the plugin's enabled state and are available from API 1.4.0.
+While the plugin is enabled its commands are listed by the console's `help`
+under *Plugin Commands*, with their `help_text`. A name a built-in command
+already uses is never dispatched to the plugin (built-ins are tried first), so
+it is not listed as a plugin command either.
 `register_menu_action` above is the plugin-specific menu counterpart for actions
 that belong with the plugin rather than in Tools.
 
