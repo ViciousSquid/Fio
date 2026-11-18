@@ -125,3 +125,95 @@ def test_the_tint_colours_an_emissive_decal(renderer):
                           intensity=0.0))[0]
 
     assert np.abs(tinted - (COLOUR[0], 0, 0)).max() <= 12, tinted
+
+
+# ---------------------------------------------------------------------------
+# Sharpness: an emissive decal shows its image at the image's own resolution
+# ---------------------------------------------------------------------------
+
+SHARP_IMAGE = 'test_emissive_sharp.png'
+SHARP_SIDE = 1024
+
+
+def _edge_png():
+    """A 1024-pixel image, black on its left half and white on its right:
+    one hard edge down the middle."""
+    from PIL import Image
+    pixels = np.zeros((SHARP_SIDE, SHARP_SIDE, 4), dtype=np.uint8)
+    pixels[..., 3] = 255
+    pixels[:, SHARP_SIDE // 2:, :3] = 255
+    data = io.BytesIO()
+    Image.fromarray(pixels).save(data, format='PNG')
+    return data.getvalue()
+
+
+@pytest.fixture
+def sharp_renderer(monkeypatch):
+    from engine import decal_textures
+    from engine.renderer.forward import decals as decal_pass
+    png = _edge_png()
+    real_source, real_read = decal_pass.asset_source, decal_textures.read_image
+    monkeypatch.setattr(decal_textures, '_read', lambda: (SHARP_IMAGE,))
+    monkeypatch.setattr(
+        decal_pass, 'asset_source',
+        lambda path: io.BytesIO(png) if path.endswith(SHARP_IMAGE) else real_source(path))
+    monkeypatch.setattr(decal_textures, 'read_image',
+                        lambda name: png if name == SHARP_IMAGE else real_read(name))
+    decal_textures.use_texts(())
+    decal_textures.refresh()
+    glh.reset_texture_cache()
+    with glh.GLTestContext(SIZE, SIZE) as context:
+        made = glh.make_renderer()
+        try:
+            yield made, context
+        finally:
+            made.cleanup()
+    glh.reset_texture_cache()
+    decal_textures.use_texts(())
+    monkeypatch.undo()
+    decal_textures.refresh()
+
+
+def _blurred_columns(image):
+    """How many pixels across the edge are neither black nor white, on
+    average over the middle rows: the width of the blur."""
+    rows = image[SIZE // 2 - 20:SIZE // 2 + 20].mean(axis=2)
+    between = (rows > 255 * 0.12) & (rows < 255 * 0.88)
+    return between.sum(axis=1).mean()
+
+
+def test_an_emissive_decal_is_as_sharp_as_its_image(sharp_renderer):
+    """The bug: 'decals become fuzzy when emissive is enabled'. An emissive
+    decal is the image itself, unlit and unmodulated, so it shows the
+    texture's resolution as it is -- and every decal layer is the image
+    squeezed to 256 pixels. Magnified across a screen-sized decal, that is a
+    blur several pixels wide. An emissive decal is drawn from its image at
+    full resolution: the edge stays about a pixel wide."""
+    made, context = sharp_renderer
+    # Near the wall: 256 texels across the plate would be ~8 pixels a texel.
+    decal = _plate(texture=SHARP_IMAGE, emissive=True, width=600.0, height=600.0)
+    image = _frame_close(made, context, decal)
+    middle = image[SIZE // 2 - 20:SIZE // 2 + 20].mean(axis=2)
+    assert middle[:, :SIZE // 4].max() < 40 and middle[:, -SIZE // 4:].min() > 215, (
+        "the plate does not fill the view black to white")
+    assert _blurred_columns(image) <= 3.0, (
+        "an emissive decal's edge is blurred across", _blurred_columns(image))
+
+
+def _frame_close(renderer, context, decal):
+    import glm
+    from engine.decal_table import DecalTable
+    from tests.helpers.worlds import box_brush
+    wall = box_brush('wall', (0, 100, -216), (1400, 1400, 32))
+    table = DecalTable()
+    table.place([decal], show_selection=False, epoch=1)
+    projection = glm.perspective(glm.radians(60.0), 1.0, 1.0, 4000.0)
+    eye = glm.vec3(0.0, 100.0, -150.0)
+    view = glm.lookAt(eye, glm.vec3(0.0, 100.0, -200.0), glm.vec3(0, 1, 0))
+    config = glh.render_config(all_brushes=[wall], all_things=[], all_lights=[],
+                               play_mode=True, decals=table.frame(0.0, 1.0, 1.0))
+    context.bind()
+    with glh.no_gl_errors("emissive decal"):
+        renderer.render_scene(projection, view, eye, None, config,
+                              brush_slots=config["all_brush_slots"])
+    return context.read_pixels().astype(np.int32)

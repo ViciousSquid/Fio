@@ -44,6 +44,12 @@ from engine.asset_archives import asset_source
 DECAL_FOLDER = os.path.join('assets', 'textures', 'decals')
 #: Side of a layer of the decal texture array; images are scaled to it.
 DECAL_TEXTURE_SIZE = 256
+#: Largest side of a layer of the emissive decals' own texture array. An
+#: emissive decal is its image as it is -- not stained into the surface,
+#: where the 2x modulate and the clamp at white hide how soft a 256-pixel
+#: layer is when magnified -- so it is painted from its image at the image's
+#: own resolution (up to this), not from the shared array.
+EMISSIVE_TEXTURE_MAX = 1024
 #: Floats an instance: a 4x4 box matrix, (variant, opacity, kind, flags)
 #: and the box's inverse.
 _INSTANCE_FLOATS = 36
@@ -66,6 +72,17 @@ def _mip_chain(layer):
         wide = (wide[0::2, 0::2] + wide[1::2, 0::2] + wide[0::2, 1::2]
                 + wide[1::2, 1::2] + 2) // 4
         yield np.ascontiguousarray(wide, dtype=np.uint8)
+
+
+def emissive_side(sizes):
+    """The side of the emissive decals' texture array for images of *sizes*
+    (``(width, height)`` each): the power of two that holds the largest of
+    them, from :data:`DECAL_TEXTURE_SIZE` to :data:`EMISSIVE_TEXTURE_MAX`."""
+    largest = max((max(int(w), int(h)) for w, h in sizes), default=0)
+    side = DECAL_TEXTURE_SIZE
+    while side < largest and side < EMISSIVE_TEXTURE_MAX:
+        side *= 2
+    return side
 
 
 def visible_decals(models, projection, view, camera_pos, viewport_height):
@@ -114,6 +131,14 @@ class DecalsMixin:
         self._decal_ranges = (0.0, 1.0, 0.0, 1.0)
         self._decal_staging = np.zeros((0, _INSTANCE_FLOATS), dtype=np.float32)
         self._decal_base = None
+        #: The emissive decals' images at full resolution: a texture array
+        #: of just the layers emissive decals paint, the shared layer each
+        #: holds (``_decal_glow_index``: shared layer -> its layer here), and
+        #: what it was made for (the image list's version, those layers).
+        self._decal_glow_textures = 0
+        self._decal_glow_key = None
+        self._decal_glow_index = {}
+        self._decal_glow_pixels = {}
         #: Decals drawn by the last frame, and those left out as off screen
         #: or too small (tests, Debug Tables).
         self.decals_drawn = 0
@@ -211,6 +236,83 @@ class DecalsMixin:
             gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, pname, value)
         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
         self._decal_textures, self._decal_layers = texture, len(layers)
+        return texture
+
+    def _decal_full_image(self, name):
+        """Decal layer *name* as ``(PIL RGBA image, (width, height))`` at its
+        own resolution (a sign's words: drawn at the largest emissive side),
+        or None when it cannot be read."""
+        from PIL import Image
+        if decal_text.is_entry(name):
+            side = EMISSIVE_TEXTURE_MAX
+            return None, (side, side)
+        try:
+            image = Image.open(asset_source(os.path.join(DECAL_FOLDER, name)))
+            image.load()
+        except Exception:
+            return None
+        return image.convert('RGBA'), image.size
+
+    def _decal_glow_texture_array(self, layers):
+        """The emissive decals' own texture array, holding shared *layers*
+        (sorted, unique) at their images' full resolution; made again only
+        when the layers or the image list change. 0 when it cannot be made
+        (the emissive decals then paint from the shared array)."""
+        key = (self._decal_images_version, tuple(layers))
+        if key == self._decal_glow_key:
+            return self._decal_glow_textures
+        if self._decal_glow_textures:
+            gl.glDeleteTextures(1, [self._decal_glow_textures])
+            self._decal_glow_textures = 0
+        self._decal_glow_key, self._decal_glow_index = key, {}
+        names = self._decal_layer_names or ()
+        found = []
+        for layer in layers:
+            if not 0 <= layer < len(names):
+                continue
+            image = self._decal_full_image(names[layer])
+            if image is not None:
+                found.append((layer, names[layer], image))
+        if not found:
+            return 0
+        side = emissive_side(size for _l, _n, (_i, size) in found)
+        cache = self._decal_glow_pixels
+        kept = {}
+        data = []
+        from PIL import Image
+        for layer, name, (image, _size) in found:
+            pixels = cache.get((name, side))
+            if pixels is None:
+                try:
+                    if image is None:
+                        pixels = decal_text.layer_pixels(name, side)
+                    else:
+                        pixels = np.asarray(image.resize((side, side), Image.LANCZOS),
+                                            dtype=np.uint8)
+                except Exception as exc:
+                    print(f'[Renderer] emissive decal texture {name} not loaded: {exc}')
+                    continue
+            kept[(name, side)] = pixels
+            self._decal_glow_index[layer] = len(data)
+            data.append(pixels)
+        self._decal_glow_pixels = kept
+        if not data:
+            return 0
+        stacked = np.ascontiguousarray(np.stack(data), dtype=np.uint8)
+        texture = int(gl.glGenTextures(1))
+        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
+        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+        gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
+        gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_RGBA8, side, side, len(data), 0,
+                        gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, stacked)
+        gl.glGenerateMipmap(gl.GL_TEXTURE_2D_ARRAY)
+        for pname, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR),
+                             (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
+                             (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
+                             (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
+            gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, pname, value)
+        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+        self._decal_glow_textures = texture
         return texture
 
     def _decal_instances(self, count):
@@ -315,6 +417,23 @@ class DecalsMixin:
         staging[:, 0:16] = models[order]
         staging[:, 16:20] = params[order]
         staging[:, 20:36] = inverses[order]
+        glow_texture = 0
+        if glow_count:
+            # Emissive decals paint from their images at full resolution:
+            # their rows name their layer in that array instead.
+            glow_rows = staging[plain_count:plain_count + glow_count]
+            shared = glow_rows[:, 16].astype(np.int64)
+            glow_texture = self._decal_glow_texture_array(
+                sorted(set(shared.tolist())))
+            if glow_texture:
+                index = self._decal_glow_index
+                for row, layer in enumerate(shared.tolist()):
+                    if layer in index:
+                        glow_rows[row, 16] = float(index[layer])
+                    else:
+                        # Not in the full-resolution array (unreadable):
+                        # nothing rather than another image.
+                        glow_rows[row, 17] = 0.0
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, staging.nbytes, staging)
 
         # The box's far faces, untested against depth: every pixel the box
@@ -347,9 +466,14 @@ class DecalsMixin:
                 # Emissive decals: their own colours, over what is there.
                 gl.glUniform1i(u['wetPass'], 2)
                 gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                if glow_texture:
+                    gl.glActiveTexture(gl.GL_TEXTURE0)
+                    gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, glow_texture)
                 self._decal_point(plain_count)
                 gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, glow_count)
                 self.render_stats.draw_calls += 1
+                if glow_texture:
+                    gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
             if wet_count:
                 # Wet patches: over a copy of the frame so far (blood and
                 # images included), drawn plainly over what is there.
@@ -401,7 +525,12 @@ class DecalsMixin:
             gl.glDeleteBuffers(1, [self._decal_vbo])
         if self._decal_textures:
             gl.glDeleteTextures(1, [self._decal_textures])
+        if self._decal_glow_textures:
+            gl.glDeleteTextures(1, [self._decal_glow_textures])
         self._decal_vao = self._decal_vbo = self._decal_textures = 0
+        self._decal_glow_textures = 0
+        self._decal_glow_key = None
+        self._decal_glow_index, self._decal_glow_pixels = {}, {}
         self._decal_capacity = 0
         self._decal_base = None
         self._decal_layers = 0

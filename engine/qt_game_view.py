@@ -187,6 +187,9 @@ class QtGameView(QOpenGLWidget):
 
         self.face_mode_active = False
         self.hovered_face_info = None
+        #: What :attr:`hovered_face_info` was picked under (see
+        #: :meth:`face_under_cursor`): cursor, camera and world.
+        self._face_hover_key = None
 
         # --- Component editing (shares the main window's ComponentController) ---
         # Only the drag anchors are per-view; the mode, hover and component
@@ -1168,7 +1171,7 @@ class QtGameView(QOpenGLWidget):
                 _segments, _colours = connection_segments(conn_lines)
                 self.renderer.draw_connection_lines(
                     self.projection_matrix, self.view_matrix, _segments, _colours)
-        if self.face_mode_active and self.hovered_face_info:
+        if self.face_mode_active and self.face_under_cursor():
             brush, face_name = self.hovered_face_info
             self.renderer.draw_face_highlight(
                 self.projection_matrix, self.view_matrix,
@@ -1722,7 +1725,9 @@ class QtGameView(QOpenGLWidget):
                     return
 
         if self.face_mode_active and event.button() == Qt.LeftButton:
-            if self.hovered_face_info:
+            # Picked here, at the press: the hover is only as fresh as the
+            # last mouse move, and the camera may have moved since.
+            if self.face_under_cursor(event.pos()):
                 # Arm the press: a drag from here moves the face's plane, a
                 # click without movement textures it (the original behaviour,
                 # decided on release).
@@ -2015,10 +2020,43 @@ class QtGameView(QOpenGLWidget):
                 self.update()
             return
         if self.face_mode_active:
-            self.hovered_face_info = self.picking.get_brush_face_at_coords(event.x(), event.y())
+            self.face_under_cursor(event.pos())
             self.update()
             return
         super().mouseMoveEvent(event)
+
+    def face_under_cursor(self, pos=None):
+        """``(brush, face key)`` under the cursor in Face Mode, or None.
+
+        :attr:`hovered_face_info` picked again whenever the cursor, the camera
+        or the world has changed since it was last picked. It used to be
+        picked on mouse moves only, and Qt sends none while the cursor is
+        still: fly the camera (WASD, mouse look, framing a selection), undo,
+        or move a brush, and the hover -- what a click textures, what Page
+        Up/Down rotates, what is highlighted -- was still the face that had
+        been under the cursor before, on another brush (after an undo, a
+        detached copy of one). *pos* is the cursor in widget coordinates;
+        by default where the cursor is now.
+        """
+        if not self.face_mode_active:
+            return None
+        if pos is None:
+            pos = self.mapFromGlobal(QCursor.pos())
+            if not self.rect().contains(pos):
+                return self.hovered_face_info
+        state = self.editor.state
+        key = (pos.x(), pos.y(), self.width(), self.height(),
+               self.view_matrix.to_tuple(), self.projection_matrix.to_tuple(),
+               tuple(self.logic_thread.camera.get_editor_camera().pos)
+               if self.logic_thread is not None else None,
+               getattr(state, 'world_epoch', None),
+               brush_placement.placement_stamps, id(state.brushes),
+               len(state.brushes))
+        if key != self._face_hover_key:
+            self._face_hover_key = key
+            self.hovered_face_info = self.picking.get_brush_face_at_coords(
+                pos.x(), pos.y())
+        return self.hovered_face_info
 
     def mouseReleaseEvent(self, event):
         if self.play_mode and self.pause_menu is not None:

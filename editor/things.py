@@ -727,9 +727,12 @@ class Decal(Thing):
                 How bright that light is and how far it reaches, as a
                 Light's intensity and radius. Read only while emissive.
     """
-    #: No icon and no box: what the decal paints is how the editor shows it
-    #: (placed, selected, dragged and nudged with the Decal tool).
+    #: No sprite in the 3D view: what the decal paints is how it shows there
+    #: (placed, selected, dragged and nudged with the Decal tool). The 2D
+    #: views mark it with :data:`ICON_PATH` instead.
     pixmap_path = None
+    #: The 2D views' marker: the Asset Browser's DECAL button icon.
+    ICON_PATH = "assets/decal_button.png"
     #: The Decal tool's selection; selected decals draw tinted.
     editor_selected = False
     EDITOR_PRIMARY_PROPERTIES = (
@@ -764,6 +767,11 @@ class Decal(Thing):
         self.properties.setdefault('emissive', False)
         self.properties.setdefault('emissive_intensity', 1.0)
         self.properties.setdefault('emissive_radius', 256.0)
+
+    def get_icon_pixmap(self):
+        """The 2D views' marker: the same icon as the Asset Browser's DECAL
+        button (``assets/decal_button.png``)."""
+        return self._pixmap_for_path(self.ICON_PATH)
 
     @staticmethod
     def default_texture():

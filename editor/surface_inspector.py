@@ -622,7 +622,7 @@ class SurfaceInspector(QDialog):
         if not path:
             self.editor.show_toast("Select a texture first", is_error=True)
             return
-        name = os.path.basename(path)
+        name = ft.texture_name(path)
         self._begin_undo_burst()
         for brush, face_key in self.target_faces():
             ft.set_transform(brush, face_key, texture=name)

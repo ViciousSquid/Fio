@@ -188,6 +188,15 @@ class ViewPicking:
         return closest, dist
 
     def get_brush_face_at_coords(self, mx, my):
+        """``(brush, face key)`` of the surface under the cursor, or None.
+
+        The surface the ray first *enters*: a brush the camera is inside --
+        a trigger, fog or water volume, a room-sized brush -- is looked
+        through, not picked. It used to win every pick at distance 0 (and an
+        angled one answered with the far face the ray leaves through), so a
+        face-mode click on a wall retextured the volume around the camera
+        instead, on a face chosen from where the camera stood.
+        """
         ray_o, ray_d = self.get_ray_from_mouse(mx, my)
         best_t = float('inf')
         best_hit = None
@@ -206,13 +215,13 @@ class ViewPicking:
             o, d = brush_placement.ray_to_shape(brush, ray_o_t, ray_d_t)
             convex = brush_placement.shape_convex(brush)
             if convex is not None:
-                hit = brush_geometry.ray_convex_face(convex, o, d)
+                hit = brush_geometry.ray_convex_face(convex, o, d, entering=True)
                 if hit is not None and hit[0] < best_t:
                     best_t = hit[0]
                     best_hit = (brush, brush_geometry.face_key(hit[1]))
                 continue
             box = brush_placement.authored_box(brush)
-            t_box = brush_placement.ray_box(box, o, d)
+            t_box = brush_placement.ray_box_entry(box, o, d)
             if t_box is None or t_box >= best_t:
                 continue
             local = [o[i] + d[i] * t_box - box[i] for i in range(3)]

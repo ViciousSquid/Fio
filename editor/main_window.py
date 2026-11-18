@@ -2577,6 +2577,7 @@ class MainWindow(QMainWindow):
         else:
             self.show_toast("FACE MODE: OFF")
             self.view_3d.hovered_face_info = None # Clear highlight
+            self.view_3d._face_hover_key = None
             self.view_3d.setCursor(Qt.ArrowCursor)
             # The panel stays open: it owns the FACE toggle now, and hiding it
             # here would take the button away the moment it was switched off.
@@ -2590,7 +2591,10 @@ class MainWindow(QMainWindow):
             self.show_toast("Select a texture first", is_error=True)
             return
 
-        texture_name = os.path.basename(texture_path)
+        # Relative to assets/textures, so a texture in a subfolder
+        # (textures/decals, textures/Dev) keeps its folder and loads.
+        from editor.face_texture import texture_name as _texture_name
+        texture_name = _texture_name(texture_path)
         self.save_state()
 
         # The face's one material record: a box's per-tag dict, an angled
@@ -2630,8 +2634,7 @@ class MainWindow(QMainWindow):
 
         # --- Face mode: rotate only the highlighted / last-textured face ---
         if self.view_3d.face_mode_active:
-            target = getattr(self.view_3d, 'hovered_face_info', None) \
-                or self.face_texture_target
+            target = self.view_3d.face_under_cursor() or self.face_texture_target
             if not target:
                 self.show_toast("Hover a face to rotate its texture", is_error=True)
                 return
@@ -2967,7 +2970,8 @@ class MainWindow(QMainWindow):
             inspector.hide()
             return
 
-        target = getattr(self.view_3d, 'hovered_face_info', None) \
+        hovered = getattr(self.view_3d, 'face_under_cursor', None)
+        target = (hovered() if hovered is not None else None) \
             or self.face_texture_target
         if target is None:
             brushes = self._selected_brushes()

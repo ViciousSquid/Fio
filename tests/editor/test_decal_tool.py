@@ -1,7 +1,8 @@
 """The Decal tool works as terrain stamps do: click to place the image chosen
 in the Asset Browser on a surface, Shift-click to select, drag across
 surfaces, nudge with the arrow keys, Delete, Escape -- each change one undo
-step. Decals are entities but never drawn in the 2D views."""
+step. Decals are entities, marked in the 2D views with the DECAL button's
+icon."""
 
 import pytest
 
@@ -118,11 +119,19 @@ def test_panel_changes_apply_to_the_selected_decal(main_window, tool):
     assert not hasattr(panel, 'type_combo')               # no Image / Wet setting
 
 
-def test_decals_are_not_in_the_2d_views(main_window, tool):
+def test_decals_are_in_the_2d_views_with_the_decal_button_icon(main_window, tool):
     tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
     press(tool, 10, 10)
     placed, = decals(main_window)
-    assert main_window.view_top._hidden(placed)
+    assert not main_window.view_top._hidden(placed)
+    icon = placed.get_icon_pixmap()
+    assert icon is not None and not icon.isNull()
+    import os
+    from engine.asset_qt import load_pixmap
+    from tests.helpers.paths import REPO_ROOT
+    button = load_pixmap(os.path.join(REPO_ROOT, "assets", "decal_button.png"))
+    assert not button.isNull()
+    assert icon.toImage() == button.toImage()        # the DECAL button's own icon
 
 
 def test_the_menu_item_and_button_turn_it_off_and_clear_the_selection(main_window, tool):

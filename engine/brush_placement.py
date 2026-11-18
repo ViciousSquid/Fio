@@ -1006,6 +1006,22 @@ def ray_box(box, ray_o, ray_d, eps=1e-6):
     return t_min
 
 
+def ray_box_entry(box, ray_o, ray_d, eps=1e-6):
+    """Distance at which a ray *enters* a ``(cx, cy, cz, hx, hy, hz)`` box,
+    or ``None`` when it misses or starts inside (or on) it.
+
+    :func:`ray_box` answers 0 for a ray that starts inside, which is right for
+    "is the cursor over this object" but wrong for "which surface is under the
+    cursor": a ray from inside a volume (the editor camera standing in a
+    trigger, a fog or water volume, a room-sized brush) passes through it to
+    whatever is drawn beyond, and enters none of its faces.
+    """
+    t = ray_box(box, ray_o, ray_d, eps)
+    if t is None or t <= eps:
+        return None
+    return t
+
+
 # ---------------------------------------------------------------------------
 # Collision in the shape's frame (Stage 2c)
 # ---------------------------------------------------------------------------
