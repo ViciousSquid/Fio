@@ -32,6 +32,37 @@ try:
 except ImportError:
     IO_AVAILABLE = False
 
+#: The 2D views' right-click menu: Fio's orange strip along the top of the
+#: menu, and green -- Fio's other colour -- along the top of every submenu
+#: opened from it (a submenu is a child widget of its menu, so ``QMenu QMenu``
+#: matches it and not the menu itself).
+CONTEXT_MENU_STYLE = """
+    QMenu {
+        background-color: #2c2c2c;
+        color: #ffffff;
+        border: 1px solid #3d3d3d;
+        border-top: 3px solid #FF8C00; /* orange strip */
+        padding-bottom: 2px;
+    }
+    QMenu QMenu {
+        border-top: 3px solid #4CAF50; /* submenus: green strip */
+    }
+    QMenu::item {
+        padding: 6px 28px 6px 12px;
+        background-color: transparent;
+    }
+    QMenu::item:selected {
+        background-color: #3e3e3e;
+    }
+    /* A large margin leaves a gap between groups. */
+    QMenu::separator {
+        height: 1px;
+        background: #555;
+        margin: 12px 0px;
+    }
+"""
+
+
 class View2D(QWidget):
     def __init__(self, editor, main_window, view_type):
         # Only pass 'editor' (which acts as the parent widget) to super().__init__
@@ -3788,30 +3819,7 @@ class View2D(QWidget):
         click_pos = event.pos()
         
         menu = QMenu(self)
-        
-        # --- Styling ---
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2c2c2c;
-                color: #ffffff;
-                border: 1px solid #3d3d3d;
-                border-top: 3px solid #FF8C00; /* Orange Strip */
-                padding-bottom: 2px;
-            }
-            QMenu::item {
-                padding: 6px 28px 6px 12px;
-                background-color: transparent;
-            }
-            QMenu::item:selected {
-                background-color: #3e3e3e;
-            }
-            /* REVISED: Large margin creates the "Gap" you wanted */
-            QMenu::separator {
-                height: 1px;
-                background: #555;
-                margin: 12px 0px; 
-            }
-        """)
+        menu.setStyleSheet(CONTEXT_MENU_STYLE)
 
         # Check if we clicked on a brush for brush-specific options using click_pos
         clicked_brush = self.get_brush_at(click_pos)
