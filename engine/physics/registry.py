@@ -12,6 +12,20 @@ importing the registry (or the contract) needs neither NumPy nor PyGLM.
 
 import importlib
 
+
+class PhysicsContractError(TypeError):
+    """A physics factory's object does not satisfy the physics contract:
+    a member is missing or not callable, or it was written for a contract
+    version this Fio cannot run (engine.physics.api.contract_compatible).
+    A TypeError, as the registry raised before this class existed."""
+
+
+class PhysicsInitError(RuntimeError):
+    """A physics could not be started: importing its factory or calling it
+    raised (a missing native library, an ImportError, a bug in its
+    constructor -- a TypeError there included). The original exception is
+    its ``__cause__``. Not a verdict on the contract."""
+
 #: The physics a session starts with unless another is selected.
 DEFAULT_PHYSICS = "Soma"
 
@@ -72,24 +86,29 @@ def create_physics(spatial_grid, name=None):
     is there (``missing_members``), and it was not written for a newer or
     another major contract version (``contract_compatible``).
 
-    Raises KeyError for an unknown name, TypeError for an object that does
-    not satisfy the contract.
+    Raises KeyError for an unknown name; :class:`PhysicsInitError` when the
+    factory cannot be imported or raises; :class:`PhysicsContractError` for
+    an object that does not satisfy the contract.
     """
     from .api import contract_compatible, missing_members
     if name is None:
         name = selected_physics()
-    factory = physics_factory(name)
-    if factory is None:
+    if name not in _factories:
         raise KeyError(f"no physics registered as {name!r}")
-    physics = factory(spatial_grid)
+    try:
+        factory = physics_factory(name)
+        physics = factory(spatial_grid)
+    except Exception as exc:
+        raise PhysicsInitError(
+            f"physics {name!r} failed to start: {type(exc).__name__}: {exc}") from exc
     missing = missing_members(physics)
     if missing:
-        raise TypeError(
+        raise PhysicsContractError(
             f"physics {name!r} does not satisfy the physics contract: "
             f"missing or not callable: {', '.join(missing)}")
     reason = contract_compatible(physics)
     if reason is not None:
-        raise TypeError(f"physics {name!r} cannot run here: {reason}")
+        raise PhysicsContractError(f"physics {name!r} cannot run here: {reason}")
     return physics
 
 

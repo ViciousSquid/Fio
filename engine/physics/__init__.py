@@ -35,7 +35,7 @@ from .api import (
     world_gravity)
 from .bookkeeping import CellTracker, SupportGraph
 from .registry import (
-    DEFAULT_PHYSICS, available_physics, create_physics, physics_factory,
+    PhysicsContractError, PhysicsInitError, DEFAULT_PHYSICS, available_physics, create_physics, physics_factory,
     register_physics, select_physics, selected_physics, unload_physics)
 
 __all__ = [
@@ -46,6 +46,7 @@ __all__ = [
     'SupportGraph', 'CellTracker',
     'PHYSICS_CONTRACT_VERSION', 'PHYSICS_CONTRACT_VERSION_INFO',
     'missing_members', 'contract_compatible',
+    'PhysicsContractError', 'PhysicsInitError',
     'DEFAULT_PHYSICS', 'register_physics', 'create_physics', 'select_physics',
     'selected_physics', 'available_physics', 'physics_factory',
     'unload_physics',

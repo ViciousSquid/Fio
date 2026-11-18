@@ -82,6 +82,31 @@ class LogicSession:
         with self._world_pause_lock:
             return self._world_pause_owners
 
+    def _create_physics(self):
+        """The selected physics over the session's grid, or Soma.
+
+        Play always starts. A selected physics that is gone (KeyError),
+        refused by the contract checks (PhysicsContractError), or that fails
+        to start (PhysicsInitError: a missing library, an exception in its
+        constructor) is reported -- which of the three it was -- and the
+        session plays on Fio's own, DEFAULT_PHYSICS. Only DEFAULT_PHYSICS
+        failing is raised: there is nothing left to fall back to.
+        """
+        from .physics import (DEFAULT_PHYSICS, PhysicsContractError,
+                              PhysicsInitError, create_physics, selected_physics)
+        name = selected_physics()
+        try:
+            return create_physics(self.spatial_grid, name)
+        except (KeyError, PhysicsContractError, PhysicsInitError) as exc:
+            if name == DEFAULT_PHYSICS:
+                raise
+            kind = ("refused by the physics contract"
+                    if isinstance(exc, PhysicsContractError)
+                    else "failed to start" if isinstance(exc, PhysicsInitError)
+                    else "not registered")
+            print(f"[Physics] {name!r} {kind}: {exc} -- playing on {DEFAULT_PHYSICS}")
+            return create_physics(self.spatial_grid, DEFAULT_PHYSICS)
+
     def apply_play_mode(self, enabled: bool, spawn_start=None):
         """Enter or leave Play Mode under the session's tick lock.
 
@@ -249,15 +274,7 @@ class LogicSession:
             if self.physics_enabled:
                 # Whichever physics is selected (engine.physics.registry):
                 # the engine drives it through the contract and nothing else.
-                try:
-                    self.physics_world = create_physics(self.spatial_grid)
-                except (KeyError, TypeError) as exc:
-                    # A selected physics that cannot run here (gone, or not
-                    # satisfying the contract): play on with Fio's own.
-                    from .physics import DEFAULT_PHYSICS
-                    print(f"[Physics] {exc}; using {DEFAULT_PHYSICS}")
-                    self.physics_world = create_physics(
-                        self.spatial_grid, DEFAULT_PHYSICS)
+                self.physics_world = self._create_physics()
                 self.physics_world.rebuild(logic.collision_runtime._physics_body_brushes)
             else:
                 # Switched off: no engine, and nothing of one kept loaded.

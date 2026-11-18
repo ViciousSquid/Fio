@@ -430,6 +430,25 @@ does the same); a running session keeps its own. `tests/helpers/physics.py`
 has the smallest conforming implementation. See
 [the physics engine](#soma-api-200) for the contract's members and rules.
 
+The physics contract has a version of its own, `PHYSICS_CONTRACT_VERSION`
+(`"0.9.0"`; importable from `plugins.api` and `engine.physics`), apart from
+`API_VERSION`. A physics says which it was written against:
+
+```python
+from engine.physics import PHYSICS_CONTRACT_VERSION
+
+class BulletPhysics:
+    contract_version = PHYSICS_CONTRACT_VERSION
+```
+
+When a play session creates the selected physics, the registry checks what
+the factory returned. Not a `Physics` (a member missing or not callable), or
+written for a newer contract, another major version, or -- while the major is
+0 -- another minor version: `PhysicsContractError`. The factory could not be
+imported or raised (a missing native library, an exception in its
+constructor): `PhysicsInitError`, with the original exception as its cause.
+Either way Play still starts, on Soma, and the console says which it was.
+
 ```python
 def register_renderer(self, name: str, cls) -> bool
 ```

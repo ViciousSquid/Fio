@@ -131,4 +131,81 @@ def test_a_selected_physics_that_is_refused_leaves_play_on_soma():
                          env={**os.environ, 'QT_QPA_PLATFORM': 'offscreen'})
     assert out.returncode == 0, out.stderr[-2000:]
     assert "RESULT Soma" in out.stdout, out.stdout[-2000:]
-    assert "[Physics] physics 'Broken' does not satisfy the physics contract" in out.stdout
+    assert ("[Physics] 'Broken' refused by the physics contract: physics 'Broken' "
+            "does not satisfy the physics contract") in out.stdout
+
+
+def test_a_factory_that_raises_is_an_init_error_not_a_contract_error(registered):
+    """A failure to start -- a missing library, a bug in the constructor,
+    a TypeError there included -- is not reported as a contract violation."""
+    from engine.physics import PhysicsContractError, PhysicsInitError
+
+    def missing_library(grid):
+        raise ImportError("No module named 'pybullet'")
+
+    def constructor_bug(grid):
+        return int("not a number", base=None)          # a TypeError inside
+
+    for factory, cause in ((missing_library, ImportError), (constructor_bug, TypeError)):
+        name = registered(factory.__name__, factory)
+        with pytest.raises(PhysicsInitError) as caught:
+            registry.create_physics(SpatialGrid(), name)
+        assert not isinstance(caught.value, PhysicsContractError)
+        assert isinstance(caught.value.__cause__, cause)
+        assert "failed to start" in str(caught.value)
+
+
+def test_contract_refusals_are_contract_errors_and_type_errors(registered):
+    from engine.physics import PhysicsContractError
+    name = registered("Nothing", lambda grid: object())
+    with pytest.raises(PhysicsContractError):
+        registry.create_physics(SpatialGrid(), name)
+    assert issubclass(PhysicsContractError, TypeError)
+
+
+def test_the_contract_version_is_in_the_plugin_api():
+    from plugins import api as plugin_api
+    assert plugin_api.PHYSICS_CONTRACT_VERSION == physics.PHYSICS_CONTRACT_VERSION == "0.9.0"
+
+
+INIT_FAILURE_SESSION = FALLBACK_SESSION.replace(
+    '''class Broken:
+    """A physics that is not one: it has no step, among much else."""
+    def __init__(self, grid):
+        self.gravity = -800.0''',
+    '''def Broken(grid):
+    """A backend whose native library is not installed."""
+    raise ImportError("No module named 'pybullet'")''')
+
+
+@pytest.mark.qt
+def test_a_selected_physics_that_fails_to_start_leaves_play_on_soma():
+    import os
+    import pathlib
+    import subprocess
+    import sys
+    pytest.importorskip("PyQt5", reason="a play session needs the real LogicThread")
+    assert "raise ImportError" in INIT_FAILURE_SESSION
+    root = pathlib.Path(__file__).resolve().parents[2]
+    out = subprocess.run([sys.executable, '-c', INIT_FAILURE_SESSION], cwd=root,
+                         capture_output=True, text=True,
+                         env={**os.environ, 'QT_QPA_PLATFORM': 'offscreen'})
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert "RESULT Soma" in out.stdout, out.stdout[-2000:]
+    assert "[Physics] 'Broken' failed to start" in out.stdout
+    assert "ImportError" in out.stdout
+
+
+def test_when_soma_itself_fails_play_is_not_given_a_fallback_that_would_fail_too(
+        monkeypatch):
+    """Only DEFAULT_PHYSICS failing is raised: there is nothing left."""
+    from engine import logic_session
+    from engine.physics import PhysicsInitError
+
+    def broken_soma(grid):
+        raise OSError("cannot load")
+    monkeypatch.setitem(registry._factories, "Soma", broken_soma)
+    monkeypatch.setattr(registry, "_selected", "Soma")
+    holder = type("Holder", (), {"spatial_grid": SpatialGrid()})()
+    with pytest.raises(PhysicsInitError):
+        logic_session.LogicSession._create_physics(holder)

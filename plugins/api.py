@@ -63,8 +63,8 @@ from typing import Any, Callable, List, Optional, Tuple
 # The physics contract (API 2.0). ``engine.physics`` is the boundary package:
 # stdlib-only, so this pulls in neither NumPy, PyGLM nor Qt.
 from engine.physics import (  # noqa: F401 -- re-exported for plugins
-    CRUSH_DAMAGE, HEAVY_MASS, NO_PHYSICS, PHYSICS_EVENTS, SV_GRAVITY, Body,
-    Physics, world_gravity)
+    CRUSH_DAMAGE, HEAVY_MASS, NO_PHYSICS, PHYSICS_CONTRACT_VERSION, PHYSICS_EVENTS,
+    SV_GRAVITY, Body, Physics, world_gravity)
 from engine.spatial import clear_live_flag as _clear_live_flag
 from engine.spatial import set_live_flag as _set_live_flag
 
