@@ -196,6 +196,17 @@ def bind_placeholder(gl, unit, cache):
     return texture
 
 
+def release_placeholder(gl, cache):
+    """Delete the placeholder :func:`bind_placeholder` made in *cache*, if
+    any: its owner is being cleaned up."""
+    texture = cache.pop('cookie_placeholder', None)
+    if texture is not None:
+        try:
+            gl.glDeleteTextures([texture])
+        except Exception:
+            pass
+
+
 class CookieArray:
     """The one ``GL_TEXTURE_2D_ARRAY`` that holds every cookie image.
 

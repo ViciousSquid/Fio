@@ -99,4 +99,8 @@ class LightBuffer:
 
     def close(self):
         self.forget_cookies()
+        cache = self.__dict__.get('_cookie_gl_cache')
+        if cache:
+            from engine.light_cookies import release_placeholder
+            release_placeholder(self.gl, cache)
         self.gl.glDeleteBuffers(1, [self.buffer])

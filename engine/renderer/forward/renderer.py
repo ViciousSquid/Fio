@@ -1250,6 +1250,10 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         if self._light_cookies is not None:
             self._light_cookies.close()
             self._light_cookies = None
+        cookie_cache = self.__dict__.get('_cookie_gl_cache')
+        if cookie_cache:
+            from engine.light_cookies import release_placeholder
+            release_placeholder(gl, cookie_cache)
         # Instance streams: one buffer and one vertex array per pass.
         self._release_brush_streams()
         self._slot_transform_caches.clear()
