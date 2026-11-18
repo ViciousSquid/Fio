@@ -131,8 +131,18 @@ def test_the_scene_hierarchy_row_selects_the_terrain_even_when_locked(window):
 
     tree.clearSelection()
     # Looked up again: a selection change rebuilds the list, and a row held
-    # from before it is a deleted item.
-    terrain_row().setSelected(True)
+    # from before it is a deleted item. That includes the row being selected:
+    # QTreeWidgetItem.setSelected writes to the item after the selection
+    # signal returns, and the rebuild that signal runs has deleted it (heap
+    # corruption, then a crash a little later). So the row is selected
+    # quietly and the signal sent once setSelected is done with it, as the
+    # tree would send it for a click.
+    was_blocked = tree.blockSignals(True)
+    try:
+        terrain_row().setSelected(True)
+    finally:
+        tree.blockSignals(was_blocked)
+    tree.itemSelectionChanged.emit()
 
     assert window.terrain_selected, "the row is how a locked terrain is reached"
     assert _panel(window)[0].isChecked()
