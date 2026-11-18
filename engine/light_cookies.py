@@ -155,6 +155,17 @@ def project_bytes(path):
         return None
 
 
+def _tex_image_3d(gl):
+    """``(glTexImage3D, glTexSubImage3D)`` for *gl*: PyOpenGL's raw entry
+    points when *gl* is a PyOpenGL module (its wrappers probe desktop-only
+    pixel store state, which GLES rejects -- player/render/assets.upload_rgba),
+    otherwise whatever *gl* itself provides (another binding, a recorder)."""
+    if str(getattr(gl, '__name__', '')).startswith('OpenGL'):
+        from OpenGL.raw.GL.VERSION.GL_1_2 import glTexImage3D, glTexSubImage3D
+        return glTexImage3D, glTexSubImage3D
+    return gl.glTexImage3D, gl.glTexSubImage3D
+
+
 def bind_placeholder(gl, unit, cache):
     """Bind a complete 1x1 RGBA ``GL_TEXTURE_2D_ARRAY`` to *unit*, made once
     and kept in *cache* (a dict the caller owns, one per GL context).
@@ -169,7 +180,7 @@ def bind_placeholder(gl, unit, cache):
     if texture is None:
         texture = int(gl.glGenTextures(1))
         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
-        from OpenGL.raw.GL.VERSION.GL_1_2 import glTexImage3D
+        glTexImage3D, _sub = _tex_image_3d(gl)
         pixel = ctypes.create_string_buffer(b'\xff\xff\xff\xff', 4)
         glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_RGBA8, 1, 1, 1, 0,
                      gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, ctypes.cast(pixel, ctypes.c_void_p))
@@ -269,7 +280,7 @@ class CookieArray:
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
         # The raw entry points: PyOpenGL's wrappers probe desktop-only pixel
         # store state, which GLES rejects (player/render/assets.upload_rgba).
-        from OpenGL.raw.GL.VERSION.GL_1_2 import glTexImage3D, glTexSubImage3D
+        glTexImage3D, glTexSubImage3D = _tex_image_3d(gl)
         if capacity != self.capacity:
             glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_RGBA8, size, size,
                          capacity, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)

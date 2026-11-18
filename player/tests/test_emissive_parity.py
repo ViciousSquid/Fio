@@ -47,6 +47,8 @@ def test_a_light_s_source_size_is_packed_beside_its_shadow_index():
         GL_UNIFORM_BUFFER = GL_DYNAMIC_DRAW = 0
 
         def __getattr__(self, name):
+            if name.startswith('GL_'):
+                return 0                # an enum, as GL's are: an integer
             return lambda *args, **kwargs: 1
 
     buffer = LightBuffer(_GL(), 1)
