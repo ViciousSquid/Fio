@@ -44,3 +44,23 @@ def test_the_2d_view_uses_that_style():
     from editor import view_2d
     source = inspect.getsource(view_2d.View2D.contextMenuEvent)
     assert "setStyleSheet(CONTEXT_MENU_STYLE)" in source
+
+
+def test_every_menu_in_the_editor_has_the_strips(qt_app):
+    """The editor's own stylesheet (main.py's, with editor_styles') gives every
+    menu -- the menu bar's, any right-click menu -- the orange strip and every
+    submenu the green one."""
+    from PyQt5.QtWidgets import QMenu, QWidget
+    from main import dark_stylesheet
+    from engine.asset_qt import portable_stylesheet
+    host = QWidget()
+    host.setStyleSheet(portable_stylesheet(dark_stylesheet))
+    menu = QMenu("File", host)
+    menu.addAction("Open...")
+    recent = menu.addMenu("Recent")
+    recent.addAction("_SHOWCASE.json")
+    try:
+        assert _top_strip(menu) == ORANGE
+        assert _top_strip(recent) == GREEN
+    finally:
+        host.deleteLater()
