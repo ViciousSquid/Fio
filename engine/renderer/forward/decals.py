@@ -50,6 +50,25 @@ DECAL_TEXTURE_SIZE = 256
 #: layer is when magnified -- so it is painted from its image at the image's
 #: own resolution (up to this), not from the shared array.
 EMISSIVE_TEXTURE_MAX = 1024
+#: Emissive decals a frame from which :func:`glow_layers` and
+#: :func:`remap_glow_rows` use NumPy rather than a Python loop. A small-N
+#: crossover (the invariant in tests/performance/test_small_n_invariant.py):
+#: below it the loop is cheaper -- NumPy's fixed cost a call is paid however
+#: few the rows -- and a map has a handful of emissive decals. Measured
+#: (CPython 3.13, NumPy 2; re-measure with ``pytest
+#: tests/performance/test_small_n_invariant.py -k benchmark -s
+#: --run-benchmarks``)::
+#:
+#:     decals    loop     NumPy
+#:          1    0.9 us   10.0 us
+#:         16    3.3 us   12.5 us
+#:         64   10.1 us   14.7 us
+#:         96   14.3 us   15.8 us
+#:        128   18.9 us   17.2 us
+#:       1024  147.8 us   56.5 us
+GLOW_REMAP_VECTOR_FROM = 112
+#: An empty shared-layer lookup (no emissive layers loaded).
+_NO_LAYERS = np.empty(0, dtype=np.int64)
 #: Floats an instance: a 4x4 box matrix, (variant, opacity, kind, flags)
 #: and the box's inverse.
 _INSTANCE_FLOATS = 36
@@ -83,6 +102,46 @@ def emissive_side(sizes):
     while side < largest and side < EMISSIVE_TEXTURE_MAX:
         side *= 2
     return side
+
+
+def glow_layers(shared):
+    """The distinct shared layers (sorted) the emissive decals' rows name;
+    *shared* is their layer column as int64."""
+    if len(shared) < GLOW_REMAP_VECTOR_FROM:
+        return sorted(set(shared.tolist()))
+    return np.unique(shared).tolist()
+
+
+def remap_glow_rows(rows, shared, index, lut):
+    """Point the emissive decals' instance *rows* at their layers in the
+    full-resolution array: column 16 from shared layer (*shared*, int64) to
+    its own layer (*index*: shared -> own; *lut*: the same as an array, -1
+    where there is none). A layer not in it (an unreadable image) draws
+    nothing rather than another image: its opacity (column 17) goes to 0.
+    A Python loop below :data:`GLOW_REMAP_VECTOR_FROM` rows, NumPy from it;
+    the same rows either way."""
+    if len(shared) < GLOW_REMAP_VECTOR_FROM:
+        _remap_glow_rows_loop(rows, shared.tolist(), index)
+    else:
+        _remap_glow_rows_table(rows, shared, lut)
+
+
+def _remap_glow_rows_loop(rows, layers, index):
+    for row, layer in enumerate(layers):
+        own = index.get(layer)
+        if own is not None:
+            rows[row, 16] = float(own)
+        else:
+            rows[row, 17] = 0.0
+
+
+def _remap_glow_rows_table(rows, shared, lut):
+    inside = (shared >= 0) & (shared < len(lut))
+    mapped = np.full(shared.shape, -1, dtype=np.int64)
+    mapped[inside] = lut[shared[inside]]
+    found = mapped >= 0
+    rows[found, 16] = mapped[found]
+    rows[~found, 17] = 0.0
 
 
 def visible_decals(models, projection, view, camera_pos, viewport_height):
@@ -138,6 +197,7 @@ class DecalsMixin:
         self._decal_glow_textures = 0
         self._decal_glow_key = None
         self._decal_glow_index = {}
+        self._decal_glow_lut = _NO_LAYERS
         self._decal_glow_pixels = {}
         #: Decals drawn by the last frame, and those left out as off screen
         #: or too small (tests, Debug Tables).
@@ -265,6 +325,7 @@ class DecalsMixin:
             gl.glDeleteTextures(1, [self._decal_glow_textures])
             self._decal_glow_textures = 0
         self._decal_glow_key, self._decal_glow_index = key, {}
+        self._decal_glow_lut = _NO_LAYERS
         names = self._decal_layer_names or ()
         found = []
         for layer in layers:
@@ -296,6 +357,11 @@ class DecalsMixin:
             self._decal_glow_index[layer] = len(data)
             data.append(pixels)
         self._decal_glow_pixels = kept
+        index = self._decal_glow_index
+        lut = np.full(max(index, default=-1) + 1, -1, dtype=np.int64)
+        for shared_layer, own_layer in index.items():
+            lut[shared_layer] = own_layer
+        self._decal_glow_lut = lut
         if not data:
             return 0
         stacked = np.ascontiguousarray(np.stack(data), dtype=np.uint8)
@@ -423,17 +489,10 @@ class DecalsMixin:
             # their rows name their layer in that array instead.
             glow_rows = staging[plain_count:plain_count + glow_count]
             shared = glow_rows[:, 16].astype(np.int64)
-            glow_texture = self._decal_glow_texture_array(
-                sorted(set(shared.tolist())))
+            glow_texture = self._decal_glow_texture_array(glow_layers(shared))
             if glow_texture:
-                index = self._decal_glow_index
-                for row, layer in enumerate(shared.tolist()):
-                    if layer in index:
-                        glow_rows[row, 16] = float(index[layer])
-                    else:
-                        # Not in the full-resolution array (unreadable):
-                        # nothing rather than another image.
-                        glow_rows[row, 17] = 0.0
+                remap_glow_rows(glow_rows, shared, self._decal_glow_index,
+                                self._decal_glow_lut)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, staging.nbytes, staging)
 
         # The box's far faces, untested against depth: every pixel the box
@@ -531,6 +590,7 @@ class DecalsMixin:
         self._decal_glow_textures = 0
         self._decal_glow_key = None
         self._decal_glow_index, self._decal_glow_pixels = {}, {}
+        self._decal_glow_lut = _NO_LAYERS
         self._decal_capacity = 0
         self._decal_base = None
         self._decal_layers = 0
