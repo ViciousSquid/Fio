@@ -40,6 +40,18 @@ _RENDERER_PREFIX = "\x1b[38;2;240;128;0m[Renderer]\x1b[0m"
 _MODEL_RETRY_S = 5.0
 
 
+def texture_cache_key(subfolder, name):
+    """The texture cache's key for *name* in *subfolder*: one per file.
+
+    Keys use '/' throughout. On Windows ``os.path.join`` puts a '\\' beside
+    the '/' a name already has, so "monsters/human/idle.png" in "sprites" and
+    "idle.png" in "sprites/monsters/human" were two keys -- and two uploads --
+    for one file.
+    """
+    key = os.path.join(subfolder, name)
+    return key if os.sep == '/' else key.replace(os.sep, '/')
+
+
 # ---------- Utility classes ----------
 class UniformCache:
     __slots__ = ('program', '_cache', 'shadow_slots', 'env', 'active_lights')
@@ -177,7 +189,7 @@ class ResourcesMixin:
     # Texture management
     # --------------------------------------------------------------------------
     def load_texture(self, texture_name, subfolder):
-        tex_cache_name = os.path.join(subfolder, texture_name)
+        tex_cache_name = texture_cache_key(subfolder, texture_name)
         if tex_cache_name in self.texture_manager:
             return self.texture_manager[tex_cache_name]
 
@@ -328,11 +340,11 @@ class ResourcesMixin:
     # ------------------------------------------------------------------
     def _tex_cache_path(self, tex_name):
         """Return the ``textures/<name>`` cache key for *tex_name*, memoizing the
-        os.path.join. Called for every drawn face every frame in play mode, so
-        the join is done once per unique texture name and reused thereafter."""
+        join. Called for every drawn face every frame in play mode, so the join
+        is done once per unique texture name and reused thereafter."""
         path = self._tex_path_cache.get(tex_name)
         if path is None:
-            path = os.path.join('textures', tex_name)
+            path = texture_cache_key('textures', tex_name)
             self._tex_path_cache[tex_name] = path
         return path
 
@@ -341,7 +353,7 @@ class ResourcesMixin:
 
     def _texture_pixel_size(self, tex_name):
         """Pixel dimensions of a loaded texture, with the usual 128 fallback."""
-        cache_name = os.path.join('textures', tex_name)
+        cache_name = texture_cache_key('textures', tex_name)
         return getattr(self, '_texture_dimensions', {}).get(cache_name, (128, 128))
 
     # --------------------------------------------------------------------------

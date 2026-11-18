@@ -20,7 +20,7 @@ def _loaded(session):
     renderer = session.view.renderer
     if renderer is None or not renderer.ready:
         pytest.skip("no OpenGL context")
-    prefix = "textures" + os.sep
+    prefix = "textures/"        # cache keys use '/' on every platform
     return {key[len(prefix):] for key in renderer.texture_manager if key.startswith(prefix)}
 
 
