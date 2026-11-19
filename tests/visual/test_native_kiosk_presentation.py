@@ -309,7 +309,13 @@ def test_leaving_native_kiosk_restores_the_widgets_gl_state(session, monkeypatch
 
     def snapshot(self):
         if self._native_surface is None and self._qt_paint_event_active:
-            seen.append(_gl_state())
+            state = _gl_state()
+            # The widget's size as this paint sees it: a window manager may
+            # resize the editor window between two checks.
+            ratio = self.devicePixelRatioF()
+            state['size'] = (int(QOpenGLWidget.width(self) * ratio),
+                             int(QOpenGLWidget.height(self) * ratio))
+            seen.append(state)
         return original(self)
     monkeypatch.setattr(type(view), 'paintGL', snapshot)
 
@@ -344,9 +350,9 @@ def test_leaving_native_kiosk_restores_the_widgets_gl_state(session, monkeypatch
 
     after = widget_frame()
     assert after['framebuffer'] == view.defaultFramebufferObject() != 0
-    assert after['viewport'] == (0, 0) + size
+    assert after['viewport'] == (0, 0) + after['size']
     assert not after['scissor test']
-    unchanged = {k: v for k, v in before.items() if k not in ('framebuffer', 'viewport')}
+    unchanged = {k: v for k, v in before.items() if k not in ('framebuffer', 'viewport', 'size')}
     assert {k: after[k] for k in unchanged} == unchanged
     _report("restored: the widget's framebuffer, viewport and GL state after leaving")
 
@@ -587,7 +593,14 @@ def test_events_while_the_window_is_created_do_not_touch_the_view(session, monke
     session.app.processEvents()
     assert not errors, errors
     assert view._native_surface is None and not presented
-    assert view._cached_aspect_ratio == aspect, "a window not yet presenting resized the view"
+    # The view keeps the widget's own aspect (a window manager may have
+    # resized the editor window meanwhile), never the creating window's.
+    from PyQt5.QtWidgets import QOpenGLWidget
+    own = QOpenGLWidget.width(view) / max(1, QOpenGLWidget.height(view))
+    assert view._cached_aspect_ratio != pytest.approx(640 / 100), \
+        "a window not yet presenting resized the view"
+    assert view._cached_aspect_ratio == pytest.approx(own, rel=0.02) or \
+        view._cached_aspect_ratio == pytest.approx(aspect)
     surface.destroy()
     surface.deleteLater()
 

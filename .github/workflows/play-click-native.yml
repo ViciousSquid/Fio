@@ -152,7 +152,11 @@ jobs:
             linux-wayland)
               export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"; mkdir -p -m 700 "$XDG_RUNTIME_DIR"
               unset DISPLAY
-              printf 'output HEADLESS-1 resolution 2560x1440\nxwayland disable\n' > "$RUNNER_TEMP/sway.conf"
+              # Floating windows, as openbox gives X11: sway's tiling would
+              # override every size a window asks for (the native kiosk
+              # window's 320x180, the editor's own) and re-tile the editor
+              # whenever another window opens or closes.
+              printf 'output HEADLESS-1 resolution 2560x1440\nxwayland disable\nfor_window [app_id=".*"] floating enable\nfor_window [title=".*"] floating enable\n' > "$RUNNER_TEMP/sway.conf"
               WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
                 sway -c "$RUNNER_TEMP/sway.conf" > "$RUNNER_TEMP/sway.log" 2>&1 &
               for i in $(seq 1 30); do ls "$XDG_RUNTIME_DIR"/wayland-* >/dev/null 2>&1 && break; sleep 0.5; done
