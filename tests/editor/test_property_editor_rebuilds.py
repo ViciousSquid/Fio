@@ -300,7 +300,10 @@ def test_rebuilding_one_objects_page_does_not_strand_the_old_pages(panel, qt_app
     def parked_pages():
         qt_app.processEvents()
         qt_app.sendPostedEvents(None, QEvent.DeferredDelete)
-        return len(editor._parking.findChildren(QWidget, options=Qt.FindDirectChildrenOnly))
+        # Parked pages are the panel's hidden page widgets (QScrollArea).
+        from PyQt5.QtWidgets import QScrollArea
+        return len([w for w in editor.findChildren(QScrollArea, options=Qt.FindDirectChildrenOnly)
+                    if w is not editor._page])
 
     for n in range(12):
         brush['name'] = 'renamed_%d' % n
@@ -806,7 +809,9 @@ def test_parked_pages_are_not_top_level_windows(panel):
     page = editor._page
     editor.set_object(two)
 
-    assert page.parent() is editor._parking
+    # Kept as the panel's own hidden child: reparenting it anywhere else
+    # makes Qt re-polish its whole widget tree, on parking and on restore.
+    assert page.parent() is editor
     assert not page.isVisible()
     assert page.window() is not page
 
@@ -822,22 +827,8 @@ def test_restored_page_is_shown_again(panel):
     editor.set_object(one)
 
     assert editor._page is page
-    assert page.parent() is not editor._parking
+    assert page.parent() is editor
     assert not page.isHidden()
-
-
-def test_parking_survives_a_page_restore(panel):
-    """``_parking`` is the editor's, not a page's — restoring must not drop it."""
-    host, editor = panel
-    one, two = make_brush('one'), make_brush('two')
-    host.state.brushes = [one, two]
-
-    parking = editor._parking
-    editor.set_object(one)
-    editor.set_object(two)
-    editor.set_object(one)
-
-    assert editor._parking is parking
 
 
 # ────────────────────────────
@@ -995,6 +986,60 @@ def test_light_show_radius_writes_back(panel):
 # brush a trigger. Every reader already uses .get(..., default), in both the
 # panel and LogicThread.
 # ---------------------------------------------------------------------------
+
+def _tab_index(editor, title):
+    for i in range(editor.tab_widget.count()):
+        if editor.tab_widget.tabText(i) == title:
+            return i
+    return None
+
+
+@pytest.mark.parametrize('title, flag, widget', [
+    ('Trigger', 'is_trigger', 'hurt_cb'),
+    ('Mover', 'is_mover', 'mover_preview_btn'),
+    ('Door', 'is_door', 'door_preview_btn'),
+])
+def test_a_tab_the_brush_does_not_use_is_built_when_first_shown(panel, title, flag, widget):
+    """Selecting a plain brush builds no hidden Trigger/Mover/Door tab (a
+    quarter of the selection cost); making it one shows the tab, complete."""
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+    index = _tab_index(editor, title)
+    assert index is not None and not editor.tab_widget.isTabVisible(index)
+    assert widget not in editor._widgets, "a hidden tab was built"
+
+    editor.tab_widget.setTabVisible(index, True)
+    editor.tab_widget.setCurrentIndex(index)
+    assert widget in editor._widgets
+    assert editor.tab_widget.widget(index).findChildren(QWidget)
+
+
+@pytest.mark.parametrize('title, flag, widget', [
+    ('Trigger', 'is_trigger', 'hurt_cb'),
+    ('Mover', 'is_mover', 'mover_preview_btn'),
+    ('Door', 'is_door', 'door_preview_btn'),
+])
+def test_a_tab_the_brush_uses_is_built_with_the_page(panel, title, flag, widget):
+    host, editor = panel
+    brush = make_brush(**{flag: True})
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+    assert editor.tab_widget.isTabVisible(_tab_index(editor, title))
+    assert widget in editor._widgets
+
+
+def test_turning_a_brush_into_a_trigger_shows_a_complete_trigger_tab(panel):
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+    editor.on_trigger_changed(True)
+    index = _tab_index(editor, 'Trigger')
+    assert editor.tab_widget.currentIndex() == index
+    assert 'hurt_cb' in editor._widgets
+
 
 def test_selecting_a_brush_does_not_author_properties_into_it(panel):
     host, editor = panel

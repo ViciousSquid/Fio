@@ -546,13 +546,13 @@ class PropertyEditor(QWidget):
         self._page = None                 # the QScrollArea currently shown
         self._page_cache = []             # [(obj, signature, page, state)], LRU
 
-        # Parked pages live in here rather than being reparented to nothing.
-        # A widget with no parent is a top-level window, and Qt walks every
-        # top-level window when it propagates style/font/palette changes — so
-        # parking pages that way made building the *next* page measurably
-        # slower, in proportion to how many were parked.
-        self._parking = QWidget(self)
-        self._parking.setVisible(False)
+        # Parked pages stay children of this panel, hidden. Never reparented
+        # to nothing: a widget with no parent is a top-level window, and Qt
+        # walks every top-level window when it propagates style/font/palette
+        # changes. Nor moved under a holder widget: reparenting makes Qt
+        # re-polish the page's whole widget tree against the style sheet, on
+        # parking and again on restore -- 37 ms of a 6 ms switch back to a
+        # page that is kept.
 
         # Settings > Editor > Tooltips.  Held here rather than read from the
         # config on every build: a page is rebuilt often enough that this sits
@@ -632,7 +632,7 @@ class PropertyEditor(QWidget):
     #: page is on screen; everything else is part of a page's state.
     _PERSISTENT_ATTRS = frozenset({
         'editor', 'current_object', 'main_layout', '_populating',
-        '_signature', '_page', '_page_cache', '_parking',
+        '_signature', '_page', '_page_cache',
         '_tooltips_enabled',
     })
 
@@ -756,7 +756,6 @@ class PropertyEditor(QWidget):
         page = self._page
         if page is not None:
             self.main_layout.removeWidget(page)
-            page.setParent(self._parking)
             page.setVisible(False)
         self._page = None
         return page
@@ -815,7 +814,7 @@ class PropertyEditor(QWidget):
             return
         # A page already parked for this object was built for an older
         # signature and is superseded; destroy it rather than just forgetting
-        # it, or it stays parented to _parking for the rest of the session.
+        # it, or it stays parented (hidden) for the rest of the session.
         kept = []
         for entry in self._page_cache:
             if entry[0] is self.current_object:
@@ -1107,17 +1106,19 @@ class PropertyEditor(QWidget):
 
         self.tab_widget.addTab(self._create_general_tab(brush), "General")
 
-        self.trigger_tab = self._create_trigger_tab(brush)
-        self.trigger_tab_index = self.tab_widget.addTab(self.trigger_tab, load_icon("assets/ui/controls/target.svg"), "Trigger")
-        self.tab_widget.setTabVisible(self.trigger_tab_index, is_trigger)
-
-        self.mover_tab = self._create_mover_tab(brush)
-        self.mover_tab_index = self.tab_widget.addTab(self.mover_tab, load_icon("assets/ui/controls/move.svg"), "Mover")
-        self.tab_widget.setTabVisible(self.mover_tab_index, is_mover)
-
-        self.door_tab = self._create_door_tab(brush)
-        self.door_tab_index = self.tab_widget.addTab(self.door_tab, load_icon("assets/ui/controls/door.svg"), "Door")
-        self.tab_widget.setTabVisible(self.door_tab_index, is_door)
+        # A tab the brush does not use yet (Trigger, Mover, Door on a plain
+        # brush) is added empty and built the first time it is shown -- when
+        # the brush is made one, which switches to it. Building three hidden
+        # tabs on every selection was a quarter of selecting a brush.
+        self.trigger_tab, self.trigger_tab_index = self._add_brush_tab(
+            lambda: self._create_trigger_tab(brush), "assets/ui/controls/target.svg",
+            "Trigger", is_trigger)
+        self.mover_tab, self.mover_tab_index = self._add_brush_tab(
+            lambda: self._create_mover_tab(brush), "assets/ui/controls/move.svg",
+            "Mover", is_mover)
+        self.door_tab, self.door_tab_index = self._add_brush_tab(
+            lambda: self._create_door_tab(brush), "assets/ui/controls/door.svg",
+            "Door", is_door)
 
         self.shader_tab = self._create_shader_tab(brush)
         self.shader_tab_index = self.tab_widget.addTab(self.shader_tab, load_icon("assets/ui/controls/shader.svg"), "Shader")
@@ -1138,6 +1139,33 @@ class PropertyEditor(QWidget):
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
         self._page = scroll
+
+    def _add_brush_tab(self, builder, icon, title, shown):
+        """``(widget, index)`` of a brush tab: built now when *shown*,
+        otherwise added hidden and empty, and built on its first showing
+        (the tab bar is the same either way)."""
+        if shown:
+            widget = builder()
+            index = self.tab_widget.addTab(widget, load_icon(icon), title)
+            return widget, index
+        holder = QWidget(self.tab_widget)
+        QVBoxLayout(holder).setContentsMargins(0, 0, 0, 0)
+        index = self.tab_widget.addTab(holder, load_icon(icon), title)
+        self.tab_widget.setTabVisible(index, False)
+        tabs = self.tab_widget
+
+        def fill(current, _index=index, _holder=holder):
+            if current != _index or _holder.property('tab_built'):
+                return
+            _holder.setProperty('tab_built', True)
+            inner = builder()
+            configure_property_forms(inner)
+            if not self._tooltips_enabled:
+                set_tooltips_enabled(inner, False)
+            _holder.layout().addWidget(inner)
+
+        tabs.currentChanged.connect(fill)
+        return holder, index
 
     def _defer_io_tab(self, builder):
         """Add the I/O tab now, but build its contents the first time it is shown.
