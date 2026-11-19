@@ -14,6 +14,8 @@ on:
       - '.github/workflows/play-click-native.yml'
       - 'tests/native/**'
       - 'engine/qt_game_view.py'
+      - 'engine/kiosk_surface.py'
+      - 'tests/visual/test_native_kiosk_presentation.py'
       - 'macos_app.py'
   workflow_dispatch:
 
@@ -107,12 +109,21 @@ jobs:
         timeout-minutes: 12
         run: |
           log="$RUNNER_TEMP/native-click.log"
+          kiosk_log="$RUNNER_TEMP/native-kiosk.log"
           run_tests() {
             set +e
             # A test still running after 3 minutes dumps every thread's stack.
             python -m pytest tests/native/test_play_click_native.py -v -s -p no:cacheprovider \
               -o faulthandler_timeout=180 2>&1 | tee "$log"
             status=${PIPESTATUS[0]}
+            # Native kiosk presentation ([Kiosk] native_surface) on this
+            # platform's own window system: the view's one GL context made
+            # current on a native window, the same picture as the widget,
+            # the widget's GL state restored on leaving, failures falling
+            # back (tests/visual/test_native_kiosk_presentation.py).
+            python -m pytest tests/visual/test_native_kiosk_presentation.py -v -s -p no:cacheprovider \
+              -o faulthandler_timeout=180 2>&1 | tee "$kiosk_log"
+            kiosk_status=${PIPESTATUS[0]}
             set -e
           }
           case "${{ matrix.platform.id }}" in
@@ -156,9 +167,25 @@ jobs:
             grep -E '^\[(armed|click|control)|shotgun ammo|PASSED|FAILED|SKIPPED|ERROR| passed| failed' "$log" || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Native kiosk presentation"
+            echo '```'
+            grep -E '^\[native-kiosk\]|PASSED|FAILED|SKIPPED|ERROR| passed| failed' "$kiosk_log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           [ "$status" -eq 0 ] || exit "$status"
           # A skip (no OpenGL, no display) is not a demonstration: all three must run.
           grep -qE '(^|[^0-9])3 passed' "$log" || { echo "::error::not every native test ran"; exit 1; }
+          [ "$kiosk_status" -eq 0 ] || { echo "::error::native kiosk presentation failed here"; exit "$kiosk_status"; }
+          grep -qE '(^|[^0-9])14 passed' "$kiosk_log" || { echo "::error::not every native kiosk test ran"; exit 1; }
+          # Each step the tests report on this platform, not merely a pass:
+          # the native window created and presenting (the same scene as the
+          # widget), the widget's GL state restored, the editor resuming, and
+          # the console switching a running kiosk mode.
+          for step in 'created and presented' 'restored:' 'editor resumed' 'console:' 'transitions:'; do
+            grep -q "^\[native-kiosk\] $step" "$kiosk_log" || {
+              echo "::error::native kiosk step not demonstrated here: $step"; exit 1; }
+          done
 
       # macOS only: right-drag look after a Glow brush's colour change
       # (tests/native/test_editor_look_after_glow_colour.py). Its control

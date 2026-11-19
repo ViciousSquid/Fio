@@ -3320,6 +3320,13 @@ class MainWindow(QMainWindow):
 
     def _exit_play_mode(self):
         """Exit play mode and return to editor."""
+        if (getattr(self, 'is_kiosk_mode', False)
+                and self.view_3d._native_surface is not None):
+            # Play ending on its own (repeated paint failures, a fatal tick)
+            # in native kiosk mode: leave kiosk mode too, or the editor window
+            # would stay hidden behind a window with no game in it.
+            self.exit_kiosk_mode(keep_play_mode=False, confirm=False)
+            return
         if self.view_3d.play_mode:
             self.view_3d.toggle_play_mode()
             self.view_3d.play_mode = False  # Force state change before UI update
@@ -6077,12 +6084,94 @@ class MainWindow(QMainWindow):
         elif self.view_3d.play_mode:
             self.enter_kiosk_mode()
 
+    def kiosk_native_surface_enabled(self):
+        """[Kiosk] native_surface: kiosk frames are presented on a native
+        window of their own rather than composited through the editor's 3D
+        view (engine/kiosk_surface.py). Off by default."""
+        return self.config.getboolean('Kiosk', 'native_surface', fallback=False)
+
+    def _begin_native_kiosk(self):
+        """Present kiosk mode on a native window: the same renderer and GL
+        context, made current on it. False -- with the reason in the console
+        -- when this platform or context cannot, so the caller shows kiosk
+        mode on the 3D view as before."""
+        from engine.kiosk_surface import NativePresentationError
+        view = self.view_3d
+        try:
+            surface = view.begin_native_presentation()
+            surface.show_in_mode(
+                self.kiosk_window_mode(),
+                self.config.getint('Kiosk', 'res_width', fallback=1280),
+                self.config.getint('Kiosk', 'res_height', fallback=720),
+                screen=self.screen())
+            view.verify_native_presentation()
+        except NativePresentationError as exc:
+            view.end_native_presentation()
+            debug_log("Kiosk", "Native presentation unavailable (%s); kiosk mode "
+                               "is shown on the 3D view." % exc)
+            return False
+        # The editor window is out of sight while the game has its own.
+        self.hide()
+        surface.requestActivate()
+        return True
+
+    def set_kiosk_native_surface(self, enabled):
+        """Turn [Kiosk] native_surface on or off and save it. In kiosk mode
+        the game switches presentation now, by the same paths kiosk mode is
+        entered and left by; it falls back to the 3D view if the native
+        window cannot be used. Returns whether the native window presents."""
+        if not self.config.has_section('Kiosk'):
+            self.config.add_section('Kiosk')
+        self.config.set('Kiosk', 'native_surface', str(bool(enabled)))
+        self.save_config()
+        view = self.view_3d
+        if getattr(self, 'is_kiosk_mode', False):
+            if enabled and view._native_surface is None:
+                if self._begin_native_kiosk():
+                    self._restore_editor_window_state_for_native()
+            elif not enabled and view._native_surface is not None:
+                view.end_native_presentation()
+                self.show()
+                self._apply_kiosk_window_mode()
+                view.setFocus()
+        return view._native_surface is not None
+
+    def _restore_editor_window_state_for_native(self):
+        """The editor window was fullscreen (or frameless) for kiosk mode on
+        the 3D view; hidden behind a native kiosk window it goes back to a
+        normal window, as it is when native kiosk mode starts from the
+        editor."""
+        if self.windowFlags() & Qt.FramelessWindowHint:
+            self.setWindowFlag(Qt.FramelessWindowHint, False)
+        # Left hidden throughout (showNormal() would show it).
+        self.setWindowState(self.windowState() & ~Qt.WindowFullScreen)
+        self.hide()
+
+    def kiosk_native_presentation_failed(self):
+        """The native window could not present a frame: carry on in kiosk
+        mode on the 3D view."""
+        if self.view_3d._native_surface is None:
+            return
+        self.view_3d.end_native_presentation()
+        if getattr(self, 'is_kiosk_mode', False):
+            self.show()
+            self._apply_kiosk_window_mode()
+            self.view_3d.setFocus()
+
     def _apply_kiosk_window_mode(self):
         """Show the window as the configured game window mode.
 
         Toggling the frameless hint keeps the native window (and the 3D
-        view's GL context): Qt 5 updates the flags in place.
+        view's GL context): Qt 5 updates the flags in place. While a native
+        kiosk window presents, it is that window that takes the mode.
         """
+        surface = self.view_3d._native_surface
+        if surface is not None:
+            surface.show_in_mode(
+                self.kiosk_window_mode(),
+                self.config.getint('Kiosk', 'res_width', fallback=1280),
+                self.config.getint('Kiosk', 'res_height', fallback=720))
+            return
         mode = self.kiosk_window_mode()
         frameless = mode == 'Borderless'
         if bool(self.windowFlags() & Qt.FramelessWindowHint) != frameless:
@@ -6134,8 +6223,11 @@ class MainWindow(QMainWindow):
         # Hide sysmon overlay by default in kiosk mode (F3 to toggle back on)
         self.view_3d.sysmon.set_active(False)
 
-        # Fullscreen, borderless or windowed (Settings > Play Modes)
-        self._apply_kiosk_window_mode()
+        # Fullscreen, borderless or windowed (Settings > Play Modes): on a
+        # native window of its own when [Kiosk] native_surface asks and the
+        # platform allows, otherwise this window.
+        if not (self.kiosk_native_surface_enabled() and self._begin_native_kiosk()):
+            self._apply_kiosk_window_mode()
 
         # Launch play mode ONLY if not already in play mode
         if not self.view_3d.play_mode:
@@ -6168,6 +6260,13 @@ class MainWindow(QMainWindow):
                 return  # User cancelled — stay in kiosk mode
 
         self.is_kiosk_mode = False
+
+        # Back on the 3D view: the context is handed back to the widget (its
+        # framebuffer) and the native window goes, before anything else
+        # draws or the editor window returns.
+        if self.view_3d._native_surface is not None:
+            self.view_3d.end_native_presentation()
+            self.show()
 
         # Exit play mode only if not keeping it (F12 toggle vs Escape)
         if not keep_play_mode and self.view_3d.play_mode:

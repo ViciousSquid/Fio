@@ -120,3 +120,50 @@ def test_play_in_the_editor_paints_on_publish_and_its_2d_views_follow(
     assert views == [True], "not at the frame rate"
     session.stop_play()
     assert view.game_state.publish_listener is None
+
+
+def test_native_kiosk_without_an_opengl_context_stays_on_the_3d_view(fio_session):
+    """[Kiosk] native_surface where the view has no GL context (offscreen,
+    or a platform that cannot): kiosk mode as before, nothing half-made."""
+    start = make_thing(PlayerStart, "start", (0.0, 8.0, 0.0))
+    session = fio_session(level_data(brushes=room(), things=[start]))
+    window, view = session.window, session.view
+    if view.renderer is not None:
+        pytest.skip("covered with a context by tests/visual/test_native_kiosk_presentation.py")
+    if not window.config.has_section('Kiosk'):
+        window.config.add_section('Kiosk')
+    window.config.set('Kiosk', 'window_mode', 'Windowed')
+    window.config.set('Kiosk', 'native_surface', 'True')
+    session.start_play()
+    window.enter_kiosk_mode()
+    assert window.is_kiosk_mode and view._native_surface is None
+    assert window.isVisible()
+    window.exit_kiosk_mode(keep_play_mode=True, confirm=False)
+    assert not window.is_kiosk_mode
+
+
+def test_publish_notifications_are_coalesced(fio_session, monkeypatch, qt_app):
+    """Five frames published while the UI thread is busy: one queued paint
+    callback, which takes the newest frame -- not five, each drawing that
+    same frame again."""
+    start = make_thing(PlayerStart, "start", (0.0, 8.0, 0.0))
+    session = fio_session(level_data(brushes=room(), things=[start]))
+    view = session.view
+    session.start_play()
+    qt_app.processEvents()
+    paints = _count(monkeypatch, view, 'update')
+    view._play_views_due = float('inf')      # the 2D views' follow asks for its own
+    view.publish_notifications_coalesced = 0
+    for _ in range(5):
+        session.publish()                      # the UI thread does not run meanwhile
+    assert view.publish_notifications_coalesced == 4
+    qt_app.processEvents()
+    assert len(paints) == 1, "one callback, one paint"
+    with session.render_state() as frame:
+        assert frame.publication_serial == view.game_state.published_frames, \
+            "the paint took the newest frame"
+    assert view.game_state.superseded_frames >= 4
+    session.publish()                          # the next publication queues again
+    qt_app.processEvents()
+    assert len(paints) == 2
+    session.stop_play()

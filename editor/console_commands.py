@@ -133,6 +133,8 @@ class ConsoleCommandHandler:
 
             'r_list': self.cmd_render_list,
             'r_renderer': self.cmd_renderer,
+            'r_presentation': self.cmd_presentation,
+            'r_nativekiosk': self.cmd_native_kiosk,
             'r_wireframe': self.cmd_render_wireframe,
             'r_shadows': self.cmd_render_shadows,
             'r_waterquality': self.cmd_water_quality,
@@ -212,7 +214,7 @@ class ConsoleCommandHandler:
     #: ``condump`` writes a new file under logs/ every time it runs (it never
     #: overwrites), so a map on a timer could fill the disk.
     USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'phys_engine', 'vsync', 'r_vsync', 'quit', 'botdebug',
-                                    'monsterdebug', 'condump'})
+                                    'monsterdebug', 'condump', 'r_nativekiosk'})
 
     def cmd_botdebug(self, args):
         if args.strip().lower() not in ('', 'on', 'off'):
@@ -1059,6 +1061,10 @@ class ConsoleCommandHandler:
             (('r_list',), '— Show all current render settings'),
             (('r_info',), '— Detailed renderer status (same as r_list)'),
             (('r_renderer',), '[name] — List the registered renderers, or switch to one live'),
+            (('r_presentation',), '[reset] — Frame timings of the 3D view and the native kiosk '
+                                  'window, recorded alike, to compare the two'),
+            (('r_nativekiosk',), '[on|off|toggle] — Kiosk mode on a native window of its own '
+                                 '([Kiosk] native_surface; off by default)'),
             (('r_wireframe', 'wireframe'), '[on|off] — Wireframe display (the Display box); '
                                            'off returns to the previous mode'),
             (('r_shadows', 'shadows'), '— Toggle shadows'),
@@ -1237,6 +1243,42 @@ class ConsoleCommandHandler:
     def cmd_render_info(self, args):
         """Detailed renderer status"""
         self.cmd_render_list(args)
+
+    def cmd_native_kiosk(self, args):
+        """``r_nativekiosk [on|off|toggle]``: [Kiosk] native_surface -- kiosk
+        mode presented on a native window of its own rather than through the
+        3D view. Saved to settings.ini; in kiosk mode it switches now.
+        Without an argument, says which is set and which is presenting."""
+        window = self.main_window
+        word = args.strip().lower()
+        current = window.kiosk_native_surface_enabled()
+        wanted = {'': None, 'on': True, '1': True, 'true': True, 'off': False, '0': False,
+                  'false': False, 'toggle': not current}.get(word, 'bad')
+        if wanted == 'bad':
+            debug_log("Error", "Usage: r_nativekiosk [on|off|toggle]")
+            return
+        if wanted is not None:
+            window.set_kiosk_native_surface(wanted)
+        enabled = window.kiosk_native_surface_enabled()
+        presenting = window.view_3d._native_surface is not None
+        debug_log("Info", "Native kiosk presentation: %s%s" % (
+            "on" if enabled else "off",
+            "" if not getattr(window, 'is_kiosk_mode', False) else
+            (" (presenting on the native window)" if presenting
+             else " (presenting on the 3D view)")))
+
+    def cmd_presentation(self, args):
+        """``r_presentation [reset]``: per-frame interval, paintGL and
+        presentation times of whichever path presented -- the 3D view (Qt
+        composes its framebuffer into the window) or the native kiosk window
+        ([Kiosk] native_surface) -- recorded the same way, to compare them."""
+        stats = self.main_window.view_3d.presentation_stats
+        if args.strip().lower() == 'reset':
+            stats.clear()
+            debug_log("Info", "Presentation timings cleared")
+            return
+        for line in stats.report().splitlines():
+            debug_log("Info", line)
 
     def cmd_renderer(self, args):
         """List the registered renderers, or switch to one: ``r_renderer [name]``.

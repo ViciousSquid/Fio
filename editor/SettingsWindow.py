@@ -409,6 +409,14 @@ class SettingsWindow(QDialog):
         self.res_group.setLayout(res_layout)
         layout.addWidget(self.res_group)
 
+        self.native_surface_checkbox = QCheckBox("Present the game on its own window (experimental)")
+        self.native_surface_checkbox.setToolTip(
+            "Kiosk mode draws on a native window of its own instead of through\n"
+            "the editor's 3D view, so the frame is not composited a second time.\n"
+            "The same renderer draws either way; if the platform cannot, kiosk\n"
+            "mode carries on in the 3D view.")
+        layout.addWidget(self.native_surface_checkbox)
+
         self.launch_in_editor_checkbox = QCheckBox("Launch packages in editor mode")
         self.launch_in_editor_checkbox.setToolTip(
             "When enabled, opening a .fiopak loads the map in the editor\n"
@@ -682,6 +690,8 @@ class SettingsWindow(QDialog):
             self.kiosk_mode_combo.setCurrentIndex(idx)
         self.kiosk_res_w.setValue(self.config.getint('Kiosk', 'res_width', fallback=1280))
         self.kiosk_res_h.setValue(self.config.getint('Kiosk', 'res_height', fallback=720))
+        self.native_surface_checkbox.setChecked(
+            self.config.getboolean('Kiosk', 'native_surface', fallback=False))
         self.launch_in_editor_checkbox.setChecked(
             self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
         )
@@ -791,6 +801,8 @@ class SettingsWindow(QDialog):
         self.config.set('Kiosk', 'window_mode', self.kiosk_mode_combo.currentText())
         self.config.set('Kiosk', 'res_width', str(self.kiosk_res_w.value()))
         self.config.set('Kiosk', 'res_height', str(self.kiosk_res_h.value()))
+        self.config.set('Kiosk', 'native_surface',
+                        str(self.native_surface_checkbox.isChecked()))
         self.config.set('Kiosk', 'launch_in_editor',
                         str(self.launch_in_editor_checkbox.isChecked()))
 

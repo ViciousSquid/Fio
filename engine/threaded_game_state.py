@@ -139,6 +139,7 @@ class RenderState:
         self.total_brushes = 0
         self.culled_brushes = 0
         self.timestamp = 0.0
+        self.publication_serial = 0
         #: Logic-thread milliseconds spent preparing this frame.
         self.prepare_ms = 0.0
 
@@ -222,6 +223,7 @@ class RenderState:
         self.total_brushes = 0
         self.culled_brushes = 0
         self.timestamp = 0.0
+        self.publication_serial = 0
         self.prepare_ms = 0.0
 
 
@@ -293,6 +295,9 @@ class ThreadedGameState:
         #: handed to the renderer, and swaps declined because it was reading.
         self.published_frames = 0
         self.declined_swaps = 0
+        #: Published frames replaced by a newer one before the renderer took
+        #: them (try_swap): publications no paint ever showed.
+        self.superseded_frames = 0
         #: Called (no arguments, outside the lock, on whichever thread
         #: published) each time a frame is published. Kiosk mode sets it so
         #: the view paints a frame the moment it exists rather than on its
@@ -472,11 +477,16 @@ class ThreadedGameState:
 
     def _swap_locked(self) -> None:
         self.published_frames += 1
+        if self._has_new_frame:
+            self.superseded_frames += 1
         self._write_ready = False
         old_read = self._read_state
         self._read_state = self._write_state
         old_read.reset()
         self._write_state = old_read
+        # Which publication this is: a paint can tell a frame it already
+        # showed (a duplicate) from a new one, and count those it skipped.
+        self._read_state.publication_serial = self.published_frames
         self._has_new_frame = True
 
     def try_swap(self) -> bool:
