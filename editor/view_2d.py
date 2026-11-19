@@ -6,6 +6,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
+from editor import model_wireframe
 from editor.things import (Thing, Light, PlayerStart, Speaker, ReflectionProbe, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState, Effect, Shake)
@@ -2171,77 +2172,50 @@ class View2D(QWidget):
             tag_y = int(screen_rect.bottomRight().y() - tag_size - 2) 
             painter.drawPixmap(tag_x, tag_y, pixmap)
 
-    def _compute_model_screen_coords(self, model_thing, ax_map, ax1, ax2):
-        """Helper to compute screen coordinates for a model's wireframe.
-        Returns (pts_x, pts_y) numpy arrays, or None if failed."""
+    #: Models' wireframes: translucent cyan.
+    MODEL_WIREFRAME_COLOUR = (0, 255, 255, 100)
+
+    def _model_edges_for(self, model_thing):
+        """``(model, positions, edges)`` for a Thing's loaded model, or None.
+
+        2D is a QPainter view, not the renderer's OpenGL context. Never load
+        a model here: OBJ/GLB loading creates VAOs/VBOs and must happen in the
+        3D view's current GL context. The 3D renderer loads it on its next
+        frame.
+        """
         model_path = entity_model_path(model_thing)
         if not model_path:
             return None
-
-        # 2D is a QPainter view, not the renderer's OpenGL context. Never load
-        # a model here: OBJ/GLB loading creates VAOs/VBOs and must happen in the
-        # 3D view's current GL context. The 3D renderer loads it on its next frame.
-        if not self.main_window.view_3d.renderer:
-            return None
-
         renderer = self.main_window.view_3d.renderer
+        if not renderer:
+            return None
         obj = renderer.get_loaded_model(model_path)
         if not obj or not obj.is_loaded:
             return None
-        if not obj or not hasattr(obj, 'cpu_vertices') or obj.cpu_vertices is None or len(obj.cpu_vertices) == 0:
+        edges = model_wireframe.model_edges(obj)
+        if edges is None:
             return None
+        positions, segments = edges
+        if len(segments) > model_wireframe.MAX_WIREFRAME_EDGES:
+            return None                         # drawn as a box
+        return obj, positions, segments
 
-        # Optimization: Too many vertices check
-        if len(obj.cpu_vertices) > 50000:
-            return None # Treat as box fallback elsewhere
+    def _project_model(self, model_thing, positions, ax_map, ax1, ax2):
+        """Screen ``(xs, ys)`` of a model's welded corners in this view."""
+        return model_wireframe.project(
+            positions, model_thing.pos, model_scale(model_thing),
+            model_rotation(model_thing), (ax_map[ax1], ax_map[ax2]),
+            (self.width() / 2, self.height() / 2),
+            (self.pan_offset.x(), self.pan_offset.y()), self.zoom_factor,
+            flip_y=self.view_type in ('front', 'side'))
 
-        # Transform parameters
-        pos = model_thing.pos
-        scale = model_scale(model_thing)
-        if isinstance(scale, (int, float)): scale = [scale, scale, scale]
-        rot = model_rotation(model_thing)
-        
-        # Build Rotation Matrix
-        def rotate_x(a):
-            c, s = np.cos(a), np.sin(a)
-            return np.array([[1,0,0], [0,c,-s], [0,s,c]])
-        def rotate_y(a):
-            c, s = np.cos(a), np.sin(a)
-            return np.array([[c,0,s], [0,1,0], [-s,0,c]])
-        def rotate_z(a):
-            c, s = np.cos(a), np.sin(a)
-            return np.array([[c,-s,0], [s,c,0], [0,0,1]])
-
-        rx = rotate_x(np.radians(rot[0]))
-        ry = rotate_y(np.radians(rot[1]))
-        rz = rotate_z(np.radians(rot[2]))
-        
-        # Rotation Order: Z * X * Y
-        R = rz @ rx @ ry 
-
-        # Prepare vertices array from cached OBJ data
-        verts = np.array(obj.cpu_vertices)
-        
-        # Apply Transforms
-        verts = verts * np.array(scale)
-        verts = verts @ R.T 
-        verts = verts + np.array(pos)
-        
-        # Extract relevant axes for this 2D view
-        ix1, ix2 = ax_map[ax1], ax_map[ax2]
-        
-        # Project to screen coordinates
-        center_x, center_y = self.width() / 2, self.height() / 2
-        pan_x, pan_y = self.pan_offset.x(), self.pan_offset.y()
-        zoom = self.zoom_factor
-        
-        pts_x = center_x + (verts[:, ix1] - pan_x) * zoom
-        if self.view_type in ['front', 'side']:
-            pts_y = center_y - (verts[:, ix2] - pan_y) * zoom
-        else:
-            pts_y = center_y + (verts[:, ix2] - pan_y) * zoom
-            
-        return pts_x, pts_y
+    def _compute_model_screen_coords(self, model_thing, ax_map, ax1, ax2):
+        """Screen coordinates of a model's corners (for its bounds and hit
+        test). Returns (pts_x, pts_y) numpy arrays, or None if failed."""
+        found = self._model_edges_for(model_thing)
+        if found is None:
+            return None
+        return self._project_model(model_thing, found[1], ax_map, ax1, ax2)
 
     #: An explosion's blast radius: dark orange.
     BLAST_RADIUS_COLOUR = (204, 85, 0)
@@ -2269,67 +2243,50 @@ class View2D(QWidget):
         painter.restore()
 
     def _draw_model_wireframe(self, painter, model_thing, ax_map, ax1, ax2):
-        """Draws the projected wireframe of a 3D model in the 2D view."""
-        model_path = entity_model_path(model_thing)
+        """Draws the projected wireframe of a 3D model in the 2D view.
 
-        coords = self._compute_model_screen_coords(model_thing, ax_map, ax1, ax2)
-
-        if coords is None:
+        In bulk (editor/model_wireframe.py): the model's distinct edges are
+        projected, culled and snapped to pixels in NumPy and drawn with one
+        drawLines call. Drawing them a triangle at a time from Python cost
+        ~25 ms a 6,000-triangle model per view, on every repaint of a drag.
+        """
+        found = self._model_edges_for(model_thing)
+        if found is None:
             painter.setPen(QPen(QColor(200, 200, 200), 1))
             s_pos = self.world_to_screen(QPointF(model_thing.pos[ax_map[ax1]], model_thing.pos[ax_map[ax2]]))
             rect = QRectF(s_pos.x()-10, s_pos.y()-10, 20, 20)
             painter.drawRect(rect)
             return rect
 
-        pts_x, pts_y = coords
-        n_pts = len(pts_x)
+        obj, positions, edges = found
+        i1, i2 = ax_map[ax1], ax_map[ax2]
+        flip_y = self.view_type in ('front', 'side')
+        zoom = self.zoom_factor
+        cached = model_wireframe.wireframe_image(
+            obj, positions, edges, model_scale(model_thing),
+            model_rotation(model_thing), (i1, i2), zoom, flip_y,
+            self.MODEL_WIREFRAME_COLOUR)
+        if cached is not None:
+            # The same picture for every instance at this zoom: placed at the
+            # model's origin (snapped to a pixel), never re-rasterised while
+            # it is dragged.
+            image, left, top = cached
+            origin = self.world_to_screen(QPointF(model_thing.pos[i1], model_thing.pos[i2]))
+            x = int(round(origin.x())) + left
+            y = int(round(origin.y())) + top
+            rect = QRectF(x, y, image.width(), image.height())
+            if rect.intersects(QRectF(0, 0, self.width(), self.height())):
+                painter.drawImage(x, y, image)
+            return rect
 
-        painter.setPen(QPen(QColor(0, 255, 255, 100), 1))
-        width, height = self.width(), self.height()
-
-        # Prefer the model's index buffer (cpu_triangles) for correct wireframe on
-        # indexed geometry (all GLBs; most OBJs).  Without this, the loop treats
-        # unique shared vertices as sequential flat triangles, which gives wrong
-        # edges AND crashes when vertex_count % 3 != 0.
-        obj = None
-        if model_path and self.main_window.view_3d.renderer:
-            obj = self.main_window.view_3d.renderer.get_loaded_model(model_path)
-        cpu_triangles = getattr(obj, 'cpu_triangles', None)
-
-        if cpu_triangles is not None and len(cpu_triangles):
-            for tri in cpu_triangles:
-                i0, i1, i2 = tri
-                # Guard against malformed index data
-                if i0 >= n_pts or i1 >= n_pts or i2 >= n_pts:
-                    continue
-                # Frustum cull
-                if (pts_x[i0] < 0 and pts_x[i1] < 0 and pts_x[i2] < 0) or \
-                (pts_x[i0] > width and pts_x[i1] > width and pts_x[i2] > width) or \
-                (pts_y[i0] < 0 and pts_y[i1] < 0 and pts_y[i2] < 0) or \
-                (pts_y[i0] > height and pts_y[i1] > height and pts_y[i2] > height):
-                    continue
-                p0 = QPointF(pts_x[i0], pts_y[i0])
-                p1 = QPointF(pts_x[i1], pts_y[i1])
-                p2 = QPointF(pts_x[i2], pts_y[i2])
-                painter.drawLine(p0, p1)
-                painter.drawLine(p1, p2)
-                painter.drawLine(p2, p0)
-        else:
-            # Fallback for non-indexed meshes where vertices are laid out as
-            # sequential flat triangles.  Use n_pts - 2 as the bound so a
-            # vertex count not divisible by 3 never reads past the end of the array.
-            for i in range(0, n_pts - 2, 3):
-                if (pts_x[i] < 0 and pts_x[i+1] < 0 and pts_x[i+2] < 0) or \
-                (pts_x[i] > width and pts_x[i+1] > width and pts_x[i+2] > width) or \
-                (pts_y[i] < 0 and pts_y[i+1] < 0 and pts_y[i+2] < 0) or \
-                (pts_y[i] > height and pts_y[i+1] > height and pts_y[i+2] > height):
-                    continue
-                p0 = QPointF(pts_x[i],   pts_y[i])
-                p1 = QPointF(pts_x[i+1], pts_y[i+1])
-                p2 = QPointF(pts_x[i+2], pts_y[i+2])
-                painter.drawLine(p0, p1)
-                painter.drawLine(p1, p2)
-                painter.drawLine(p2, p0)
+        # Larger on screen than a cached image may be: drawn directly, only
+        # the edges inside the view.
+        pts_x, pts_y = self._project_model(model_thing, positions, ax_map, ax1, ax2)
+        segments = model_wireframe.visible_segments(
+            pts_x, pts_y, edges, self.width(), self.height())
+        if len(segments):
+            painter.setPen(QPen(QColor(*self.MODEL_WIREFRAME_COLOUR), 1))
+            painter.drawLines(model_wireframe.segments_polygon(segments))
 
         return QRectF(float(np.min(pts_x)), float(np.min(pts_y)),
                       max(2.0, float(np.ptp(pts_x))), max(2.0, float(np.ptp(pts_y))))
