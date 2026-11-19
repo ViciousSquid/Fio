@@ -654,7 +654,8 @@ class EditorState:
 
         for brush in self.brushes:
             # Ensure every brush has a stable ID
-            brush.setdefault('id', str(uuid.uuid4()))
+            if 'id' not in brush:
+                brush['id'] = str(uuid.uuid4())
 
             brush_copy = brush.copy()
 
@@ -703,7 +704,8 @@ class EditorState:
             brush = brush_data.copy()
 
             # Backfill stable ID for legacy maps
-            brush.setdefault('id', str(uuid.uuid4()))
+            if 'id' not in brush:
+                brush['id'] = str(uuid.uuid4())
 
             # Play state an older build saved into the map (Stage 2b):
             # dropped, a box saved mid-motion put back where it was authored.

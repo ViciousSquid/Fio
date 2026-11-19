@@ -244,6 +244,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._light_ubo = None
         self._light_ubo_capacity = 0
         self._light_ubo_key = None
+        self._light_ubo_lights = None
         #: Whether ``_light_ubo`` is bound to ``LIGHT_UBO_BINDING``; see
         #: :meth:`_ensure_light_ubo`.
         self._light_ubo_bound = False
@@ -850,6 +851,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._begin_geo_frame()
         self._frame_lights_uploaded.clear()
         self._light_ubo_key = None
+        self._light_ubo_lights = None
         self._light_ubo_bound = False
         self._current_shader = None
         if current_mode == RENDER_MODE_WIREFRAME:
@@ -1260,6 +1262,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
             self._light_ubo = None
             self._light_ubo_capacity = 0
             self._light_ubo_key = None
+            self._light_ubo_lights = None
             self._light_ubo_bound = False
         if self._light_cookies is not None:
             self._light_cookies.close()

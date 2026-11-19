@@ -666,9 +666,16 @@ class PropertyEditor(QWidget):
         """Everything the panel would read to build itself for ``obj``.
 
         Two calls returning the same value mean the panel that is already on
-        screen is exactly the panel a rebuild would produce.  The I/O
-        revision is folded in because the "Targeted by" line depends on other
-        entities' connections, not on this object at all.
+        screen is exactly the panel a rebuild would produce.
+
+        The page also shows things read from the rest of the scene. The
+        "Targeted by" line (other entities' connections to this one) is in the
+        signature itself, looked up through the I/O reverse index. The global
+        I/O revision -- bumped by every undo checkpoint -- stands in for the
+        rest (the names listed in target, path-node and portal pickers): it
+        decides whether a *parked* page may be reused (see
+        :meth:`_same_page_on_screen`), but no longer rebuilds the page on
+        screen after every edit, which cost ~100 ms an edit.
         """
         if obj is None:
             return ('none',)
@@ -680,9 +687,17 @@ class PropertyEditor(QWidget):
         if isinstance(obj, dict):
             source = obj
             kind = 'brush'
+            target_name, target_id = obj.get('name', ''), obj.get('id', '')
         else:
             source = obj.properties
             kind = type(obj).__name__
+            target_name = getattr(obj, 'name', '') or source.get('name', '')
+            target_id = source.get('id', '')
+        try:
+            targeted_by = tuple(self._find_targeting_sources(target_name, target_id)
+                                if (target_name or target_id) else ())
+        except Exception:
+            targeted_by = None
 
         fields = []
         # A snapshot, taken in one step: the logic thread adds its cache keys
@@ -701,7 +716,18 @@ class PropertyEditor(QWidget):
             else:
                 fields.append((key, self._hashable(value)))
         fields.sort()
-        return (kind, id(obj), revision, tuple(fields))
+        return (kind, id(obj), revision, tuple(fields), self._hashable(targeted_by))
+
+    @staticmethod
+    def _same_page_on_screen(current, signature):
+        """Whether the page built for signature *current* still shows what a
+        rebuild for *signature* would: equal apart from the global I/O
+        revision (index 2 of an object's signature)."""
+        if current == signature:
+            return True
+        if current is None or len(current) != 5 or len(signature) != 5:
+            return False
+        return current[:2] == signature[:2] and current[3:] == signature[3:]
 
     def _capture_page_state(self):
         """The instance attributes the page on screen owns.
@@ -881,8 +907,11 @@ class PropertyEditor(QWidget):
         """
         signature = self._object_signature(obj)
 
-        if not force and obj is self.current_object and self._signature == signature \
+        if not force and obj is self.current_object \
+                and self._same_page_on_screen(self._signature, signature) \
                 and (self._page is not None or obj is None):
+            # self._signature keeps the revision the page was *built* at, so
+            # once parked it is reused only if nothing changed since.
             return
 
         saved_tab_index = None

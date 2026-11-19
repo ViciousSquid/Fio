@@ -907,7 +907,7 @@ class MainWindow(QMainWindow):
             if index >= 0:
                 tab.setCurrentIndex(index)
 
-    def _clear_terrain(self):
+    def _clear_terrain(self, refresh=True):
         """Remove the terrain object and clear all references."""
         # Destroy the live terrain object
         if self.terrain is not None:
@@ -924,8 +924,10 @@ class MainWindow(QMainWindow):
         # Close the terrain editor panel if it is open in the Properties dock
         self.close_terrain_editor()
 
-        # Force a UI refresh
-        self.update_all_ui()
+        # Force a UI refresh (not while a level is being applied: that
+        # refreshes everything once the new level is in).
+        if refresh:
+            self.update_all_ui()
 
     # ------------------------------------------------------------------
     #  Play-mode console overlay helpers
@@ -5293,7 +5295,7 @@ class MainWindow(QMainWindow):
         # Drop the previous map's terrain; this also clears terrain_data,
         # so keep the one the new map just brought.
         terrain_data = self.state.terrain_data
-        self._clear_terrain()
+        self._clear_terrain(refresh=False)
         self.view_3d.terrain = None
         self.state.terrain_data = terrain_data
 
@@ -5560,9 +5562,9 @@ class MainWindow(QMainWindow):
             if file_path:
                 self.add_recent_file(file_path)
 
-            # Force full UI and view refresh
+            # Full UI and view refresh: set_selected_objects runs
+            # update_all_ui itself (a second call rebuilt the hierarchy again).
             self.set_selected_objects([])
-            self.update_all_ui()
 
             # Resume play on the new level, at the destination start.
             # Opened by the user mid-Play with nowhere to resume: said in the

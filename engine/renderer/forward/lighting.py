@@ -97,12 +97,20 @@ class LightingMixin:
         # Sent when they change, per program (M4): the values are compared
         # every frame, so a change still reaches the next draw. The terrain's
         # program belongs to the terrain, which may set them itself.
+        # The camera moves nearly every frame, the rest almost never: they
+        # are compared separately, so a moving camera re-sends one uniform
+        # per program rather than all seven.
         values = (vd.fog_enabled, tuple(vd.fog_color), start, end,
-                  vd.fog_density, tuple(cam), tuple(vd.ambient))
+                  vd.fog_density, tuple(vd.ambient))
+        cam_values = (cam[0], cam[1], cam[2])
         if shader_name != 'terrain':
-            if uniforms.env == values:
+            previous = uniforms.env
+            if previous is not None and previous[0] == values:
+                if previous[1] != cam_values:
+                    uniforms.env = (values, cam_values)
+                    gl.glUniform3f(uniforms['uFogCamPos'], *cam_values)
                 return
-            uniforms.env = values
+            uniforms.env = (values, cam_values)
         gl.glUniform1i(uniforms['uFogEnabled'], 1 if vd.fog_enabled else 0)
         gl.glUniform3f(uniforms['uFogColor'], *vd.fog_color)
         gl.glUniform1f(uniforms['uFogStart'], start)
@@ -175,6 +183,15 @@ class LightingMixin:
         if not (isinstance(lights, tuple) and len(lights) == 2
                 and hasattr(lights[0], 'light_color')):
             raise TypeError("light upload requires (LightTable, slots)")
+        # Every lit pass of a frame hands over the same (table, slots) pair:
+        # the first one built the key and uploaded, so the rest return at
+        # once instead of rebuilding the key (tuple conversions, a weights
+        # pass, the cookie lookup) four to seven times a frame. The pair is
+        # held, so its id cannot be reused; render_scene drops it each frame.
+        if (lights is getattr(self, '_light_ubo_lights', None)
+                and count == self._light_ubo_count
+                and self._light_ubo_key is not None):
+            return
         table, slots = lights
         active_lights = slots[:count]
         # Streamed play lights ease out before their cutoff (LightStream).
@@ -188,6 +205,7 @@ class LightingMixin:
                tuple(active_lights.tolist()), weights,
                None if cookie_layers is None else tuple(cookie_layers.tolist()))
         if self._light_ubo_key == key:
+            self._light_ubo_lights, self._light_ubo_count = lights, count
             return
 
         active = self._light_ubo_data[:count]
@@ -233,6 +251,7 @@ class LightingMixin:
             gl.GL_DYNAMIC_DRAW,
         )
         self._light_ubo_key = key
+        self._light_ubo_lights, self._light_ubo_count = lights, count
 
     def _cookie_layers(self, table, slots):
         """``layer + 1`` of each light's cookie in the shared array, 0 where

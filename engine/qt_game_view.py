@@ -271,13 +271,12 @@ class QtGameView(QOpenGLWidget):
         # Qt owns native events; SDL supplies controllers and audio only.
         init_sdl_input()
         
-        # Initialize pygame mixer BEFORE any sound loading
-        try:
-            if not pygame.mixer.get_init():
-                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        # Initialize pygame mixer BEFORE any sound loading. Through the audio
+        # helper, so a machine with no device is probed once (~100 ms) and the
+        # failure remembered, not probed again by the sound system straight
+        # after.
+        if self.audio._ensure_pygame_mixer():
             print(f"[Audio] pygame.mixer initialized: {pygame.mixer.get_init()}")
-        except pygame.error as e:
-            print(f"[Audio] pygame.mixer init failed: {e}")
 
         self.gamepad = None
         if pygame.joystick.get_count() > 0:

@@ -123,61 +123,68 @@ class EditorStyle(QProxyStyle):
         super().__init__(base)
         self.setObjectName("FioWindows")
 
+    # Built once: Qt asks for these thousands of times while laying out a
+    # page (about 7,000 calls for one property page), and rebuilding the
+    # tables on every call cost more than the rest of the lookup.
+    _STYLE_HINTS = {
+        QStyle.SH_TabBar_Alignment: int(Qt.AlignLeft),
+        QStyle.SH_FormLayoutFormAlignment: int(Qt.AlignLeft | Qt.AlignTop),
+        QStyle.SH_FormLayoutLabelAlignment: int(Qt.AlignLeft | Qt.AlignVCenter),
+        QStyle.SH_FormLayoutFieldGrowthPolicy: QFormLayout.AllNonFixedFieldsGrow,
+        QStyle.SH_FormLayoutWrapPolicy: QFormLayout.WrapLongRows,
+        QStyle.SH_DialogButtonLayout: QDialogButtonBox.WinLayout,
+        QStyle.SH_ComboBox_Popup: 0,
+        QStyle.SH_ScrollBar_Transient: 0,
+        QStyle.SH_Widget_Animate: 0,
+        QStyle.SH_UnderlineShortcut: 0,
+        QStyle.SH_TabBar_ElideMode: int(Qt.ElideRight),
+        QStyle.SH_DialogButtonBox_ButtonsHaveIcons: 0,
+    }
+
+    # Explicit geometry, including controls that are not stylesheet drawn.
+    _PIXEL_METRICS = {
+        QStyle.PM_LayoutLeftMargin: 9, QStyle.PM_LayoutRightMargin: 9,
+        QStyle.PM_LayoutTopMargin: 9, QStyle.PM_LayoutBottomMargin: 9,
+        QStyle.PM_LayoutHorizontalSpacing: 6, QStyle.PM_LayoutVerticalSpacing: 6,
+        QStyle.PM_DefaultFrameWidth: 1, QStyle.PM_SpinBoxFrameWidth: 1,
+        QStyle.PM_ComboBoxFrameWidth: 1, QStyle.PM_ButtonMargin: 6,
+        QStyle.PM_ButtonDefaultIndicator: 0, QStyle.PM_ButtonShiftHorizontal: 0,
+        QStyle.PM_ButtonShiftVertical: 0, QStyle.PM_ScrollBarExtent: 12,
+        QStyle.PM_MenuButtonIndicator: 12, QStyle.PM_ButtonIconSize: 16,
+        QStyle.PM_ScrollBarSliderMin: 24, QStyle.PM_SliderThickness: 20,
+        QStyle.PM_SliderLength: 14, QStyle.PM_SliderControlThickness: 14,
+        QStyle.PM_IndicatorWidth: 16, QStyle.PM_IndicatorHeight: 16,
+        QStyle.PM_ExclusiveIndicatorWidth: 16, QStyle.PM_ExclusiveIndicatorHeight: 16,
+        QStyle.PM_CheckBoxLabelSpacing: 6, QStyle.PM_RadioButtonLabelSpacing: 6,
+        QStyle.PM_TabBarTabHSpace: 20, QStyle.PM_TabBarTabVSpace: 10,
+        QStyle.PM_TabBarBaseHeight: 1, QStyle.PM_TabBarBaseOverlap: 1,
+        QStyle.PM_TabBarScrollButtonWidth: 16, QStyle.PM_TabBarIconSize: 16,
+        QStyle.PM_ToolBarItemMargin: 2, QStyle.PM_ToolBarItemSpacing: 4,
+        QStyle.PM_ToolBarFrameWidth: 0, QStyle.PM_ToolBarHandleExtent: 8,
+        QStyle.PM_ToolBarSeparatorExtent: 8, QStyle.PM_ToolBarExtensionExtent: 16,
+        QStyle.PM_DockWidgetFrameWidth: 1, QStyle.PM_DockWidgetTitleMargin: 4,
+        QStyle.PM_DockWidgetSeparatorExtent: 4, QStyle.PM_SplitterWidth: 4,
+        # Qt scales this from 72 dpi on macOS and 96 elsewhere, which made
+        # dock title buttons 21px there and 20px everywhere else.
+        QStyle.PM_DockWidgetTitleBarButtonMargin: 4,
+        QStyle.PM_HeaderMargin: 4, QStyle.PM_HeaderMarkSize: 12,
+        QStyle.PM_SmallIconSize: 16, QStyle.PM_LargeIconSize: 32,
+        QStyle.PM_MenuPanelWidth: 1, QStyle.PM_MenuHMargin: 0,
+        QStyle.PM_MenuVMargin: 2, QStyle.PM_MenuBarPanelWidth: 0,
+        QStyle.PM_MenuBarHMargin: 0, QStyle.PM_MenuBarVMargin: 0,
+        QStyle.PM_MenuBarItemSpacing: 0,
+    }
+
     def styleHint(self, hint, option=None, widget=None, returnData=None):
-        rules = {
-            QStyle.SH_TabBar_Alignment: int(Qt.AlignLeft),
-            QStyle.SH_FormLayoutFormAlignment: int(Qt.AlignLeft | Qt.AlignTop),
-            QStyle.SH_FormLayoutLabelAlignment: int(Qt.AlignLeft | Qt.AlignVCenter),
-            QStyle.SH_FormLayoutFieldGrowthPolicy: QFormLayout.AllNonFixedFieldsGrow,
-            QStyle.SH_FormLayoutWrapPolicy: QFormLayout.WrapLongRows,
-            QStyle.SH_DialogButtonLayout: QDialogButtonBox.WinLayout,
-            QStyle.SH_ComboBox_Popup: 0,
-            QStyle.SH_ScrollBar_Transient: 0,
-            QStyle.SH_Widget_Animate: 0,
-            QStyle.SH_UnderlineShortcut: 0,
-            QStyle.SH_TabBar_ElideMode: int(Qt.ElideRight),
-            QStyle.SH_DialogButtonBox_ButtonsHaveIcons: 0,
-        }
-        if hint in rules:
-            return rules[hint]
+        value = self._STYLE_HINTS.get(hint)
+        if value is not None:
+            return value
         return super().styleHint(hint, option, widget, returnData)
 
     def pixelMetric(self, metric, option=None, widget=None):
-        # Explicit geometry, including controls that are not stylesheet drawn.
-        metrics = {
-            QStyle.PM_LayoutLeftMargin: 9, QStyle.PM_LayoutRightMargin: 9,
-            QStyle.PM_LayoutTopMargin: 9, QStyle.PM_LayoutBottomMargin: 9,
-            QStyle.PM_LayoutHorizontalSpacing: 6, QStyle.PM_LayoutVerticalSpacing: 6,
-            QStyle.PM_DefaultFrameWidth: 1, QStyle.PM_SpinBoxFrameWidth: 1,
-            QStyle.PM_ComboBoxFrameWidth: 1, QStyle.PM_ButtonMargin: 6,
-            QStyle.PM_ButtonDefaultIndicator: 0, QStyle.PM_ButtonShiftHorizontal: 0,
-            QStyle.PM_ButtonShiftVertical: 0, QStyle.PM_ScrollBarExtent: 12,
-            QStyle.PM_MenuButtonIndicator: 12, QStyle.PM_ButtonIconSize: 16,
-            QStyle.PM_ScrollBarSliderMin: 24, QStyle.PM_SliderThickness: 20,
-            QStyle.PM_SliderLength: 14, QStyle.PM_SliderControlThickness: 14,
-            QStyle.PM_IndicatorWidth: 16, QStyle.PM_IndicatorHeight: 16,
-            QStyle.PM_ExclusiveIndicatorWidth: 16, QStyle.PM_ExclusiveIndicatorHeight: 16,
-            QStyle.PM_CheckBoxLabelSpacing: 6, QStyle.PM_RadioButtonLabelSpacing: 6,
-            QStyle.PM_TabBarTabHSpace: 20, QStyle.PM_TabBarTabVSpace: 10,
-            QStyle.PM_TabBarBaseHeight: 1, QStyle.PM_TabBarBaseOverlap: 1,
-            QStyle.PM_TabBarScrollButtonWidth: 16, QStyle.PM_TabBarIconSize: 16,
-            QStyle.PM_ToolBarItemMargin: 2, QStyle.PM_ToolBarItemSpacing: 4,
-            QStyle.PM_ToolBarFrameWidth: 0, QStyle.PM_ToolBarHandleExtent: 8,
-            QStyle.PM_ToolBarSeparatorExtent: 8, QStyle.PM_ToolBarExtensionExtent: 16,
-            QStyle.PM_DockWidgetFrameWidth: 1, QStyle.PM_DockWidgetTitleMargin: 4,
-            QStyle.PM_DockWidgetSeparatorExtent: 4, QStyle.PM_SplitterWidth: 4,
-            # Qt scales this from 72 dpi on macOS and 96 elsewhere, which made
-            # dock title buttons 21px there and 20px everywhere else.
-            QStyle.PM_DockWidgetTitleBarButtonMargin: 4,
-            QStyle.PM_HeaderMargin: 4, QStyle.PM_HeaderMarkSize: 12,
-            QStyle.PM_SmallIconSize: 16, QStyle.PM_LargeIconSize: 32,
-            QStyle.PM_MenuPanelWidth: 1, QStyle.PM_MenuHMargin: 0,
-            QStyle.PM_MenuVMargin: 2, QStyle.PM_MenuBarPanelWidth: 0,
-            QStyle.PM_MenuBarHMargin: 0, QStyle.PM_MenuBarVMargin: 0,
-            QStyle.PM_MenuBarItemSpacing: 0,
-        }
-        if metric in metrics:
-            return metrics[metric]
+        value = self._PIXEL_METRICS.get(metric)
+        if value is not None:
+            return value
         return super().pixelMetric(metric, option, widget)
 
     def standardIcon(self, icon, option=None, widget=None):
