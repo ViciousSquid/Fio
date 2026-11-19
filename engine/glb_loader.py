@@ -28,6 +28,8 @@ from typing import List, Tuple, Optional, Dict, Any
 # indices are untrusted. A .glb (or an external .bin it names) larger than
 # this is refused rather than read whole into memory.
 MAX_GLB_FILE_BYTES = 256 * 1024 * 1024
+#: Most bytes of accessor data one model may decode to (see load_bytes).
+MAX_DECODED_BYTES = 1024 * 1024 * 1024
 
 
 def _non_negative_int(value) -> Optional[int]:
@@ -135,6 +137,12 @@ class GLBLoader:
             return False
         self._filepath_hint = source
         self._asset_reader = read_asset
+        # Every accessor read is charged against one budget: primitives that
+        # all name the same accessor would otherwise each decode a fresh copy,
+        # turning a 1 MiB file into gigabytes. A real model decodes to about
+        # its own size (at most 4x, for byte data widened to int32).
+        self._decode_budget = min(MAX_DECODED_BYTES,
+                                  max(64 * 1024 * 1024, 4 * len(data)))
         try:
             self._parse_glb(data)
             self._parse_json_structure()
@@ -449,6 +457,13 @@ class GLBLoader:
             return None
         count = min(count, available // stride + 1)
 
+        decoded = count * num_comps * (8 if is_index else 4)
+        budget = getattr(self, '_decode_budget', None)
+        if budget is not None:
+            if decoded > budget:
+                raise ValueError("model data decodes to more than its budget "
+                                 f"of {MAX_DECODED_BYTES >> 20} MiB")
+            self._decode_budget = budget - decoded
         view = np.ndarray(shape=(count, num_comps), dtype=dtype, buffer=buf,
                           offset=byte_offset, strides=(stride, dtype.itemsize))
         if is_index:

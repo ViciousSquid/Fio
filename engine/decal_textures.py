@@ -80,8 +80,15 @@ def read_image(name):
     if source is not None:
         return source.read(name)
     from engine.asset_archives import asset_source
+    from engine.asset_paths import confined_path, warn_refused
+    # The name comes from the map (an emissive decal's image): it may only
+    # name a file inside the decal folder, never an absolute, '..' or UNC path.
+    path = confined_path(DECAL_FOLDER, name)
+    if path is None:
+        warn_refused(name, 'decal image')
+        return None
     try:
-        found = asset_source(os.path.join(DECAL_FOLDER, name))
+        found = asset_source(path)
         if hasattr(found, 'read'):
             return found.read()
         with open(found, 'rb') as handle:

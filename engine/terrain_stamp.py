@@ -217,7 +217,8 @@ def apply_stamp_delta(level: dict, data) -> dict:
         for key in PAINT_KEYS:
             if paint.get(key):
                 terrain[key] = paint[key]
-    stamps = [s for s in data.get("stamps") or [] if isinstance(s, dict)]
+    stamps = data.get("stamps")
+    stamps = [s for s in stamps if isinstance(s, dict)] if isinstance(stamps, list) else []
     if stamps:
         terrain[STAMPS_KEY] = stamps
     return level
@@ -236,7 +237,8 @@ def stamp_file_text(data: dict) -> str:
 
 def apply_stamp(terrain, data: dict) -> int:
     """Merge a stamp file dict into ``terrain``; returns stamps added or moved."""
-    return terrain.merge_paint_stamps(data.get("stamps", []))
+    stamps = data.get("stamps") if isinstance(data, dict) else None
+    return terrain.merge_paint_stamps(stamps if isinstance(stamps, list) else [])
 
 
 def apply_stamp_file(terrain, path: str) -> int:

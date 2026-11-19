@@ -342,6 +342,51 @@ BIOMES = {
     'coastal_cliffs': BiomeConfig(name='Coastal Cliffs', base_height=0.0, height_scale=120.0, hills_scale=0.005, hills_intensity=0.5, mountains_enabled=True, mountains_scale=0.01, mountains_intensity=0.6, mountains_sharpness=0.7, valleys_enabled=False, plateaus_enabled=True, plateaus_scale=0.008, plateaus_intensity=0.4, plateaus_flatness=0.6, color_gradient=[(0.0, (0.25, 0.45, 0.20)), (0.2, (0.35, 0.52, 0.28)), (0.4, (0.40, 0.38, 0.30)), (0.6, (0.48, 0.44, 0.38)), (0.8, (0.55, 0.50, 0.42)), (1.0, (0.62, 0.58, 0.48))], blend_weights=(0.3, 0.8, 0.2, 0.0), terrain_height_scale=1.0/180.0, trees_enabled=True, tree_density=0.1),
 }
 
+def _finite_number(value, default, lo, hi):
+    """*value* when it is a finite number within [lo, hi], else *default*.
+
+    For numbers read from a map file. The value keeps its type (an int stays
+    an int, so a round trip writes back what was read); a bool, a string, NaN
+    or an out-of-range number is replaced by *default*.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    if not math.isfinite(value) or not lo <= value <= hi:
+        return default
+    return value
+
+
+def _as_list(value):
+    """*value* when it is a list (a map field that holds records), else []."""
+    return value if isinstance(value, list) else []
+
+
+def _number_list(value, length):
+    """The first *length* entries of *value* as floats when it is a list of at
+    least that many finite numbers; otherwise None."""
+    if not isinstance(value, (list, tuple)) or len(value) < length:
+        return None
+    head = value[:length]
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+               and math.isfinite(v) for v in head):
+        return None
+    return [float(v) for v in head]
+
+
+#: Furthest chunk index a map may name (a Big World fills larger extents at
+#: run time, through set_world_extent, not through the saved bounds).
+_MAX_CHUNK_INDEX = 1 << 20
+
+
+def _chunk_index(value, default):
+    """An integral chunk index from a map file, or *default*."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    if not math.isfinite(value) or value != int(value) or abs(value) > _MAX_CHUNK_INDEX:
+        return default
+    return int(value)
+
+
 def biome_display_name(name) -> str:
     """A biome name without decoration: printable ASCII, trimmed.
 
@@ -429,6 +474,10 @@ class Terrain:
     # world-space footprint and vertical relief together; procedural sampling
     # remains in terrain-space so enlarging the mesh cannot flatten it.
     DEFAULT_CHUNK_SIZE = 256.0
+    #: Most chunks a terrain's authored bounds may cover when it is not
+    #: streaming (every one is made resident). The Terrain Editor offers
+    #: -20..20 a side, 1,681 chunks.
+    MAX_BOUNDED_CHUNKS = 128 * 128
     
     def __init__(self, texture_manager=None, seed: int = 42):
         self.seed = seed
@@ -2195,6 +2244,13 @@ class Terrain:
         try:
             from PyQt5.QtGui import QImage
             from engine.asset_qt import load_image
+            from engine.animated_texture import _source, check_texture_size
+            from PIL import Image
+            # The size in the header is checked before Qt decodes anything:
+            # QImage has no allocation limit, and a tiny PNG can declare a
+            # picture of gigabytes.
+            with Image.open(_source(path)) as header:
+                check_texture_size(header.width, header.height, path)
             image = load_image(path)
             if image.isNull():
                 return None
@@ -2234,8 +2290,29 @@ class Terrain:
         if texture not in self._paint_image_cache:
             if len(self._paint_image_cache) >= 64:
                 self._paint_image_cache.clear()
-            self._paint_image_cache[texture] = self._load_texture_rgba(texture)
+            image = None
+            if self._texture_allowed(texture):
+                image = self._load_texture_rgba(texture)
+            self._paint_image_cache[texture] = image
         return self._paint_image_cache[texture]
+
+    @staticmethod
+    def _texture_allowed(texture):
+        """Whether a stamp's *texture* may be read from disk.
+
+        Stamp textures arrive in map and .paint files, which are data from
+        outside. A UNC or device path (``//host/share/x.png``) is never read:
+        on Windows merely probing one opens an SMB connection to that host,
+        handing it the user's credentials. A local path outside the project
+        stays allowed -- the Terrain Editor stores one when the user picks a
+        texture from elsewhere -- so only those are refused.
+        """
+        text = str(texture).replace('\\', '/').strip()
+        if text[:2] != '//' and '://' not in text and '\0' not in text:
+            return True
+        from engine.asset_paths import warn_refused
+        warn_refused(texture, 'terrain stamp texture')
+        return False
 
     def _tile_image(self, texture):
         """*texture* for tiling: (image, pixels a world unit), or None.
@@ -3158,18 +3235,22 @@ class Terrain:
                 continue
             coord = entry.get('coord', [])
             payload = entry.get('data', '')
-            if len(coord) != 2 or not payload:
+            if (not isinstance(coord, (list, tuple)) or len(coord) != 2
+                    or not isinstance(payload, str) or not payload):
                 continue
             try:
-                raw = zlib.decompress(base64.b64decode(payload))
-                if len(raw) != expected:
+                # Bounded: never inflate past the one chunk expected, so a
+                # small payload cannot decompress to gigabytes.
+                inflater = zlib.decompressobj()
+                raw = inflater.decompress(base64.b64decode(payload), expected + 1)
+                if len(raw) != expected or inflater.unconsumed_tail:
                     continue
                 paint = np.frombuffer(raw, dtype=np.uint8).copy().reshape(
                     res, res, 4)
                 if res != target:
                     paint = self._resample_paint(paint, target)
                 maps[(int(coord[0]), int(coord[1]))] = paint
-            except (TypeError, ValueError, OSError, zlib.error):
+            except (TypeError, ValueError, OSError, zlib.error, MemoryError):
                 continue
         return maps
 
@@ -3297,16 +3378,31 @@ class Terrain:
         self.features = TerrainFeatures(self.noise, self.seed)
         biome_name = data.get('biome', 'grassy_hills')
         if biome_name in BIOMES: self.biome = BIOMES[biome_name]
-        self.chunk_size = data.get('chunk_size', self.DEFAULT_CHUNK_SIZE)
-        self.mesh_scale = float(data.get('mesh_scale', self.chunk_size / self.DEFAULT_CHUNK_SIZE))
-        self.base_resolution = data.get('base_resolution', 48)
-        self.offset_x = data.get('offset_x', 0.0)
-        self.offset_z = data.get('offset_z', 0.0)
-        self.offset_y = data.get('offset_y', 0.0)
-        self.min_chunk_x = data.get('min_chunk_x', -2)
-        self.max_chunk_x = data.get('max_chunk_x', 2)
-        self.min_chunk_z = data.get('min_chunk_z', -2)
-        self.max_chunk_z = data.get('max_chunk_z', 2)
+        # The map file is untrusted: every number that sizes an allocation or
+        # divides is checked here, so a damaged or hostile terrain_data falls
+        # back to defaults instead of raising every frame or allocating the
+        # whole grid of a billion-chunk bounding box.
+        self.chunk_size = _finite_number(
+            data.get('chunk_size'), self.DEFAULT_CHUNK_SIZE, 1.0, 65536.0)
+        self.mesh_scale = _finite_number(
+            data.get('mesh_scale'), self.chunk_size / self.DEFAULT_CHUNK_SIZE,
+            1e-3, 1e3)
+        self.base_resolution = int(_finite_number(
+            data.get('base_resolution'), 48, 2, 512))
+        self.offset_x = _finite_number(data.get('offset_x'), 0.0, -1e7, 1e7)
+        self.offset_z = _finite_number(data.get('offset_z'), 0.0, -1e7, 1e7)
+        self.offset_y = _finite_number(data.get('offset_y'), 0.0, -1e7, 1e7)
+        bounds = [_chunk_index(data.get(key), default) for key, default in (
+            ('min_chunk_x', -2), ('max_chunk_x', 2),
+            ('min_chunk_z', -2), ('max_chunk_z', 2))]
+        span_x = bounds[1] - bounds[0] + 1
+        span_z = bounds[3] - bounds[2] + 1
+        if span_x < 1 or span_z < 1 or span_x * span_z > self.MAX_BOUNDED_CHUNKS:
+            print(f"[Terrain] Ignoring chunk bounds {bounds}: not a range of at "
+                  f"most {self.MAX_BOUNDED_CHUNKS} chunks")
+            bounds = [-2, 2, -2, 2]
+        (self.min_chunk_x, self.max_chunk_x,
+         self.min_chunk_z, self.max_chunk_z) = bounds
         # Chunks resident from before the load may lie outside the new bounds;
         # free them on the GL thread's next frame.
         self._pending_prune = True
@@ -3317,26 +3413,26 @@ class Terrain:
         self.grass_enabled = data.get('grass_enabled', False)
         self.grass_density = float(np.clip(data.get('grass_density', 0.02), 0.0, MAX_GRASS_DENSITY))
         self.set_grass(self.grass_enabled, height=data.get('grass_height', DEFAULT_GRASS_HEIGHT))
-        saved_grass_color = data.get('grass_color')
-        if saved_grass_color is not None and len(saved_grass_color) >= 3:
+        saved_grass_color = _number_list(data.get('grass_color'), 3)
+        if saved_grass_color is not None:
             self.grass_color = tuple(float(np.clip(c, 0.0, 1.0)) for c in saved_grass_color[:3])
         else:
             self.grass_color = tuple(self.biome.color_gradient[0][1])
         self.grass_color_custom = bool(data.get('grass_color_custom', saved_grass_color is not None))
-        saved_tip = data.get('grass_tip_color')
-        if saved_tip is not None and len(saved_tip) >= 3:
+        saved_tip = _number_list(data.get('grass_tip_color'), 3)
+        if saved_tip is not None:
             self.grass_tip_color = tuple(float(np.clip(c, 0.0, 1.0)) for c in saved_tip[:3])
         else:
             self.grass_tip_color = None
-        saved_range = data.get('grass_height_range')
+        saved_range = _number_list(data.get('grass_height_range'), 2)
         self.grass_height_range = None
-        if saved_range is not None and len(saved_range) >= 2:
+        if saved_range is not None:
             lo, hi = (float(np.clip(v, 0.0, 1.0)) for v in saved_range[:2])
             self.grass_height_range = (min(lo, hi), max(lo, hi))
         # Maps saved before appearance options existed load with the
         # original look.
         self.appearance = terrain_style.TerrainAppearance.from_dict(data.get('appearance'))
-        if 'custom_biome' in data:
+        if isinstance(data.get('custom_biome'), dict):
             self.biome = BiomeConfig.from_dict(data['custom_biome'])
             self.biome.name = biome_display_name(self.biome.name)
         # Baked terrain texture paint.
@@ -3347,19 +3443,19 @@ class Terrain:
             saved_res = self.LEGACY_PAINT_RESOLUTION
         if saved_res <= 0 or saved_res > 4096:
             saved_res = self.LEGACY_PAINT_RESOLUTION
-        self._restore_texture_paint(data.get('texture_paint', []), saved_res)
+        self._restore_texture_paint(_as_list(data.get('texture_paint')), saved_res)
         # Migrate old render-time stamps once. The source asset is sampled now
         # and then discarded; the saved terrain owns the resulting pixels.
-        for stamp in data.get('texture_stamps', []):
+        for stamp in _as_list(data.get('texture_stamps')):
             if not isinstance(stamp, dict):
                 continue
             texture = str(stamp.get('texture', '')).replace('\\', '/').strip()
-            bounds = stamp.get('bounds', [])
-            if len(bounds) != 4 or not texture:
+            bounds = _number_list(stamp.get('bounds'), 4)
+            if bounds is None or not texture:
                 continue
             try:
                 self._bake_texture_rect(
-                    [float(v) for v in bounds],
+                    bounds,
                     texture,
                     angle=float(stamp.get('angle', 0.0)),
                     feather=float(stamp.get('feather', 0.0)),
@@ -3376,7 +3472,7 @@ class Terrain:
         # their records, sharp and tiled. Paint with no record behind it can
         # only be resampled.
         convert = saved_res != self.TERRAIN_PAINT_RESOLUTION
-        for raw in data.get('paint_stamps', []) or []:
+        for raw in _as_list(data.get('paint_stamps')):
             if isinstance(raw, dict):
                 convert = convert or 'tiled' not in raw
                 stamp = self.make_paint_stamp(
@@ -3388,7 +3484,7 @@ class Terrain:
                     self.paint_stamps.append(stamp)
         if self.paint_stamps:
             self.texture_paint_base = self._decode_texture_paint(
-                data.get('texture_paint_base', []), saved_res)
+                _as_list(data.get('texture_paint_base')), saved_res)
         else:
             self.texture_paint_base = dict(self.texture_paint_maps)
         self.selected_stamp_ids = set()
@@ -3405,8 +3501,9 @@ class Terrain:
         # Sculpt offsets
         self.sculpt_offsets = {}
         self._touch_sculpt()
-        self.sculpt_grid_resolution = data.get('sculpt_grid_resolution', 4.0)
-        for entry in data.get('sculpt_offsets', []):
+        self.sculpt_grid_resolution = _finite_number(
+            data.get('sculpt_grid_resolution'), 4.0, 0.05, 4096.0)
+        for entry in _as_list(data.get('sculpt_offsets')):
             try:
                 gx, gz, val = entry
                 self.sculpt_offsets[(int(gx), int(gz))] = float(val)
@@ -3415,7 +3512,7 @@ class Terrain:
 
         # Terrain CSG cutters
         self.csg_subtractions = []
-        for cut in data.get('csg_subtractions', []):
+        for cut in _as_list(data.get('csg_subtractions')):
             try:
                 values = [float(v) for v in cut]
             except (TypeError, ValueError):

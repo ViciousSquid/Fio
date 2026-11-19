@@ -405,6 +405,15 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         path = self._background_image_path
         if not path or path == self._background_failed_path:
             return False
+        # The path comes from the map. Outside files are allowed (the user
+        # can pick one), but a UNC or device path is never probed: on Windows
+        # that alone opens an SMB connection to the named host.
+        normal = path.replace('\\', '/')
+        if normal[:2] == '//' or '://' in normal:
+            from engine.asset_paths import warn_refused
+            warn_refused(path, 'sky image')
+            self._background_failed_path = path
+            return False
         from engine.asset_archives import asset_source
         source = asset_source(path)
         if source is None:

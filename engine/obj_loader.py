@@ -11,6 +11,8 @@ gl = None
 # Models arrive inside shared maps and .fiopak packages; an OBJ or MTL beyond
 # this is refused rather than read whole into memory.
 MAX_OBJ_FILE_BYTES = 256 * 1024 * 1024
+#: Most triangles one OBJ may hold once its faces are fanned out.
+MAX_OBJ_TRIANGLES = 16_000_000
 
 
 def _read_text(path: str) -> Optional[str]:
@@ -139,7 +141,8 @@ class OBJLoader:
         current_material = None
         mtl_lib_name = None
         up_tag = None
-        
+        triangles = 0
+
         for line in lines:
             line = line.strip()
             if not line:
@@ -170,6 +173,15 @@ class OBJLoader:
                 except ValueError:
                     self.normals.append((0.0, 0.0, 0.0))
             elif keyword == 'f' and len(parts) >= 4:
+                # A face is fanned into len-2 triangles when it is built. One
+                # line of a million indices costs a few MB of text but would
+                # build gigabytes of vertex data: the total is capped.
+                triangles += len(parts) - 3
+                if triangles > MAX_OBJ_TRIANGLES:
+                    print(f"[OBJLoader] {os.path.basename(filepath)} has more than "
+                          f"{MAX_OBJ_TRIANGLES} triangles; not loaded")
+                    self.faces = []
+                    return False
                 face = {'vertices': [], 'material': current_material}
                 for fp in parts[1:]:
                     indices = fp.split('/')
