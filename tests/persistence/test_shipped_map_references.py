@@ -28,7 +28,15 @@ def _reference_exists(value):
         if os.path.isfile(archive):
             from engine.audio_archives import read_archive_audio
             return read_archive_audio(archive, value, 'assets/' + parts[1]) is not None
-    return os.path.isfile(os.path.join(ROOT, *parts))
+    full = os.path.join(ROOT, *parts)
+    if os.path.isfile(full):
+        return True
+    # Models, textures and the rest may be served from a category archive or
+    # a user pack (assets/bundled_furniture.fiopak): ask the reader the
+    # renderer and the editor use.
+    from engine.asset_archives import asset_exists, prepare_asset_archives
+    prepare_asset_archives(ROOT)
+    return asset_exists(full)
 
 
 def _strings(node):
