@@ -152,8 +152,10 @@ class View2D(QWidget):
         self.arrow_travel_progress = {}  # {conn_key: [arrow_positions]}
         
         self.animation_timer = QTimer(self)
+        self.animation_timer.setInterval(16)
         self.animation_timer.timeout.connect(self._update_connection_animations)
-        self.animation_timer.start(16)
+        # Started when the view is shown, stopped when it is hidden (only one
+        # of the three 2D views is on screen at a time): see showEvent.
 
         # ---- Arrow-key nudge undo coalescing ----
         # A rapid burst of nudges (tapping or holding an arrow key) should be a
@@ -171,7 +173,6 @@ class View2D(QWidget):
         self._camera_tracking_timer = QTimer(self)
         self._camera_tracking_timer.setInterval(16)  # ~60 FPS check
         self._camera_tracking_timer.timeout.connect(self._check_camera_changed)
-        self._camera_tracking_timer.start()
         # Cached camera state for change detection
         self._last_camera_pos = None
         self._last_camera_yaw = None
@@ -238,6 +239,22 @@ class View2D(QWidget):
             pixmap = load_pixmap(path)
             if not pixmap.isNull():
                 self.color_pixmaps[color_name] = pixmap.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation) 
+
+    def showEvent(self, event):
+        """Wake this view's 60 Hz timers: only the 2D view on screen runs
+        them. A hidden view is never painted (Qt drops update() for it) and
+        its timers have nothing to do; the first paint after it is shown
+        draws the scene as it is then."""
+        super().showEvent(event)
+        self._last_camera_pos = None        # re-read the camera at once
+        self.animation_timer.start()
+        self._camera_tracking_timer.start()
+
+    def hideEvent(self, event):
+        """Let this view's timers sleep while another 2D view is shown."""
+        super().hideEvent(event)
+        self.animation_timer.stop()
+        self._camera_tracking_timer.stop()
 
     def reset_state(self):
         # A drag in flight owns the views: update_views() reaches every 2D view
