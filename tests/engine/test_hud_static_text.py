@@ -57,3 +57,34 @@ def test_the_cache_is_bounded(qt_app, monkeypatch):
         hud._text(painter, 0, 20, "FPS: %d" % fps)
     painter.end()
     assert len(hud._static_texts) == 8
+
+
+@pytest.mark.gl
+def test_a_prompt_is_centred_on_the_screen(fio_session):
+    """The prompt's width was never measured (it compared the message with
+    itself), so "[E] Open" started at the centre of the screen."""
+    from PyQt5.QtGui import QColor, QImage, QPainter
+    from editor.things import PlayerStart
+    from tests.helpers.worlds import level_data, make_thing, room
+    session = fio_session(level_data(brushes=room(), things=[
+        make_thing(PlayerStart, "start", (0.0, 8.0, 0.0))]))
+    view = session.view
+    session.start_play()
+    session.step(5)
+    view.hud.set_hud_style(1)
+    session.paint()                 # the frame read fills the HUD's cached values
+    view._cached_hud_message = "[E] Open"
+    width, height = 800, 400
+    image = QImage(width, height, QImage.Format_ARGB32_Premultiplied)
+    image.fill(QColor(0, 0, 0))
+    with session.render_state() as frame:
+        painter = QPainter(image)
+        view.hud._draw_hud(painter, frame, width, height)
+        painter.end()
+    cy = height // 2 + 50
+    ink = [x for x in range(width) for y in range(cy - 20, cy + 4)
+           if image.pixelColor(x, y).red() > 120]
+    assert ink, "the prompt was not drawn"
+    centre = (min(ink) + max(ink)) / 2.0
+    assert abs(centre - width / 2) <= 4, (min(ink), max(ink))
+    session.stop_play()

@@ -663,8 +663,12 @@ class ViewHud:
         msg = self.view._cached_hud_message
         prompt_key = render_state.hud_prompt_key if render_state is not None else None
         if msg:
-            if self.view._cached_hud_message != msg:
-                self.view._cached_hud_message = msg
+            # Measured once per message text. (This compared the message with
+            # itself -- the frame read stores it in _cached_hud_message -- so
+            # the width stayed 0 and every prompt started at the centre of
+            # the screen instead of being centred on it.)
+            if getattr(self.view, '_cached_hud_message_measured', None) != msg:
+                self.view._cached_hud_message_measured = msg
                 self.view._cached_hud_message_width = QFontMetrics(self.view._hud_msg_font).horizontalAdvance(msg)
             cx = viewport_width // 2
             cy = viewport_height // 2 + 50
