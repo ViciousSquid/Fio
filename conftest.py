@@ -583,7 +583,7 @@ def _session_settings_ini(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
-def _editor_never_writes_the_repo_settings_ini(_session_settings_ini, monkeypatch):
+def _editor_never_writes_the_repo_settings_ini(_session_settings_ini):
     """Point an editor window built in the repository root at a session copy
     of settings.ini, not the tracked file.
 
@@ -594,9 +594,16 @@ def _editor_never_writes_the_repo_settings_ini(_session_settings_ini, monkeypatc
     one path is redirected (``editor.user_paths`` is tested on its own), and
     only once ``editor.main_window`` is loaded, so the headless tier never
     imports the editor for it.
+
+    A private MonkeyPatch, not the ``monkeypatch`` fixture: an autouse
+    fixture that requests it makes the test's own ``monkeypatch`` (holding
+    whatever the test patched onto its editor window) outlive every other
+    fixture of the test -- ``fio_session`` then found its closed window
+    still reachable and failed its teardown.
     """
     module = sys.modules.get("editor.main_window")
     if module is None:
+        yield
         return
     copy_path, defaults = _session_settings_ini
     # Every test starts from the shipped defaults, as it did when windows
@@ -612,7 +619,12 @@ def _editor_never_writes_the_repo_settings_ini(_session_settings_ini, monkeypatc
             return copy_path
         return path
 
-    monkeypatch.setattr(module, "settings_path", settings_path)
+    patch = pytest.MonkeyPatch()
+    patch.setattr(module, "settings_path", settings_path)
+    try:
+        yield
+    finally:
+        patch.undo()
 
 
 @pytest.fixture(autouse=True)
