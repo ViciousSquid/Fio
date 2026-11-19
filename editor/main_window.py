@@ -4,7 +4,6 @@ import sys
 import io
 import json
 import os
-import subprocess
 import random
 import numpy as np
 import configparser
@@ -607,7 +606,11 @@ class MainWindow(QMainWindow):
     def setup_autosave(self):
         enabled = self.config.getboolean('Editor', 'autosave_enabled', fallback=True)
         interval_min = self.config.getint('Editor', 'autosave_interval', fallback=10)
-        
+        # settings.ini is hand-editable: 0 would autosave on every idle loop
+        # and a huge value overflows QTimer (raising during start-up). The
+        # Settings dialog offers 5-60 minutes.
+        interval_min = max(1, min(60, interval_min))
+
         if enabled:
             # Convert minutes to milliseconds
             self.autosave_timer.start(interval_min * 60 * 1000)
@@ -5848,20 +5851,6 @@ class MainWindow(QMainWindow):
                 is_error=True)
             import traceback
             traceback.print_exc()
-
-    def _restart_application(self):
-        """Restart the application."""
-        try:
-            executable = sys.executable
-            script = os.path.abspath(sys.argv[0])
-            args = sys.argv[1:]
-            
-            self.close()
-            subprocess.Popen([executable, script] + args)
-            QApplication.quit()
-            
-        except Exception as e:
-            self.show_toast(f"Failed to restart: {e}", is_error=True)
 
     def _close_package(self):
         """End the package session: its maps, cutscenes and assets are no

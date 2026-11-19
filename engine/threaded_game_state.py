@@ -259,6 +259,10 @@ class ThreadedGameState:
 
     #: Pending sound requests kept while the UI is not draining them.
     SOUND_QUEUE_LIMIT = 256
+    #: Console commands queued by map logic (logic_command) between frames. A
+    #: timer firing every tick cannot grow the queue without bound; the
+    #: oldest are dropped, as with sounds.
+    CONSOLE_QUEUE_LIMIT = 256
     def __init__(self):
         self._render_state_lock = _OwnedLock()
         #: Lease releases a finalizer could not take the lock for (it ran on
@@ -331,7 +335,7 @@ class ThreadedGameState:
         # main thread, where the console handler and its Qt widgets are safe to
         # touch. Mirrors the sound queue pattern.
         self._console_cmd_lock = threading.Lock()
-        self.console_command_queue = deque()
+        self.console_command_queue = deque(maxlen=self.CONSOLE_QUEUE_LIMIT)
 
     @staticmethod
     def _release_render_state_lease(owner_ref) -> None:

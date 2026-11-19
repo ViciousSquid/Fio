@@ -319,6 +319,7 @@ class PluginManager:
             plugin.register(EditorAPI(self, plugin))
         except Exception:
             self._log(f"register() failed for '{plugin.name}':\n{traceback.format_exc()}")
+            self._discard_partial_registration(plugin)
             return
 
         # Collect any property schemas the plugin publishes for its entities.
@@ -338,6 +339,25 @@ class PluginManager:
 
         self.plugins.append(plugin)
         self._loaded_modules.add(mod_name)
+        self._enabled_generation += 1
+
+    def _discard_partial_registration(self, plugin):
+        """Undo what a plugin registered before its ``register()`` raised.
+
+        The plugin never joins :attr:`plugins`, so the Plugins menu cannot
+        switch it off; anything it had already added (menu entries, tools,
+        console commands, pause items) would otherwise stay live. It is also
+        marked disabled, which silences every surface gated on ``enabled``
+        (its event handlers, I/O inputs and entity placement).
+        """
+        plugin.enabled = False
+        self._menu_entries = [e for e in self._menu_entries if e[0] is not plugin]
+        self._tools_actions = [e for e in self._tools_actions if e[0] is not plugin]
+        self._menu_actions = [e for e in self._menu_actions if e[0] is not plugin]
+        self._pause_menu_items = [e for e in self._pause_menu_items if e[0] is not plugin]
+        self._console_commands = {
+            name: entry for name, entry in self._console_commands.items()
+            if entry[0] is not plugin}
         self._enabled_generation += 1
 
     def _verify_requirements(self):

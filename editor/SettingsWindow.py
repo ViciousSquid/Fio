@@ -816,16 +816,35 @@ class SettingsWindow(QDialog):
                 str(self.place_camera_at_player_start_checkbox.isChecked()))
 
     def _restart_application(self):
-        
-        python = sys.executable
-        script = sys.argv[0]
-        args = sys.argv[1:]
-        
-        if self.main_window:
+        """Close the editor through its normal shutdown, then start it again.
+
+        Unsaved work has already been settled by :meth:`_confirm_restart`, so
+        the close does not prompt again, but it still runs the usual teardown
+        (layout saved, logic thread stopped). The new process is started with
+        an argument list -- no shell, and no ``os.execl`` that splits a path
+        containing spaces on Windows -- and only once the close went through.
+        """
+        import subprocess
+        from PyQt5.QtWidgets import QApplication
+
+        frozen = getattr(sys, 'frozen', False) or "__compiled__" in globals()
+        if frozen:
+            command = [sys.executable] + sys.argv[1:]
+        else:
+            command = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
+
+        window = self.main_window
+        if window is not None:
+            window._quit_without_prompt = True
             try:
-                self.main_window.closeEvent = lambda e: e.accept()
-                self.main_window.close()
+                closed = window.close()
             except Exception:
-                pass
-        
-        os.execl(python, python, script, *args)
+                closed = False
+            if not closed:
+                window._quit_without_prompt = False
+                return
+        try:
+            subprocess.Popen(command, cwd=os.getcwd())
+        except OSError as error:
+            print(f"Restart failed: {error}")
+        QApplication.quit()

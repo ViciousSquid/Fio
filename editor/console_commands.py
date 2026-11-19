@@ -209,8 +209,10 @@ class ConsoleCommandHandler:
     #: plugin code), like a key binding.  ``vsync`` / ``r_vsync`` do nothing
     #: but flip the stored preference in settings.ini.  ``quit`` closes Fio
     #: without asking, so a map could throw away the user's unsaved work.
+    #: ``condump`` writes a new file under logs/ every time it runs (it never
+    #: overwrites), so a map on a timer could fill the disk.
     USER_ONLY_COMMANDS = frozenset({'bind', 'r_renderer', 'phys_engine', 'vsync', 'r_vsync', 'quit', 'botdebug',
-                                    'monsterdebug'})
+                                    'monsterdebug', 'condump'})
 
     def cmd_botdebug(self, args):
         if args.strip().lower() not in ('', 'on', 'off'):
@@ -2684,8 +2686,10 @@ class ConsoleCommandHandler:
 
     def _saves_dir(self):
         """Absolute path to the saves directory (created on demand)."""
-        root = self.main_window.root_dir
-        path = os.path.join(root, 'saves')
+        # The per-user data folder when the install is read-only (a
+        # translocated macOS app), like settings.ini and autosaves.
+        from editor.user_paths import writable_dir
+        path = writable_dir(self.main_window.root_dir, 'saves')
         try:
             os.makedirs(path, exist_ok=True)
         except OSError:

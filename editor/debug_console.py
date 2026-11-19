@@ -488,13 +488,30 @@ def install_excepthook():
     it in the Debug Console, and lets the event loop carry on.
     """
     import sys
+    import time
     import traceback
+
+    # An exception raised by the same code every frame (a paint, a timer)
+    # would otherwise print its whole traceback 60 times a second and push
+    # everything else out of the console within seconds. An identical
+    # traceback within REPEAT_WINDOW of the last is counted, not printed.
+    REPEAT_WINDOW = 2.0
+    last = {'text': None, 'at': 0.0, 'repeats': 0}
 
     def _report(exc_type, exc, tb):
         if issubclass(exc_type, KeyboardInterrupt):
             sys.__excepthook__(exc_type, exc, tb)
             return
         text = "".join(traceback.format_exception(exc_type, exc, tb))
+        now = time.monotonic()
+        if text == last['text'] and now - last['at'] < REPEAT_WINDOW:
+            last['at'] = now
+            last['repeats'] += 1
+            return
+        repeats = last['repeats']
+        last.update(text=text, at=now, repeats=0)
+        if repeats:
+            text = f"(the previous exception repeated {repeats} more time(s))\n" + text
         sys.stderr.write(text)
         try:
             debug_log("Error", "Unhandled exception:\n" + text)

@@ -1641,7 +1641,15 @@ class Terrain:
                 # The editor changed what the heights are read from mid-build
                 # (a sculpt array resized): the row stays unbuilt or is
                 # dirtied again by that edit, and is asked for next frame.
+                # A real bug would fail the same way every frame with nothing
+                # shown, so each distinct error is printed once.
                 heights = None
+                import traceback
+                trace = traceback.format_exc()
+                key = trace.strip().splitlines()[-1]
+                if key != getattr(self, '_last_build_error', None):
+                    self._last_build_error = key
+                    sys.stderr.write("TerrainBuilder: building a height grid failed:\n" + trace)
             results.put((slot, order, resolution, heights))
 
     def _collect_built(self):

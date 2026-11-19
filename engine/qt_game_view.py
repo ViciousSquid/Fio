@@ -110,6 +110,9 @@ class QtGameView(QOpenGLWidget):
     #: macOS: frames to wait for the capture re-centre to land before the
     #: cursor is detached anyway (about half a second).
     _MAC_CENTRE_MAX_TRIES = 30
+    #: Consecutive failed paints in Play after which Play is stopped (half a
+    #: second at 60 Hz): a one-off failure is survivable, a permanent one is not.
+    MAX_PAINT_FAILURES_IN_PLAY = 30
 
     def __init__(self, editor):
         super().__init__(editor)
@@ -660,6 +663,12 @@ class QtGameView(QOpenGLWidget):
                       + " while drawing; run with FIO_GL_DEBUG=1 to find the call.")
 
 
+    def _stop_play_after_paint_failures(self):
+        """Leave Play after the frame has failed to draw repeatedly."""
+        if self.play_mode:
+            self.editor._exit_play_mode()
+            self._play_mode_hint = "Drawing failed repeatedly; Play Mode stopped"
+
     def _handle_logic_tick_fault(self, message):
         """Run fatal-tick play teardown on QtGameView's GUI thread.
 
@@ -895,6 +904,17 @@ class QtGameView(QOpenGLWidget):
             self._animate_textures()
             self._paint_frame(render_state)
             paint_succeeded = True
+            self._paint_failures = 0
+        except Exception:
+            # The exception still reaches sys.excepthook (the Debug Console
+            # and the crash log, which collapse identical repeats). A paint
+            # that fails every frame in Play would leave a frozen picture
+            # over a world that keeps running: stop Play instead.
+            self._paint_failures = getattr(self, '_paint_failures', 0) + 1
+            if (self._paint_failures == self.MAX_PAINT_FAILURES_IN_PLAY
+                    and self.play_mode):
+                QTimer.singleShot(0, self._stop_play_after_paint_failures)
+            raise
         finally:
             # The render state is a borrowed snapshot, and publication waits
             # while it is borrowed: release it the moment this synchronous
