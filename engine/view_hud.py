@@ -23,8 +23,8 @@ import ctypes
 from typing import Optional
 from PyQt5 import sip
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
-from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QRectF, QEvent, QThread, pyqtSignal
-from PyQt5.QtGui import QOpenGLContext, QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase, QPainterPath, QConicalGradient
+from PyQt5.QtCore import Qt, QTimer, QPoint, QPointF, QRect, QRectF, QEvent, QThread, pyqtSignal
+from PyQt5.QtGui import QOpenGLContext, QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase, QPainterPath, QConicalGradient, QStaticText, QTransform
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
@@ -89,6 +89,57 @@ class ViewHud:
 
     def __init__(self, view):
         self.view = view
+        #: (text, font key) -> (QStaticText, ascent): text laid out once and
+        #: drawn from then on without shaping it again (see _text).
+        self._static_texts = {}
+        #: (style, status font key, viewport height) -> the count fonts and
+        #: metrics _draw_hud used to build on every frame.
+        self._count_fonts = {}
+
+    #: Laid-out strings kept at most; the HUD's counts and prompts are few.
+    STATIC_TEXT_LIMIT = 512
+
+    def _text(self, painter, x, baseline, text):
+        """``painter.drawText(x, baseline, text)``, from text laid out once.
+
+        Every HUD string (the counts, the FPS counter, prompts) used to be
+        shaped again on each frame although it seldom changes; on the GL paint
+        engine that was most of the overlay's cost. A QStaticText keeps the
+        layout; it is drawn with the painter's current pen, from its top-left
+        corner, so the baseline is moved up by the font's ascent.
+        """
+        font = painter.font()
+        key = (text, font.key())
+        entry = self._static_texts.get(key)
+        if entry is None:
+            static = QStaticText(text)
+            static.setTextFormat(Qt.PlainText)
+            static.setPerformanceHint(QStaticText.AggressiveCaching)
+            static.prepare(QTransform(), font)
+            entry = (static, QFontMetrics(font).ascent())
+            if len(self._static_texts) >= self.STATIC_TEXT_LIMIT:
+                self._static_texts.pop(next(iter(self._static_texts)))
+            self._static_texts[key] = entry
+        painter.drawStaticText(QPointF(x, baseline - entry[1]), entry[0])
+
+    def _count_fonts_for(self, style, viewport_height):
+        """``(health font, its metrics, ammo font, ammo ascent)`` for *style*
+        at *viewport_height*: made once, not on every frame."""
+        status = self.view._hud_status_font
+        key = (style, status.key(), viewport_height)
+        fonts = self._count_fonts.get(key)
+        if fonts is None:
+            health_font = QFont(status)
+            health_font.setPointSize(self._hud_health_point_size(style, viewport_height))
+            ammo_font = QFont(health_font) if style == 3 else QFont(status)
+            ammo_font.setPointSize(
+                24 if style == 3 else max(22, min(36, int(viewport_height * 0.045))))
+            fonts = (health_font, QFontMetrics(health_font), ammo_font,
+                     QFontMetrics(ammo_font).ascent())
+            if len(self._count_fonts) >= 32:
+                self._count_fonts.clear()
+            self._count_fonts[key] = fonts
+        return fonts
 
     @staticmethod
     def _hud_count_baseline(metrics, text, bottom):
@@ -458,7 +509,7 @@ class ViewHud:
         rect_width = 100
         rect_x = self.view.width() - rect_width - 5
         painter.fillRect(rect_x, 5, rect_width, 20, self.view._hud_fps_bg_brush)
-        painter.drawText(rect_x + 5, 20, f"FPS: {self.view.fps:.0f}")
+        self._text(painter, rect_x + 5, 20, f"FPS: {self.view.fps:.0f}")
 
     def _draw_sprites_text(self, painter):
         painter.setFont(self.view._sprites_font)
@@ -556,15 +607,12 @@ class ViewHud:
                         painter.restore()
 
         style = self.view._hud_style
-        health_font = QFont(self.view._hud_status_font)
-        health_font.setPointSize(
-            self._hud_health_point_size(style, viewport_height)
-        )
+        health_font, metrics, ammo_font, ammo_ascent = self._count_fonts_for(
+            style, viewport_height)
         painter.setFont(health_font)
         health_color = self.view._hud_health_orange
         painter.setPen(health_color)
         health_text = str(int(health))
-        metrics = QFontMetrics(health_font)
         # Pin health against the bottom-left edge of the viewport.
         health_x = 0
         health_y = self._hud_count_baseline(metrics, health_text, viewport_height)
@@ -574,32 +622,28 @@ class ViewHud:
         painter.save()
         painter.setOpacity(hud_alpha * hud_opacity * health_hud_alpha)
         painter.setPen(self.view._hud_count_shadow_pen)
-        painter.drawText(health_x + 2, health_y + 2, health_text)
+        self._text(painter, health_x + 2, health_y + 2, health_text)
         painter.setPen(health_color)
-        painter.drawText(health_x, health_y, health_text)
+        self._text(painter, health_x, health_y, health_text)
         painter.restore()
 
         lines = self._hud_stat_lines(
             style, held.weapon if held is not None else None,
             self.view._cached_player_ammo, self.view._cached_player_armor)
         if lines:
-            ammo_font = QFont(health_font) if style == 3 else QFont(self.view._hud_status_font)
-            ammo_font.setPointSize(
-                24 if style == 3 else max(22, min(36, int(viewport_height * 0.045)))
-            )
             ammo_x = health_x + metrics.horizontalAdvance(health_text)
             if style == 3:
                 # Style 3 uses a single compact status line: separate ammo
                 # from health with two spaces and keep the counters white.
                 ammo_x += 2 * metrics.horizontalAdvance(" ")
             painter.setFont(ammo_font)
-            line_height = QFontMetrics(ammo_font).ascent()
+            line_height = ammo_ascent
             baseline = health_y - line_height * (len(lines) - 1)
             for text in lines:
                 painter.setPen(self.view._hud_count_shadow_pen)
-                painter.drawText(ammo_x + 2, baseline + 2, text)
+                self._text(painter, ammo_x + 2, baseline + 2, text)
                 painter.setPen(Qt.white if style == 3 else self.view._hud_ammo_green)
-                painter.drawText(ammo_x, baseline, text)
+                self._text(painter, ammo_x, baseline, text)
                 baseline += line_height
 
         # The centre-screen crosshair is a first-person aiming reticle: it marks
@@ -627,9 +671,9 @@ class ViewHud:
             tw = self.view._cached_hud_message_width
             painter.setFont(self.view._hud_msg_font)
             painter.setPen(self.view._hud_shadow_pen)
-            painter.drawText(cx - tw // 2 + 2, cy + 2, msg)
+            self._text(painter, cx - tw // 2 + 2, cy + 2, msg)
             painter.setPen(self.view._hud_grey_pen)
-            painter.drawText(cx - tw // 2, cy, msg)
+            self._text(painter, cx - tw // 2, cy, msg)
 
             if prompt_key:
                 # cy is the text baseline, not its lower edge. Position
@@ -679,9 +723,9 @@ class ViewHud:
             tw = self.view._cached_hint_width
             painter.setFont(self.view._hud_msg_font)
             painter.setPen(self.view._hud_shadow_pen)
-            painter.drawText(cx - tw // 2 + 2, cy + 2, hint)
+            self._text(painter, cx - tw // 2 + 2, cy + 2, hint)
             painter.setPen(self.view._hud_grey_pen)
-            painter.drawText(cx - tw // 2, cy, hint)
+            self._text(painter, cx - tw // 2, cy, hint)
         if self.view._actor_pick is not None:
             self.view.picking._draw_actor_pick_hint(painter, viewport_width)
         # Overhead: held weapon shown as a bottom-right collectible icon (like keys).
