@@ -110,3 +110,56 @@ Play-mode frame path: already well optimised. Logic `_step_frame` takes 0.45–0
   The branch figure is after the audio-backoff expectation update. The one failure in the final run was that test, which pinned the old double probe.
 * **Flaky test:** `tests/e2e/test_face_pick_oracle.py::...[none]` failed once in a combined renderer+visual+e2e GL run. It passed alone, on a rerun and in the full run. It looks timing-sensitive under llvmpipe.
 * **Test environment:** CI's Qt/XCB/EGL packages had to be installed in this container first. Without `libegl1`, every Qt-tier test errors out.
+
+---
+
+## 7. Stable-release pass (second audit)
+
+Branch `claude/nice-hawking-l71x19` + `3.5.1.0` (the Retro furniture pack and the `_SHOWCASE` update merged in), audited again before it becomes the main stable release. Covered: the code changed since §1–6 (groups, multi-selection editing, model wireframes, link layers, browse buttons, renderer unit binding), the deferred items in §5, and a session-length stability check. Benchmarks and correctness checks were taken through the Debug Tables instrument (`tools/debug_tables.py`).
+
+### Defects fixed
+
+| # | Severity | Defect | Fix |
+|---|---|---|---|
+| S1 | High | Typing one axis of a vector (Rotation, Scale) with several objects selected copied the primary's **whole** vector onto every selected object: three chairs at yaw 0/90/180 all became `[10, 0, 0]`. No undo checkpoint was taken, so Ctrl+Z could not bring them back. | The other objects get only the edited component. An edit that reaches more than one object takes one undo checkpoint first. |
+| S2 | High (CI) | The autouse settings.ini redirect (8c125a5) requested `monkeypatch`, which made each test's own `monkeypatch` outlive `fio_session`. A test that patched its window kept the closed window reachable, and the session's leak check failed. 30 errors (pause menu, groups in Play, save/restore in Play, the 3.5 regressions, mouse grab, freelook): the branch tip was red. | The redirect uses a private `MonkeyPatch`. |
+| S3 | Medium | A NaN or infinite model scale, rotation or position (a typed `inf`, a malformed map value), or a NaN corner in an OBJ, raised inside the 2D views' `paintEvent` on every repaint. | Such a model is drawn as its box. |
+| S4 | Medium | The 2D wireframe image cache budgeted pixels only. Thousands of small images (props at scattered yaws, zoom steps) fitted the 16M-pixel budget while holding gigabytes. | Each entry is charged a fixed cost too, with at most 4096 entries. |
+| S5 | Medium (perf) | The wireframe edge cache cleared completely at 256 models, so larger levels rebuilt nearly every model's edges on every repaint (~12 ms per 6k-triangle model). | The least recently used entry is evicted. |
+| S6 | Low | Animated I/O links that were no longer drawn (deleted, filtered, scrolled away) kept the 60 Hz arrow timer running for good. | Undrawn links stop animating, so the timer sleeps. |
+| S7 | Low | Double-clicking a Scene Hierarchy section title closed it and immediately reopened it. | The double-click is swallowed. |
+| S8 | Low (test) | `test_shipped_map_references` reported the Retro chairs as missing. They ship in `assets/bundled_furniture.fiopak`. | The test asks `engine.asset_archives`, the reader the engine uses. |
+| S9 | Hardening | Native crashes (segfaults in a GL driver or in Qt) left no trace in windowed builds. | `crash_log.install` points `faulthandler` at `fio_fault.log`, unless faulthandler is already on. |
+
+### Performance
+
+| Change | Before → after |
+|---|---|
+| Scene Hierarchy, selection change: rows are reselected; no rebuild unless something it displays changed (compared by value) | **57 → 11 ms** a click on BigWorld (3.6k brushes). A refresh with nothing to change: 1.4 ms. |
+| 2D brush culling with float comparisons, not a `QRectF` per brush | 0.58 → 0.27 µs a brush |
+
+Debug Tables measurements (llvmpipe, medians). Baseline and branch are identical in frame cost, publication cost, tick and table contents on all eight maps checked (`_SHOWCASE`, `Office_Corridor`, `MonsterTest`, `Portal_Test`, `Terrain_Test_small2`, `BigWorld_streaming_test`, `Wet_Decal_Test`, `Glass_Test`). The changes in this pass are on the editor side.
+
+### Correctness checks run through the instrument
+
+On each of the eight maps, with the change-record oracle on (`FIO_RENDER_ORACLE=record`):
+
+* RenderTable and EntityTable rows match the authored brushes and entities. Every brush id has a row, and every selected brush is followed to its row.
+* Still editor frames examine 0 rows at every change-detection site (M4).
+* The S1 edit reaches each model's published `model_base_matrix`, the matrices stay distinct, and one undo restores them. The baseline fails all three checks on `_SHOWCASE` and `Office_Corridor`.
+* Row counts are unchanged across Play → Stop.
+* No oracle misses.
+
+The first two checks are now permanent: `tests/tools/test_debug_tables_release_checks.py`.
+
+### Session-length stability
+
+* Opening `_SHOWCASE` and `MonsterTest` alternately, each followed by Play, 5 frames and Stop, 10 cycles: resident memory **795 → 802 MB**, flat after cycle 3. Renderer textures and models are cached per asset, bounded by the asset library.
+
+### Observations, not changed
+
+* **Undo snapshots on Big World maps:** ~20–90 ms per checkpoint (whole-world copy). Structural sharing would fix this, but it is too large a change for a release.
+* **Play-mode still frames:** examine `pass_memo` rows (132 per frame on `_SHOWCASE`). The baseline does the same, so this is not a regression. It is worth a look against the M4 invariant.
+* **Entity selection:** builds the property page fresh (~45 ms for a Monster on BigWorld). Pages for brushes are already cached.
+* **`test_p_opens_the_position_window_from_anywhere`:** fails under Xvfb without a window manager (no window activation). It passes on the offscreen platform CI uses.
+* **One segfault:** seen once in a combined GL run under llvmpipe and not reproduced in three reruns. `fio_fault.log` (S9) would now record such a crash in the field.
