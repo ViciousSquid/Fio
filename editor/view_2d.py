@@ -1813,7 +1813,13 @@ class View2D(QWidget):
             else:
                 # Draw a single static arrow head at the target end
                 self._draw_connection_arrow(painter, p1, p2, color)
-        
+
+        # Links no longer drawn (deleted, filtered, scrolled away) stop
+        # animating, so the timer sleeps once nothing on screen moves.
+        if self.connection_animations:
+            for stale in [k for k in self.connection_animations if k not in current_connections]:
+                del self.connection_animations[stale]
+                self.arrow_travel_progress.pop(stale, None)
         self.last_io_connections = current_connections
 
     def draw_patrol_paths(self, painter, visible_bounds):
@@ -2192,11 +2198,27 @@ class View2D(QWidget):
             return None                         # drawn as a box
         return obj, positions, segments
 
+    @staticmethod
+    def _model_placement(model_thing):
+        """``(scale, rotation)`` of a model, as finite floats, or None when
+        its map data or a typed value cannot be drawn (then: a box)."""
+        try:
+            if not all(math.isfinite(float(v)) for v in model_thing.pos[:3]):
+                return None
+        except (TypeError, ValueError):
+            return None
+        return model_wireframe.placement(model_scale(model_thing),
+                                         model_rotation(model_thing))
+
     def _project_model(self, model_thing, positions, ax_map, ax1, ax2):
-        """Screen ``(xs, ys)`` of a model's welded corners in this view."""
+        """Screen ``(xs, ys)`` of a model's welded corners in this view, or
+        None when its placement cannot be drawn."""
+        placed = self._model_placement(model_thing)
+        if placed is None:
+            return None
+        scale, rotation = placed
         return model_wireframe.project(
-            positions, model_thing.pos, model_scale(model_thing),
-            model_rotation(model_thing), (ax_map[ax1], ax_map[ax2]),
+            positions, model_thing.pos, scale, rotation, (ax_map[ax1], ax_map[ax2]),
             (self.width() / 2, self.height() / 2),
             (self.pan_offset.x(), self.pan_offset.y()), self.zoom_factor,
             flip_y=self.view_type in ('front', 'side'))
@@ -2243,7 +2265,8 @@ class View2D(QWidget):
         ~25 ms a 6,000-triangle model per view, on every repaint of a drag.
         """
         found = self._model_edges_for(model_thing)
-        if found is None:
+        placed = self._model_placement(model_thing) if found is not None else None
+        if found is None or placed is None:
             painter.setPen(QPen(QColor(200, 200, 200), 1))
             s_pos = self.world_to_screen(QPointF(model_thing.pos[ax_map[ax1]], model_thing.pos[ax_map[ax2]]))
             rect = QRectF(s_pos.x()-10, s_pos.y()-10, 20, 20)
@@ -2251,12 +2274,12 @@ class View2D(QWidget):
             return rect
 
         obj, positions, edges = found
+        scale, rotation = placed
         i1, i2 = ax_map[ax1], ax_map[ax2]
         flip_y = self.view_type in ('front', 'side')
         zoom = self.zoom_factor
         cached = model_wireframe.wireframe_image(
-            obj, positions, edges, model_scale(model_thing),
-            model_rotation(model_thing), (i1, i2), zoom, flip_y,
+            obj, positions, edges, scale, rotation, (i1, i2), zoom, flip_y,
             self.MODEL_WIREFRAME_COLOUR)
         if cached is not None:
             # The same picture for every instance at this zoom: placed at the

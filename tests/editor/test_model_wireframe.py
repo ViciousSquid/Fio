@@ -133,3 +133,98 @@ def test_a_model_too_big_on_screen_is_not_cached():
     positions, edges = mw.build_edges(_cube() * 10000.0, Flat())
     assert mw.wireframe_image(object(), positions, edges, 1.0, (0, 0, 0), (0, 2),
                               1.0, False, (0, 255, 255, 100)) is None
+
+
+# ---------------------------------------------------------------------------
+# Release hardening: bounded caches, and values that cannot be drawn
+# ---------------------------------------------------------------------------
+
+class _Model:
+    """A loaded model as model_edges reads it."""
+    cpu_triangles = None
+
+    def __init__(self, vertices):
+        self.cpu_vertices = vertices
+
+
+def test_the_edge_cache_drops_the_least_recently_used_model_not_all(monkeypatch):
+    monkeypatch.setattr(mw, '_EDGE_CACHE', {})
+    monkeypatch.setattr(mw, '_EDGE_CACHE_LIMIT', 4)
+    models = [_Model(_cube()) for _ in range(5)]
+    first = [mw.model_edges(m) for m in models[:4]]
+    mw.model_edges(models[0])                 # used again: now the newest
+    mw.model_edges(models[4])                 # evicts models[1] only
+    assert len(mw._EDGE_CACHE) == 4
+    assert mw.model_edges(models[0])[0] is first[0][0], "rebuilt a cached model"
+    assert id(models[1]) not in mw._EDGE_CACHE
+    assert mw.model_edges(models[2])[0] is first[2][0]
+
+
+def test_a_model_with_a_non_finite_corner_has_no_wireframe(monkeypatch):
+    monkeypatch.setattr(mw, '_EDGE_CACHE', {})
+    verts = _cube()
+    verts[5, 1] = np.nan
+    model = _Model(verts)
+    assert mw.model_edges(model) is None
+    assert mw.model_edges(model) is None      # remembered, not an error
+
+
+@pytest.mark.parametrize('scale, rotation', [
+    (float('inf'), (0, 0, 0)), (1.0, (0, float('nan'), 0)), ('2', (0, 0, 0)),
+    ([1.0, 2.0], (0, 0, 0)), (1.0, (0, 0)), (None, (0, 0, 0)), (1.0, 'abc'),
+    (['a', 1, 1], (0, 0, 0)),
+])
+def test_a_placement_that_cannot_be_drawn_is_refused(scale, rotation):
+    assert mw.placement(scale, rotation) is None
+
+
+def test_a_placement_is_three_floats_each():
+    assert mw.placement(2, [0, 90, 0]) == ((2.0, 2.0, 2.0), (0.0, 90.0, 0.0))
+    assert mw.placement([1, 2, 3, 4], (1, 2, 3)) == ((1.0, 2.0, 3.0), (1.0, 2.0, 3.0))
+
+
+@pytest.mark.qt
+def test_the_image_cache_holds_a_bounded_number_of_entries(monkeypatch):
+    from PyQt5.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])  # noqa: F841
+    mw.clear_image_cache()
+    monkeypatch.setattr(mw, 'IMAGE_CACHE_ENTRIES', 16)
+    positions, edges = mw.build_edges(_cube(), Flat())
+    model = object()
+    # Tiny images, each a different yaw: far inside the pixel budget.
+    for yaw in range(100):
+        mw.wireframe_image(model, positions, edges, 1.0, (0, yaw, 0), (0, 2),
+                           1.0, False, (0, 255, 255, 100))
+    assert len(mw._IMAGE_CACHE) == 16
+    assert mw._image_cache_pixels == sum(
+        e[1].width() * e[1].height() + mw.IMAGE_ENTRY_COST
+        for e in mw._IMAGE_CACHE.values())
+    mw.clear_image_cache()
+
+
+@pytest.mark.qt
+@pytest.mark.parametrize('prop, value', [
+    ('scale', float('inf')), ('scale', [1.0, 'x', 1.0]), ('rotation', [0, float('nan'), 0]),
+    ('rotation', 'sideways'),
+])
+def test_a_model_that_cannot_be_placed_is_drawn_as_a_box(main_window, monkeypatch,
+                                                         prop, value):
+    """A typed 'inf' or a malformed map value used to raise in paintEvent on
+    every repaint of every 2D view."""
+    from PyQt5.QtGui import QImage, QPainter
+    from editor.things import Prop
+    positions, edges = mw.build_edges(_cube() * 32.0, Flat())
+    view = main_window.view_top
+    monkeypatch.setattr(view, '_model_edges_for',
+                        lambda thing: (object(), positions, edges))
+    thing = Prop.for_model('assets/models/chair.obj', pos=[0, 0, 0])
+    thing.properties[prop] = value
+    image = QImage(200, 200, QImage.Format_ARGB32_Premultiplied)
+    painter = QPainter(image)
+    try:
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        rect = view._draw_model_wireframe(painter, thing, ax_map, 'x', 'z')
+    finally:
+        painter.end()
+    assert rect.width() == 20 and rect.height() == 20
+    assert view._compute_model_screen_coords(thing, ax_map, 'x', 'z') is None

@@ -32,8 +32,11 @@ import numpy as np
 #: Edges above which a model is drawn as a box instead of a wireframe.
 MAX_WIREFRAME_EDGES = 200_000
 
-# id(model) -> (model, positions, edges). The model is held so its id cannot
-# be reused by another object while the entry exists; the cache is bounded.
+# id(model) -> (model, positions, edges), least recently used first. The
+# model is held so its id cannot be reused by another object while the entry
+# exists; past the limit the least recently used entry goes (clearing the lot
+# made a level with more models than the limit rebuild nearly every model's
+# edges on every repaint).
 _EDGE_CACHE: dict = {}
 _EDGE_CACHE_LIMIT = 256
 
@@ -80,17 +83,43 @@ def model_edges(model):
     None when the model has no CPU-side corners.
     """
     key = id(model)
-    hit = _EDGE_CACHE.get(key)
+    hit = _EDGE_CACHE.pop(key, None)
     if hit is not None and hit[0] is model:
-        return hit[1], hit[2]
+        _EDGE_CACHE[key] = hit                  # most recently used last
+        return None if hit[1] is None else (hit[1], hit[2])
     vertices = getattr(model, 'cpu_vertices', None)
     if vertices is None or len(vertices) == 0:
         return None
     positions, edges = build_edges(vertices, model)
-    if len(_EDGE_CACHE) >= _EDGE_CACHE_LIMIT:
-        _EDGE_CACHE.clear()
+    if not np.isfinite(positions).all():
+        # A NaN or infinite corner (an OBJ may spell one) has no place on
+        # screen: the model is drawn as a box. Remembered, not rebuilt.
+        positions = edges = None
+    while len(_EDGE_CACHE) >= _EDGE_CACHE_LIMIT:
+        _EDGE_CACHE.pop(next(iter(_EDGE_CACHE)))
     _EDGE_CACHE[key] = (model, positions, edges)
-    return positions, edges
+    return None if positions is None else (positions, edges)
+
+
+def placement(scale, rotation):
+    """``(scale, rotation)`` as three finite floats each, or None.
+
+    Both come from map data and the property panel: a malformed or
+    non-finite value is drawn as a box instead of raising in a paint event.
+    """
+    try:
+        if isinstance(scale, (int, float)):
+            scale = (float(scale),) * 3
+        else:
+            scale = tuple(float(v) for v in scale[:3])
+        rotation = tuple(float(v) for v in rotation[:3])
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    if len(scale) != 3 or len(rotation) != 3:
+        return None
+    if not all(math.isfinite(v) for v in scale + rotation):
+        return None
+    return scale, rotation
 
 
 def rotation_matrix(rotation_degrees):
@@ -192,6 +221,12 @@ def segments_polygon(segments):
 MAX_IMAGE_SIDE = 1024
 #: Pixels of cached images kept before the oldest are dropped (~64 MB).
 IMAGE_CACHE_PIXELS = 16 * 1024 * 1024
+#: What each entry is charged on top of its pixels: its Python and Qt objects
+#: cost about this much again, and without it thousands of tiny images (props
+#: scattered at random yaws, zoom steps) fitted the pixel budget for gigabytes.
+IMAGE_ENTRY_COST = 1024
+#: Entries kept at most, whatever their size.
+IMAGE_CACHE_ENTRIES = 4096
 
 _IMAGE_CACHE: dict = {}
 _image_cache_pixels = 0
@@ -217,7 +252,7 @@ def wireframe_image(model, positions, edges, scale, rotation, axes, zoom,
         _IMAGE_CACHE[key] = hit                 # most recently used last
         return hit[1:]
     if hit is not None:
-        _image_cache_pixels -= hit[1].width() * hit[1].height()
+        _image_cache_pixels -= _entry_cost(hit[1])
 
     xs, ys = project(positions, (0.0, 0.0, 0.0), scale, rotation, axes,
                      (0.0, 0.0), (0.0, 0.0), zoom, flip_y)
@@ -238,13 +273,18 @@ def wireframe_image(model, positions, edges, scale, rotation, axes, zoom,
         painter.drawLines(segments_polygon(segments))
         painter.end()
 
-    pixels = width * height
-    while _IMAGE_CACHE and _image_cache_pixels + pixels > IMAGE_CACHE_PIXELS:
+    cost = _entry_cost(image)
+    while _IMAGE_CACHE and (_image_cache_pixels + cost > IMAGE_CACHE_PIXELS
+                            or len(_IMAGE_CACHE) >= IMAGE_CACHE_ENTRIES):
         old = _IMAGE_CACHE.pop(next(iter(_IMAGE_CACHE)))
-        _image_cache_pixels -= old[1].width() * old[1].height()
+        _image_cache_pixels -= _entry_cost(old[1])
     _IMAGE_CACHE[key] = (model, image, left, top)
-    _image_cache_pixels += pixels
+    _image_cache_pixels += cost
     return image, left, top
+
+
+def _entry_cost(image):
+    return image.width() * image.height() + IMAGE_ENTRY_COST
 
 
 def clear_image_cache():
