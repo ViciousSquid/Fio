@@ -7,12 +7,16 @@ per-user data folder when the install is read-only).
 """
 
 import datetime
+import faulthandler
 import os
 import sys
 import threading
 import traceback
 
 LOG_NAME = 'fio_crash.log'
+#: Native crashes (a segfault in a GL driver or in Qt) end the process before
+#: any Python hook runs; :mod:`faulthandler` writes every thread's stack here.
+FAULT_LOG_NAME = 'fio_fault.log'
 #: The log is a diagnostic, not an archive: past this size the current log is
 #: moved to ``fio_crash.log.1`` (replacing the previous one) and a new one is
 #: started, so the first traceback of a burst -- the root cause -- survives.
@@ -24,6 +28,9 @@ _path = None
 _last_text = None
 _repeats = 0
 _lock = threading.Lock()
+#: The open fault log: faulthandler writes to its descriptor at crash time,
+#: so it stays open for the life of the process.
+_fault_file = None
 
 
 def log_path():
@@ -78,7 +85,33 @@ def install(directory):
     wrap_current()
     if threading.excepthook is threading.__excepthook__:
         threading.excepthook = _thread_hook
+    _install_fault_log(directory)
     return _path
+
+
+def _install_fault_log(directory):
+    """Send native-crash stacks to ``fio_fault.log`` under *directory*.
+
+    Left alone when faulthandler is already on (``python -X faulthandler``,
+    pytest): whoever enabled it chose where it writes. The log is started
+    afresh once it outgrows :data:`MAX_BYTES`. Never raises.
+    """
+    global _fault_file
+    if _fault_file is not None or faulthandler.is_enabled():
+        return
+    try:
+        path = os.path.join(directory, FAULT_LOG_NAME)
+        os.makedirs(directory or '.', exist_ok=True)
+        try:
+            if os.path.getsize(path) > MAX_BYTES:
+                os.replace(path, path + '.1')
+        except OSError:
+            pass
+        handle = open(path, 'a', encoding='utf-8')
+        faulthandler.enable(file=handle, all_threads=True)
+        _fault_file = handle
+    except Exception:
+        pass
 
 
 def wrap_current():

@@ -279,6 +279,39 @@ def test_a_full_crash_log_is_rotated_not_truncated(tmp_path, monkeypatch):
     assert "ValueError: later" in path.read_text(encoding="utf-8")
 
 
+def test_a_native_crash_leaves_its_stack_in_the_fault_log(tmp_path):
+    """A segfault (a GL driver, Qt) ends the process before any Python hook
+    runs: a windowed build used to leave no trace of it anywhere."""
+    import os
+    import subprocess
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    script = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "from editor import crash_log\n"
+        "crash_log.install(%r)\n"
+        "def crash_here():\n"
+        "    import faulthandler; faulthandler._sigsegv()\n"
+        "crash_here()\n" % (root, str(tmp_path)))
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONFAULTHANDLER"}
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+                            capture_output=True, timeout=60)
+    assert result.returncode != 0
+    text = (tmp_path / "fio_fault.log").read_text(encoding="utf-8", errors="replace")
+    assert "crash_here" in text, text
+
+
+def test_the_fault_log_leaves_an_enabled_faulthandler_alone(tmp_path, monkeypatch):
+    """pytest and ``python -X faulthandler`` chose where crashes go."""
+    import faulthandler
+    from editor import crash_log
+    monkeypatch.setattr(crash_log, "_fault_file", None)
+    if not faulthandler.is_enabled():
+        pytest.skip("faulthandler is not enabled in this run")
+    crash_log._install_fault_log(str(tmp_path))
+    assert crash_log._fault_file is None
+    assert not (tmp_path / "fio_fault.log").exists()
+
+
 # ---------------------------------------------------------------------------
 # Plugins
 # ---------------------------------------------------------------------------
