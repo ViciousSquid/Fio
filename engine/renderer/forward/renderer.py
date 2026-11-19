@@ -852,6 +852,8 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._frame_lights_uploaded.clear()
         self._light_ubo_key = None
         self._light_ubo_lights = None
+        # Texture units are not assumed bound from the last frame.
+        self.shadow_units_changed()
         self._light_ubo_bound = False
         self._current_shader = None
         if current_mode == RENDER_MODE_WIREFRAME:
@@ -1236,6 +1238,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         if self._shadow_cubemaps:
             try:
                 gl.glDeleteTextures(self._shadow_cubemaps)
+                self.shadow_units_changed()
             except Exception:
                 pass
             self._shadow_cubemaps = []

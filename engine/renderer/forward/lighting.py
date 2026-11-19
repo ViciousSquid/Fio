@@ -273,6 +273,8 @@ class LightingMixin:
         layers = array.layers(ids)
         # False when no image could be read: the placeholder stands in.
         self._cookie_array_bound = array.bind(shaders.COOKIE_TEXTURE_UNIT)
+        # Whatever array.bind did, the unit no longer holds the placeholder.
+        self._cookie_placeholder_bound = False
         return layers
 
     def _bind_cookie_placeholder(self):
@@ -296,7 +298,10 @@ class LightingMixin:
         program state, set once per program.
         """
         if not getattr(self, '_cookie_array_bound', False):
-            self._bind_cookie_placeholder()
+            # Once a frame, not once a pass: nothing else binds the unit.
+            if not getattr(self, '_cookie_placeholder_bound', False):
+                self._bind_cookie_placeholder()
+                self._cookie_placeholder_bound = True
         if uniforms.cookie_unit:
             return
         loc = uniforms['fioCookies']
@@ -357,6 +362,7 @@ class LightingMixin:
             prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
             self._shadow_fbo = int(gl.glGenFramebuffers(1))
             self._shadow_cubemaps = []
+            self.shadow_units_changed()
             size = self.shadow_map_size
             for _ in range(self.MAX_SHADOW_LIGHTS):
                 cm = int(gl.glGenTextures(1))
@@ -372,6 +378,7 @@ class LightingMixin:
                 gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
                 self._shadow_cubemaps.append(cm)
             gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            self.shadow_units_changed()
 
             # Depth-only FBO: validate completeness with the first face attached.
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._shadow_fbo)
@@ -420,11 +427,29 @@ class LightingMixin:
             slots = uniforms.shadow_slots = tuple(live)
         cubemaps = self._shadow_cubemaps
         count = len(cubemaps)
+        # What each shadow unit holds is remembered for the frame: every lit
+        # pass used to bind all of them again (two GL calls a unit, ~80 calls
+        # a frame, a third of the frame's GL calls on a map with no shadows).
+        # The record is dropped at the start of each frame, after the terrain
+        # pass (which binds its own there) and whenever the cube-maps are
+        # made or deleted (shadow_units_changed).
+        bound = getattr(self, '_shadow_units_bound', None)
+        if bound is None:
+            bound = self._shadow_units_bound = {}
         for i in slots:
-            gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP,
-                             cubemaps[i] if i < count else 0)
+            texture = cubemaps[i] if i < count else 0
+            if bound.get(i) != texture:
+                gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
+                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, texture)
+                bound[i] = texture
         gl.glActiveTexture(gl.GL_TEXTURE0)
+
+    def shadow_units_changed(self):
+        """Forget what the shadow and cookie units hold: something other
+        than _bind_shadow_maps / _bind_light_cookies bound or deleted a
+        texture there (or a new frame starts, where nothing is assumed)."""
+        self._shadow_units_bound = None
+        self._cookie_placeholder_bound = False
 
     #: The shadow pass's render key. One field, because one thing cannot vary
     #: within a depth draw: which cube face is being rendered, since that is
