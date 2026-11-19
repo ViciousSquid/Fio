@@ -570,71 +570,41 @@ _SETTINGS_INI = os.path.join(_ROOT, "settings.ini")
 
 
 @pytest.fixture(scope="session")
-def _session_settings_ini(tmp_path_factory):
-    """``(path, defaults)``: where editor windows in tests keep settings.ini,
-    and the tracked file's contents it is reset to before every test."""
-    path = tmp_path_factory.mktemp("settings") / "settings.ini"
-    try:
-        with open(_SETTINGS_INI, "rb") as fh:
-            defaults = fh.read()
-    except OSError:  # pragma: no cover - no tracked settings
-        defaults = b""
-    return str(path), defaults
+def _settings_dir(tmp_path_factory):
+    """Where each test's own settings.ini is kept (one file per test)."""
+    from tests.helpers import settings_isolation
+    settings_isolation.install()
+    return tmp_path_factory.mktemp("settings")
+
+
+_settings_serial = [0]
 
 
 @pytest.fixture(autouse=True)
-def _editor_never_writes_the_repo_settings_ini(_session_settings_ini):
-    """Point an editor window built in the repository root at a session copy
-    of settings.ini, not the tracked file.
+def _each_test_has_its_own_settings_ini(_settings_dir):
+    """Editor windows a test builds read and save a settings.ini of the
+    test's own: a fresh copy of the tracked defaults, never the tracked file
+    (tests/helpers/settings_isolation.py). No test sees another's settings,
+    and no run -- however many run at once -- writes the shipped file.
 
-    Windows built from the repository root (FioTestSession, tests that need
-    the real asset folder) resolve settings.ini there, and a save made outside
-    the test that opened the window -- a deferred close, a recent-files entry
-    -- reached the shipped default settings past the restore below. Only that
-    one path is redirected (``editor.user_paths`` is tested on its own), and
-    only once ``editor.main_window`` is loaded, so the headless tier never
-    imports the editor for it.
-
-    A private MonkeyPatch, not the ``monkeypatch`` fixture: an autouse
-    fixture that requests it makes the test's own ``monkeypatch`` (holding
-    whatever the test patched onto its editor window) outlive every other
-    fixture of the test -- ``fio_session`` then found its closed window
-    still reachable and failed its teardown.
+    The redirect is installed at the source, before the editor is imported,
+    so it holds for every window whatever the test imports.
     """
-    module = sys.modules.get("editor.main_window")
-    if module is None:
-        yield
-        return
-    copy_path, defaults = _session_settings_ini
-    # Every test starts from the shipped defaults, as it did when windows
-    # used the tracked file and it was restored after each test.
-    with open(copy_path, "wb") as fh:
-        fh.write(defaults)
-    original = sys.modules["editor.user_paths"].settings_path
-    repo = os.path.normcase(os.path.abspath(_SETTINGS_INI))
-
-    def settings_path(root_dir):
-        path = original(root_dir)
-        if os.path.normcase(os.path.abspath(path)) == repo:
-            return copy_path
-        return path
-
-    patch = pytest.MonkeyPatch()
-    patch.setattr(module, "settings_path", settings_path)
-    try:
-        yield
-    finally:
-        patch.undo()
+    from tests.helpers import settings_isolation
+    _settings_serial[0] += 1
+    settings_isolation.use(settings_isolation.fresh_copy(
+        _settings_dir / ("settings-%d.ini" % _settings_serial[0])))
+    yield
 
 
 @pytest.fixture(autouse=True)
-def _restore_repo_settings_ini():
-    """Put the tracked settings.ini back after a test that wrote to it.
+def _tracked_settings_ini_untouched():
+    """Fail a test that changed the tracked settings.ini.
 
-    MainWindow resolves ``settings.ini`` against the working directory, and
-    closing a window saves its dock layout there. A test that builds a window
-    from the repository root therefore rewrote the shipped default settings
-    and handed its layout to every later test.
+    Windows keep their settings in the test's own copy, so a change here is
+    a leak to fix. It is reported, not written back: restoring a snapshot
+    taken at the start of a test is what let concurrent runs overwrite each
+    other's restores (and once left the file empty).
     """
     try:
         with open(_SETTINGS_INI, "rb") as fh:
@@ -647,11 +617,11 @@ def _restore_repo_settings_ini():
     try:
         with open(_SETTINGS_INI, "rb") as fh:
             after = fh.read()
-        if after != before:
-            with open(_SETTINGS_INI, "wb") as fh:
-                fh.write(before)
     except OSError:  # pragma: no cover - read-only checkout
-        pass
+        return
+    if after != before:
+        pytest.fail("this test changed the tracked settings.ini (an editor window "
+                    "saved there instead of its own copy)", pytrace=False)
 
 
 @pytest.fixture(autouse=True)
