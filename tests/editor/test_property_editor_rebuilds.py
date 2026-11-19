@@ -126,7 +126,7 @@ def test_speaker_sound_file_has_browse_button_and_normalises_selected_path(
         if button.text() == "Browse..."
     )
     monkeypatch.setattr(
-        "editor.property_editor.QFileDialog.getOpenFileName",
+        "editor.property_editor.get_open_asset_file",
         lambda *args, **kwargs: (
             os.path.join(
                 os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),

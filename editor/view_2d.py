@@ -4184,7 +4184,10 @@ class View2D(QWidget):
         
         # Model
         elif add_model_action and action == add_model_action:
-            filepath, _ = QFileDialog.getOpenFileName(self, "Select OBJ Model", "assets/models", "OBJ Files (*.obj)")
+            # Packed models too: Fio's filesystem, not the system dialog.
+            from editor.asset_dialog import get_open_asset_file
+            filepath, _ = get_open_asset_file(self, "Select Model", "assets/models",
+                                              "Model Files (*.obj *.glb)")
             if filepath:
                 try:
                     rel_path = os.path.relpath(filepath, "assets")

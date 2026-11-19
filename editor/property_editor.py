@@ -28,6 +28,9 @@ from editor.terrain_selection import TerrainHandle
 from engine import player_starts as start_rules
 from editor import state_values as _sv
 from editor.sky_assets import store_sky_image_in_project
+# Every Browse button picks from Fio's filesystem: loose files and the
+# ones packed in mounted .fiopak archives (editor/asset_dialog.py).
+from editor.asset_dialog import get_open_asset_file
 from editor.portal_links import sync_group_to
 from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
@@ -2359,7 +2362,7 @@ class PropertyEditor(QWidget):
                 sprite_btn.setFixedWidth(30)
 
                 def pick_sprite():
-                    fp, _ = QFileDialog.getOpenFileName(
+                    fp, _ = get_open_asset_file(
                         self, "Select Billboard Sprite", "assets/sprites",
                         "Image Files (*.png *.jpg *.jpeg *.bmp)"
                     )
@@ -2930,7 +2933,7 @@ class PropertyEditor(QWidget):
                 project_root, "assets", "textures", "effects"
             )
             os.makedirs(start, exist_ok=True)
-            fp, _ = QFileDialog.getOpenFileName(
+            fp, _ = get_open_asset_file(
                 self,
                 "Select Custom Effect GIF",
                 start,
@@ -4188,7 +4191,7 @@ class PropertyEditor(QWidget):
                 start_path = os.path.dirname(start_path)
             if not os.path.isdir(start_path):
                 start_path = _project_root()
-            filepath, _ = QFileDialog.getOpenFileName(
+            filepath, _ = get_open_asset_file(
                 self,
                 "Select Sky Image",
                 start_path,
@@ -4197,7 +4200,12 @@ class PropertyEditor(QWidget):
             if not filepath:
                 return
             try:
-                relative = store_sky_image_in_project(filepath, _project_root())
+                if (not os.path.isfile(filepath)
+                        and filepath.replace('\\', '/').startswith('assets/')):
+                    # Packed in a mounted .fiopak: referenced where it is.
+                    relative = filepath.replace('\\', '/')
+                else:
+                    relative = store_sky_image_in_project(filepath, _project_root())
             except OSError as exc:
                 QMessageBox.warning(
                     self, "Sky Image", f"Could not import sky image:\n{exc}")
@@ -5588,7 +5596,7 @@ class PropertyEditor(QWidget):
         def pick_proj():
             start = os.path.join(os.getcwd(), 'assets', 'sprites', 'monsters')
             os.makedirs(start, exist_ok=True)
-            fp, _ = QFileDialog.getOpenFileName(self, "Select Projectile Sprite", start,
+            fp, _ = get_open_asset_file(self, "Select Projectile Sprite", start,
                                                 "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)")
             if fp:
                 rel = os.path.relpath(fp, os.getcwd()).replace('\\', '/')
@@ -6213,7 +6221,7 @@ class PropertyEditor(QWidget):
             return
         start = os.path.join(_project_root(), 'assets', 'sprites')
         os.makedirs(start, exist_ok=True)
-        fp, _ = QFileDialog.getOpenFileName(
+        fp, _ = get_open_asset_file(
             self,
             "Select Sprite Image",
             start,
@@ -6383,7 +6391,9 @@ class PropertyEditor(QWidget):
                 choose(MODEL_PRESETS[name]['model_path'])
 
         def browse():
-            fp, _ = QFileDialog.getOpenFileName(
+            # Fio's own filesystem: models packed in a mounted .fiopak are
+            # listed with the loose ones (the system dialog cannot see them).
+            fp, _ = get_open_asset_file(
                 self, "Select Model", "assets/models", "Model Files (*.obj *.glb)"
             )
             if fp:
@@ -6472,7 +6482,7 @@ class PropertyEditor(QWidget):
             start = os.path.join(root, 'assets', 'textures', 'cookies')
             if not os.path.isdir(start):
                 start = os.path.join(root, 'assets', 'textures')
-            fp, _ = QFileDialog.getOpenFileName(
+            fp, _ = get_open_asset_file(
                 self, "Select Cookie Image", start,
                 "Images (*.png *.jpg *.jpeg *.bmp *.tga)")
             if not fp:
@@ -6513,7 +6523,7 @@ class PropertyEditor(QWidget):
             from engine.speaker_audio import speaker_sound_path
             start = os.path.join(_project_root(), 'assets', 'sounds')
             os.makedirs(start, exist_ok=True)
-            fp, _ = QFileDialog.getOpenFileName(
+            fp, _ = get_open_asset_file(
                 self,
                 "Select Sound File",
                 start,

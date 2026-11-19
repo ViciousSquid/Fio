@@ -394,6 +394,21 @@ def asset_exists(path) -> bool:
     return os.path.isfile(full) or _find(asset_member(full))[0] is not None
 
 
+def asset_archive_name(path):
+    """The file name of the ``.fiopak`` that serves *path*, or None when it is
+    a loose file (or no asset at all). A loose file wins, as it does when the
+    asset is read."""
+    full = os.fspath(path)
+    if os.path.isfile(full):
+        return None
+    found, _info = _find(asset_member(full))
+    if found is None:
+        return None
+    category, archive = found
+    source = archive if category == 'package' else getattr(archive, 'path', None)
+    return os.path.basename(os.fspath(source)) if source else None
+
+
 def asset_isdir(path) -> bool:
     """Whether *path* is an asset folder, on disk or inside an archive."""
     full = os.fspath(path)
