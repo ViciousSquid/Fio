@@ -219,6 +219,57 @@ def test_rotating_a_brush_does_not_rebuild_the_panel(panel):
     assert page_of(editor) is first
 
 
+def test_an_undo_checkpoint_does_not_rebuild_the_page_on_screen(panel):
+    """Every edit starts with save_state, which bumps the global I/O revision.
+    The page on screen used to fold that revision into its signature, so each
+    move or resize threw the page away and built another (~100 ms)."""
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+    first = page_of(editor)
+
+    io_system.bump_io_revision()
+    brush['pos'] = [64, 0, 0]
+    editor.set_object(brush)
+
+    assert page_of(editor) is first
+
+
+def test_a_new_connection_targeting_the_object_rebuilds_its_page(panel):
+    """The "Targeted by" line reads other entities' connections, so it is
+    part of the page's signature even though the global revision is not."""
+    host, editor = panel
+    target = make_brush('door')
+    source = make_brush('button', is_trigger=True)
+    host.state.brushes.extend([target, source])
+    editor.set_object(target)
+    first = page_of(editor)
+
+    conn = OutputConnection(output_name='OnTrigger', target_name='door',
+                            input_name='Open')
+    io_system.add_connection(source, conn)
+    editor.set_object(target)
+
+    assert page_of(editor) is not first
+
+
+def test_a_parked_page_is_rebuilt_after_an_edit_elsewhere(panel):
+    """Pickers on a page list other entities' names; a page parked before
+    any edit is not reused after one."""
+    host, editor = panel
+    a = make_brush('a')
+    b = make_brush('b')
+    host.state.brushes.extend([a, b])
+    editor.set_object(a)
+    page_a = page_of(editor)
+    editor.set_object(b)
+
+    io_system.bump_io_revision()
+    editor.set_object(a)
+    assert page_of(editor) is not page_a
+
+
 def test_a_displayed_property_change_does_rebuild(panel):
     host, editor = panel
     brush = make_brush()
