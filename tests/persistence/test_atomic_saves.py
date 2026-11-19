@@ -76,6 +76,9 @@ def test_a_failed_level_save_keeps_the_map(tmp_path):
         def stop_mover_preview(self):
             pass
 
+        def _refuse_file_command_in_play(self, what):
+            return False
+
         def show_toast(self, message, is_error=False, **_kw):
             toasts.append((message, is_error))
 

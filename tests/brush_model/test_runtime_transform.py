@@ -38,7 +38,7 @@ from engine import render_table as rt                              # noqa: E402
 from engine import savegame                                         # noqa: E402
 from engine.constants import brush_aabb_bounds                     # noqa: E402
 from engine.logic_thread import LogicThread                        # noqa: E402
-from engine.physics import SpatialGrid                             # noqa: E402
+from engine.spatial_grid import SpatialGrid                             # noqa: E402
 from engine.render_table import RenderTable                        # noqa: E402
 from engine.threaded_game_state import ThreadedGameState            # noqa: E402
 from tests.helpers.worlds import angled_brush, box_brush, make_thing  # noqa: E402
@@ -492,6 +492,13 @@ def test_collision_rows_follow_movers_and_skip_when_nothing_moved(crowd, monkeyp
         _tick(crowd, ticks)
         rows.refresh_movers()
         _same_rows(rows, CollisionRows(brushes, 1))
+    # A mover table an earlier test left for the collector moves the runtime
+    # stamp when it is finally collected (brush_placement._source_gone): that
+    # is a change, and where in this test it lands depends on what ran before.
+    # Collect now, and look once, so "nothing moved" below is true.
+    import gc
+    gc.collect()
+    rows.refresh_movers()
     gathers = {'n': 0}
     real_boxes = bp.BulkBoxes.boxes
 

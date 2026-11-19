@@ -1,12 +1,12 @@
-"""The Ball: a rolling, bouncing, tintable Prop, simulated by PhysicsWorld."""
+"""The Ball: a rolling, bouncing, tintable Prop, simulated by Soma."""
 import glm
 import numpy as np
 import pytest
 
 from engine.entity_table import _model_recipe, _model_transform_columns
 from engine.obj_loader import OBJLoader
-from engine.physics import (PhysicsWorld, SpatialGrid, quat_from_rotation,
-                            rotation_from_quat)
+from engine.physics.soma import Soma, quat_from_rotation, rotation_from_quat
+from engine.spatial_grid import SpatialGrid
 from engine.player import Player
 from engine.prop_entity import BALL_MODEL_PATH, BALL_NUMBERS_MODEL_PATH, Prop
 from engine.shaders import DEFAULT_SHADERS
@@ -27,7 +27,7 @@ def _wall(x=120.0):
 def _ball_world(pos=(0.0, 25.0, 0.0), statics=None, **props):
     grid = SpatialGrid(cell_size=512.0)
     grid.populate(statics or [_floor()])
-    world = PhysicsWorld(grid)
+    world = Soma(grid)
     ball = Prop.for_model(BALL_MODEL_PATH, pos=list(pos), properties=props)
     world.rebuild([{
         'pos': list(pos), 'size': [50.0, 50.0, 50.0],
@@ -173,11 +173,11 @@ def test_a_light_ball_bounces_lower_each_time_then_rests():
 def test_mass_takes_the_bounce_away():
     light, _, _ = _bounce_peaks(1.0)
     medium, _, _ = _bounce_peaks(5.0)
-    heavy, final, _ = _bounce_peaks(PhysicsWorld.HEAVY_MASS)
+    heavy, final, _ = _bounce_peaks(Soma.HEAVY_MASS)
     assert medium[0] < light[0]
     assert heavy == [] and final == pytest.approx(25.0)
-    assert PhysicsWorld.restitution(0.6, PhysicsWorld.HEAVY_MASS) == 0.0
-    assert PhysicsWorld.restitution(0.6, 1000.0) == 0.0
+    assert Soma.restitution(0.6, Soma.HEAVY_MASS) == 0.0
+    assert Soma.restitution(0.6, 1000.0) == 0.0
 
 
 # -- the player ----------------------------------------------------------------
@@ -193,7 +193,7 @@ def test_the_player_pushes_a_light_ball():
 
 @pytest.mark.parametrize('rolls', [True, False], ids=['ball', 'any-body'])
 def test_a_heavy_body_is_not_pushed_it_blocks_the_player(rolls):
-    world, ball = _ball_world(pos=(40.0, 25.0, 0.0), mass=PhysicsWorld.HEAVY_MASS,
+    world, ball = _ball_world(pos=(40.0, 25.0, 0.0), mass=Soma.HEAVY_MASS,
                               rolls=rolls)
     player = _player(-30.0, 120.0)
     for _ in range(30):
@@ -319,7 +319,7 @@ def test_the_numbered_ball_is_a_ball_at_twice_the_size():
     assert p['scale'] == [2.0, 2.0, 2.0]
 
 
-@pytest.mark.parametrize('count', [8, PhysicsWorld.FLOOR_BATCH_MIN_POINTS],
+@pytest.mark.parametrize('count', [8, Soma.FLOOR_BATCH_MIN_POINTS],
                          ids=['few-scalar', 'many-grouped'])
 def test_sunk_bodies_settle_the_same_scalar_or_grouped(monkeypatch, count):
     """Few bodies settle by raycasts; from the measured crossover on, by one
@@ -330,13 +330,13 @@ def test_sunk_bodies_settle_the_same_scalar_or_grouped(monkeypatch, count):
     real = grid.raycast_down
     monkeypatch.setattr(grid, 'raycast_down',
                         lambda *a, **k: calls.append(a) or real(*a, **k))
-    world = PhysicsWorld(grid)
+    world = Soma(grid)
     balls = [Prop.for_model(BALL_MODEL_PATH, pos=[-900.0 + 1800.0 * k / count, 0.0, 0.0])
              for k in range(count)]
     world.rebuild([{'pos': list(b.pos), 'size': [50.0] * 3, '_physics_body': True,
                     '_physics_entity': b, '_collision_mode': 'aabb'} for b in balls])
     assert all(b.pos[1] == pytest.approx(25.0) for b in balls)
-    if 2 * count >= PhysicsWorld.FLOOR_BATCH_MIN_POINTS:
+    if 2 * count >= Soma.FLOOR_BATCH_MIN_POINTS:
         assert calls == []
     else:
         assert len(calls) == 2 * count

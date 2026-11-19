@@ -13,6 +13,9 @@ from engine.asset_archives import asset_exists, asset_listdir   # noqa: E402
 pytestmark = [pytest.mark.qt, pytest.mark.gl, pytest.mark.integration]
 
 MAP = "maps/_SHOWCASE.json"
+# A map that names only a few of the shipped textures: the showcase now uses
+# all but a handful of them, too few to show the rest were not loaded.
+SPARSE_MAP = "maps/Wet_Decal_Test.json"
 IMAGES = (".png", ".jpg", ".jpeg", ".tga", ".gif")
 
 
@@ -20,7 +23,7 @@ def _loaded(session):
     renderer = session.view.renderer
     if renderer is None or not renderer.ready:
         pytest.skip("no OpenGL context")
-    prefix = "textures" + os.sep
+    prefix = "textures/"        # cache keys use '/' on every platform
     return {key[len(prefix):] for key in renderer.texture_manager if key.startswith(prefix)}
 
 
@@ -30,11 +33,15 @@ def _brush_textures(session):
     names = set()
     for brush in session.state.brushes:
         names.update(t for t in brush.get("textures", {}).values() if t and t != "caulk.jpg")
+        # An angled (convex) brush names its faces' textures on its planes.
+        for plane in (brush.get("geometry") or {}).get("planes", []):
+            if plane.get("texture") and plane["texture"] != "caulk.jpg":
+                names.add(plane["texture"])
     return {n for n in names if asset_exists(os.path.join("assets", "textures", n))}
 
 
 def test_a_loaded_map_has_its_textures_and_not_the_whole_folder(fio_session):
-    session = fio_session(MAP)
+    session = fio_session(SPARSE_MAP)
     loaded, used = _loaded(session), _brush_textures(session)
     assert len(used) > 3 and used <= loaded
     shipped = {f for f in asset_listdir(os.path.join("assets", "textures"))

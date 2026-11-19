@@ -48,6 +48,8 @@ class LogicMovers:
         self.mover_path_states = {}
         self._mover_brush_list = []
         self._door_brush_list = []
+        from engine.logic_groups import LogicGroups
+        self.groups = LogicGroups(logic)
 
     def _movers(self):
         """Return the dense mover table owned by this runtime."""
@@ -73,6 +75,9 @@ class LogicMovers:
 
     def _init_movers(self):
         logic = self.logic
+        # Grouped brushes that do not move ride their group's mover or door:
+        # entered as movers before the rows are built (engine.logic_groups).
+        self.groups.attach()
         self.mover_path_states = {}
         self.movers = []
         states = {}
@@ -108,6 +113,7 @@ class LogicMovers:
         for brush in logic.editor_state.brushes:
             if brush.get("is_mover"):
                 moved(brush)
+        self.groups.detach()
 
     def _init_doors(self):
         logic = self.logic
@@ -315,3 +321,6 @@ class LogicMovers:
     def _update_doors(self, delta: float):
         """Advance every door one tick."""
         self._movers().tick_doors(self.logic, delta)
+        # Movers and doors are where this tick put them: carry what is
+        # grouped with them.
+        self.groups.update()

@@ -31,7 +31,7 @@ from engine import render_table as rt
 from engine.constants import brush_aabb_bounds
 from engine.logic_render import LogicRender
 from engine.mover_table import travel_range
-from engine.physics import SpatialGrid
+from engine.spatial_grid import SpatialGrid
 from engine.render_table import RenderTable
 from engine.view_filters import brush_bounds
 from plugins.bigworld.cell import cells_for_aabb
@@ -445,6 +445,39 @@ def test_the_editor_pickers_hit_a_spinning_bar_where_it_is_drawn(main_window, mo
     _aim(view, monkeypatch, (0.0, 500.0, 150.0), (0.0, -1.0, 0.0))
     assert view.picking.get_object_at_3d(0, 0) is None
     assert view.picking.get_brush_face_at_coords(0, 0) is None
+
+
+@pytest.mark.qt
+@pytest.mark.parametrize("angled", [False, True])
+def test_face_pick_looks_through_a_volume_the_camera_is_inside(main_window, monkeypatch, angled):
+    """A face-mode click on a wall must texture that wall, not the volume
+    (a trigger, a fog or water volume, a room-sized brush) the camera is
+    standing in. A ray from inside used to hit a box at distance 0 -- with a
+    face chosen from where the camera stood -- and an angled one on the far
+    face it leaves through, so the click retextured a different brush."""
+    view = main_window.view_3d
+    wall = box_brush("wall", (-400, 0, 0), (32, 256, 512))
+    if angled:
+        volume = angled_brush("volume", (0, 0, 0), (300, 200, 300),
+                              clip_normal=(0.3, 1.0, 0.2), is_trigger=True)
+    else:
+        volume = box_brush("volume", (0, 0, 0), (300, 200, 300), is_trigger=True)
+    main_window.state.brushes[:] = [volume, wall]
+    main_window.state.things[:] = []
+    _aim(view, monkeypatch, (0.0, -40.0, 30.0), (-1.0, 0.0, 0.0))   # from inside
+    assert view.picking.get_brush_face_at_coords(0, 0) == (wall, 'east')
+    # From outside, the volume is still a surface like any other.
+    _aim(view, monkeypatch, (300.0, -40.0, 30.0), (-1.0, 0.0, 0.0))
+    picked = view.picking.get_brush_face_at_coords(0, 0)
+    assert picked is not None and picked[0] is volume
+
+
+def test_a_ray_starting_inside_a_box_enters_none_of_its_faces():
+    box = (0.0, 0.0, 0.0, 50.0, 50.0, 50.0)
+    assert bp.ray_box(box, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)) == 0.0
+    assert bp.ray_box_entry(box, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)) is None
+    assert bp.ray_box_entry(box, (-100.0, 0.0, 0.0), (1.0, 0.0, 0.0)) == pytest.approx(50.0)
+    assert bp.ray_box_entry(box, (-100.0, 0.0, 0.0), (-1.0, 0.0, 0.0)) is None
 
 
 @pytest.mark.qt

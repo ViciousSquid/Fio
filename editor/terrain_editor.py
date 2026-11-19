@@ -209,6 +209,15 @@ class TerrainEditorPanel(QWidget):
         top_button_layout = QHBoxLayout()
         top_button_layout.setSpacing(10)
 
+        # Top left: pop the panel out into a window of its own, or put it
+        # back in the Properties dock.
+        self.float_btn = QPushButton()
+        self.float_btn.setFixedSize(30, 30)
+        self.float_btn.setCursor(Qt.PointingHandCursor)
+        self.float_btn.clicked.connect(self.toggle_floating)
+        top_button_layout.addWidget(self.float_btn)
+        self.sync_float_button()
+
         regenerate_btn = QPushButton("Regenerate")
         regenerate_btn.setIcon(load_icon("assets/ui/controls/refresh.svg"))
         regenerate_btn.setStyleSheet("""
@@ -1097,7 +1106,7 @@ class TerrainEditorPanel(QWidget):
         tabs.currentChanged.connect(self._on_terrain_tab_changed)
 
         # Stamp file menu, shown beside the Sculpt/Stamp tab while it is
-        # active: saves the authored sculpt/paint layers to <map>.stamp so
+        # active: saves the authored sculpt/paint layers to <map>.paint so
         # they can be merged back after the base map changes.
         self.stamp_file_button = QPushButton("\U0001F4BE", tabs.tabBar())
         self.stamp_file_button.setToolTip("Import / export stamp file")
@@ -2128,7 +2137,7 @@ class TerrainEditorPanel(QWidget):
         return terrain_stamp.default_stamp_path(map_path, fallback)
 
     def export_stamp(self):
-        """Save the terrain's placed stamps to a .stamp file."""
+        """Save the terrain's paint and placed stamps to a .paint file."""
         if not self.terrain.paint_stamps:
             QMessageBox.information(
                 self, "Export Stamp",
@@ -2136,7 +2145,7 @@ class TerrainEditorPanel(QWidget):
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Stamp", self._default_stamp_path(),
-            "Terrain Stamps (*.stamp);;All Files (*)")
+            "Terrain Paint (*.paint);;All Files (*)")
         if not path:
             return
         if not os.path.splitext(path)[1]:
@@ -2147,15 +2156,15 @@ class TerrainEditorPanel(QWidget):
             QMessageBox.warning(self, "Export Stamp", f"Could not save stamp:\n{exc}")
             return
         if self.editor and self.editor.show_toast:
-            self.editor.show_toast(f"Stamp exported to {os.path.basename(path)}")
+            self.editor.show_toast(f"Stamp exported to {os.path.basename(path)}", level='success')
 
     def import_stamp(self):
-        """Merge a .stamp file's stamps into the current terrain."""
+        """Merge a .paint file's stamps into the current terrain."""
         default = self._default_stamp_path()
         start = default if os.path.exists(default) else os.path.dirname(default)
         path, _ = QFileDialog.getOpenFileName(
             self, "Import Stamp", start,
-            "Terrain Stamps (*.stamp);;All Files (*)")
+            "Terrain Paint (*.paint *.terrainstamps *.stamp);;All Files (*)")
         if not path:
             return
         try:
@@ -2188,16 +2197,40 @@ class TerrainEditorPanel(QWidget):
             editor.show_toast(
                 f"{os.path.basename(path)}: {changed} stamp(s) placed")
 
+    def toggle_floating(self):
+        """Pop out into a floating window, or dock again."""
+        editor = self.editor
+        if editor is not None and hasattr(editor, 'set_terrain_editor_floating'):
+            editor.set_terrain_editor_floating(not self.isWindow())
+
+    def sync_float_button(self):
+        floating = self.isWindow()
+        self.float_btn.setIcon(load_icon(
+            "assets/ui/controls/restore.svg" if floating
+            else "assets/ui/controls/maximize.svg"))
+        self.float_btn.setToolTip(
+            "Dock the Terrain Editor back in the Properties pane" if floating
+            else "Open the Terrain Editor in a floating window")
+
     def request_close(self):
         """Close the panel and disable its 3D brush."""
         view_3d = self.editor.view_3d if self.editor else None
         if view_3d is not None:
             view_3d.set_terrain_sculpt_active(False)
         if self.editor:
-            self.editor._close_current_overlay()
+            if hasattr(self.editor, 'close_terrain_editor'):
+                self.editor.close_terrain_editor()
+            else:
+                self.editor._close_current_overlay()
 
     def closeEvent(self, event):
-        """Disable the terrain brush when the panel is closed."""
+        """Disable the terrain brush when the panel is closed. The close box
+        of the floating window puts the panel back in its dock."""
+        if self.isWindow() and self.editor is not None and \
+                getattr(self.editor, 'terrain_editor_window', None) is self:
+            event.ignore()
+            self.editor.set_terrain_editor_floating(False)
+            return
         view_3d = self.editor.view_3d if self.editor else None
         if view_3d is not None:
             view_3d.set_terrain_sculpt_active(False)

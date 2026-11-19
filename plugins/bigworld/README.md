@@ -70,7 +70,7 @@ The system is deliberately built so ordinary Fio maps remain ordinary Fio maps.
 
 Big World does **not** replace Fio's spatial grid.
 
-The existing `engine.physics.SpatialGrid` already divides the world into 512-unit X/Z cells. Big World uses the same coordinate convention so there is only one underlying spatial partitioning model.
+The existing `engine.spatial_grid.SpatialGrid` already divides the world into 512-unit X/Z cells. Big World uses the same coordinate convention so there is only one underlying spatial partitioning model.
 
 Objects are indexed by their existing **stable UUIDs**. A brush spanning several cells is referenced from each relevant cell but remains one object.
 

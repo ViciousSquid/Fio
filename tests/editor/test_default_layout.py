@@ -153,10 +153,20 @@ def _saved_layout(window, version=None):
     return config
 
 
+@pytest.fixture(autouse=True)
+def _fresh_toasts():
+    """The console's history is the process's: start each test without the
+    toasts earlier tests left in it."""
+    from editor.debug_console import get_debug_logger
+    get_debug_logger().clear_buffer()
+    yield
+
+
 def _layout_toast(window, needle):
-    return any(needle in label.text().lower()
-               for label in window.findChildren(QLabel)
-               if label.text())
+    """Whether a toast (a Debug Console card) says *needle*."""
+    from editor.debug_console import get_debug_logger
+    return any(needle in text.lower()
+               for _serial, _level, text in get_debug_logger().toasts())
 
 
 def test_a_current_layout_is_restored(main_window, qt_app):

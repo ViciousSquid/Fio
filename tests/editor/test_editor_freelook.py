@@ -146,3 +146,128 @@ def test_typing_and_modified_z_do_not_start_freelook(editing):
         QTest.keyClick(editing.view, Qt.Key_Z, modifier)
         QTest.keyRelease(editing.view, modifier_key)
     assert not editing.view.editor_freelook_active
+
+
+def _turns(editing):
+    """Whether a mouse movement turns the editor camera now."""
+    view, logic, cursor = editing.view, editing.logic, editing.cursor
+    centre = view.mapToGlobal(view.rect().center())
+    view._poll_mouse_look()             # a capture re-centre may land first
+    camera = logic.camera.get_editor_camera()
+    before = (camera.yaw, camera.pitch)
+    cursor.set_pos(centre + QPoint(12, 5))
+    view._poll_mouse_look()
+    logic._step_frame(1 / 60)
+    return (camera.yaw, camera.pitch) != before
+
+
+def _right_physically(monkeypatch, down):
+    import engine.qt_game_view as gv
+    monkeypatch.setattr(gv.QApplication, 'mouseButtons',
+                        staticmethod(lambda: Qt.RightButton if down else Qt.NoButton))
+
+
+def test_right_drag_keeps_turning_when_a_panel_takes_the_focus(editing, monkeypatch):
+    """Focus moving to another widget of the window mid-drag (a panel being
+    rebuilt, a tool window) does not end the drag while the button is down."""
+    view = editing.view
+    _right_physically(monkeypatch, True)
+    button(view, QEvent.MouseButtonPress, True)
+    assert view.mouselook_active and view.hasFocus()
+    search = editing.window.scene_hierarchy.search_box
+    search.setFocus(Qt.OtherFocusReason)
+    QApplication.sendEvent(view, QFocusEvent(QEvent.FocusOut, Qt.OtherFocusReason))
+    assert view.mouselook_active and view.mouseGrabber() is view
+    assert _turns(editing), "the held right button stopped turning the camera"
+    button(view, QEvent.MouseButtonRelease, False)
+    assert not view.mouselook_active
+
+
+def test_a_z_latch_ends_on_focus_loss_but_a_held_drag_goes_on(editing, monkeypatch):
+    view = editing.view
+    _right_physically(monkeypatch, True)
+    press(view)                                         # latched
+    button(view, QEvent.MouseButtonPress, True)         # and held
+    QApplication.sendEvent(view, QFocusEvent(QEvent.FocusOut, Qt.OtherFocusReason))
+    assert not view.editor_freelook_active and view.mouselook_active
+    button(view, QEvent.MouseButtonRelease, False)
+    assert not view.mouselook_active
+
+
+def test_focus_loss_with_the_button_up_ends_the_look(editing, monkeypatch):
+    """A drag whose button is no longer down ends with the focus, as before."""
+    view = editing.view
+    _right_physically(monkeypatch, False)
+    button(view, QEvent.MouseButtonPress, True)
+    QApplication.sendEvent(view, QFocusEvent(QEvent.FocusOut, Qt.OtherFocusReason))
+    assert not view.mouselook_active and view.mouseGrabber() is not view
+
+
+def test_a_release_that_went_elsewhere_does_not_leave_the_look_stuck(editing):
+    view = editing.view
+    button(view, QEvent.MouseButtonPress, True)
+    assert view.mouselook_active
+    move = QMouseEvent(QEvent.MouseMove, view.rect().center() + QPoint(3, 0),
+                       Qt.NoButton, Qt.NoButton, Qt.NoModifier)
+    QApplication.sendEvent(view, move)                  # the button is up
+    assert not view.mouselook_active and view.mouseGrabber() is not view
+
+
+def test_a_right_press_takes_the_focus_for_wasd(editing):
+    view = editing.view
+    editing.window.scene_hierarchy.search_box.setFocus()
+    assert not view.hasFocus()
+    button(view, QEvent.MouseButtonPress, True)
+    assert view.hasFocus() and view.mouselook_active
+    button(view, QEvent.MouseButtonRelease, False)
+
+
+def _window_active(monkeypatch, editing, active, app_active=True):
+    import engine.qt_game_view as gv
+    monkeypatch.setattr(type(editing.window), 'isActiveWindow', lambda self: active)
+    state = Qt.ApplicationActive if app_active else Qt.ApplicationInactive
+    monkeypatch.setattr(gv.QApplication, 'applicationState', staticmethod(lambda: state))
+
+
+def test_right_drag_turns_when_another_fio_window_is_active(editing, monkeypatch):
+    """After the colour picker (or with a floating panel active) the keys
+    still reach the editor but the view's window is not the active one; on
+    macOS a right-click does not activate it. Holding the look, it turns."""
+    view = editing.view
+    _window_active(monkeypatch, editing, False)
+    button(view, QEvent.MouseButtonPress, True)
+    assert view.mouselook_active and view.mouseGrabber() is view
+    assert _turns(editing), "right-drag was dead with another Fio window active"
+    button(view, QEvent.MouseButtonRelease, False)
+
+
+def test_another_application_in_front_stops_the_look(editing, monkeypatch):
+    view = editing.view
+    _window_active(monkeypatch, editing, False, app_active=False)
+    button(view, QEvent.MouseButtonPress, True)
+    assert not _turns(editing)
+    button(view, QEvent.MouseButtonRelease, False)
+
+
+def test_a_right_press_activates_the_views_window(editing, monkeypatch):
+    view = editing.view
+    activated = []
+    _window_active(monkeypatch, editing, False)
+    monkeypatch.setattr(type(editing.window), 'activateWindow',
+                        lambda self: activated.append(self))
+    button(view, QEvent.MouseButtonPress, True)
+    assert activated == [editing.window]
+    button(view, QEvent.MouseButtonRelease, False)
+
+
+def test_a_look_that_cannot_turn_says_why_once(editing, monkeypatch):
+    import engine.qt_game_view as gv
+    logged = []
+    monkeypatch.setattr(gv, 'debug_log', lambda category, message: logged.append(message))
+    view = editing.view
+    _window_active(monkeypatch, editing, False, app_active=False)
+    button(view, QEvent.MouseButtonPress, True)
+    view._poll_mouse_look()
+    view._poll_mouse_look()
+    assert len(logged) == 1 and "app active=False" in logged[0]
+    button(view, QEvent.MouseButtonRelease, False)

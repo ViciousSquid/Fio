@@ -47,6 +47,9 @@ class RenderState:
         self.shot_ready = False
         self.player_underwater = False
         self.underwater_tint = [0.0, 0.4, 0.6]
+        #: Waist deep with the eye above the water: the lens's bottom-half
+        #: drops (engine.lens_water.wets_bottom_half).
+        self.player_wading = False
 
         # Player 2 (split-screen)
         self.player2_pos = glm.vec3(0, 0, 0)
@@ -166,6 +169,9 @@ class RenderState:
         self.shot_ready = False
         self.player_underwater = False
         self.underwater_tint = [0.0, 0.4, 0.6]
+        #: Waist deep with the eye above the water: the lens's bottom-half
+        #: drops (engine.lens_water.wets_bottom_half).
+        self.player_wading = False
         self.player2_pos = glm.vec3(0, 0, 0)
         self.player2_angle = 0.0
         self.player2_pitch = 0.0

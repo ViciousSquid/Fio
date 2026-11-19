@@ -255,17 +255,27 @@ class Thing:
         return self.__class__.get_pixmap()
 
     def _pixmap_for_path(self, sprite_path):
-        """Cached QPixmap for an authored sprite path (project-relative or absolute).
+        """Cached QPixmap for an authored, project-relative sprite path.
 
-        Returns None when the file is missing or unreadable. Shared by any
-        entity whose 2D icon comes from an authored path rather than its class.
+        Returns None when the file is missing or unreadable, or when the path
+        (map data) is absolute, a drive or UNC path, or leaves the project's
+        ``assets``/``plugins`` folders. Shared by any entity whose 2D icon
+        comes from an authored path rather than its class.
         """
         cache_key = ('sprite_path', sprite_path)
         if cache_key in self._pixmap_cache:
             return self._pixmap_cache[cache_key]
+        from engine.asset_paths import confined_path, safe_relative, warn_refused
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-        absolute_path = sprite_path if os.path.isabs(sprite_path) else os.path.join(project_root, sprite_path)
-        pixmap = load_pixmap(absolute_path) if asset_exists(absolute_path) else None
+        relative = safe_relative(sprite_path)
+        absolute_path = None
+        if relative is not None and relative.split('/')[0] in ('assets', 'plugins'):
+            top, _, rest = relative.partition('/')
+            absolute_path = confined_path(os.path.join(project_root, top), rest)
+        if absolute_path is None:
+            warn_refused(sprite_path, 'sprite')
+        pixmap = (load_pixmap(absolute_path)
+                  if absolute_path and asset_exists(absolute_path) else None)
         if pixmap is not None and pixmap.isNull():
             pixmap = None
         self._pixmap_cache[cache_key] = pixmap
@@ -514,6 +524,17 @@ class UnresolvedThing(Thing):
     def to_dict(self):
         data = copy.deepcopy(self._record)
         data['pos'] = [float(v) for v in self.pos]
+        # Its brush group is the editor's, not the missing plugin's: it
+        # follows edits as ``pos`` does (editor.brush_groups).
+        group = self.properties.get('brush_group')
+        props = data.get('properties')
+        if group or (isinstance(props, dict) and 'brush_group' in props):
+            if not isinstance(props, dict):
+                props = data['properties'] = {}
+            if group:
+                props['brush_group'] = group
+            else:
+                props.pop('brush_group', None)
         return data
 
     def duplicate(self, existing_names=()):
@@ -536,6 +557,9 @@ class Light(Thing):
     'show_radius',
     'casts_shadows',
     'shadow_map_size',
+    'cookie_enabled',
+    'cookie_texture',
+    'cookie_shadow_floor',
     )
 
     def __init__(self, pos=None, properties=None):
@@ -547,6 +571,12 @@ class Light(Thing):
         self.properties.setdefault('state', 'on')
         self.properties.setdefault('show_radius', False)
         self.properties.setdefault('casts_shadows', False)
+        # Projected image (engine.light_cookies): explicit opt-in, and
+        # independent of casts_shadows. With both, the image stays visible in
+        # the light's own shadow at cookie_shadow_floor brightness.
+        self.properties.setdefault('cookie_enabled', False)
+        self.properties.setdefault('cookie_texture', '')
+        self.properties.setdefault('cookie_shadow_floor', 0.15)
 
         # Parenting: attach this light to a mover brush by name.
         # When parent_mover is non-empty the logic thread moves this
@@ -707,16 +737,29 @@ class Decal(Thing):
     text_offset_x, text_offset_y
                 Text Offset: the words moved from the centre, right and up,
                 by up to half the box (-0.5 to 0.5) -- into a plate's panel.
+    emissive    Glows, as a screen or a lit sign does: the whole image is
+                painted in its own colours whatever light falls on it, and
+                its face emits light -- into the room in front of it, not onto
+                the wall it is on -- in the main colour of its image (the one
+                most of it is) times its tint.
+                Off (the default) it is not a light at all and costs nothing.
+    emissive_intensity, emissive_radius
+                How bright that light is and how far it reaches, as a
+                Light's intensity and radius. Read only while emissive.
     """
-    #: No icon and no box: what the decal paints is how the editor shows it
-    #: (placed, selected, dragged and nudged with the Decal tool).
+    #: No sprite in the 3D view: what the decal paints is how it shows there
+    #: (placed, selected, dragged and nudged with the Decal tool). The 2D
+    #: views mark it with :data:`ICON_PATH` instead.
     pixmap_path = None
+    #: The 2D views' marker: the Asset Browser's DECAL button icon.
+    ICON_PATH = "assets/decal_button.png"
     #: The Decal tool's selection; selected decals draw tinted.
     editor_selected = False
     EDITOR_PRIMARY_PROPERTIES = (
         'texture', 'width', 'height', 'depth',
         'yaw', 'pitch', 'roll', 'mirrored', 'opacity', 'tint', 'text', 'font', 'text_colour',
         'text_scale', 'text_offset_x', 'text_offset_y',
+        'emissive', 'emissive_intensity', 'emissive_radius',
     )
 
     def __init__(self, pos=None, properties=None):
@@ -741,6 +784,14 @@ class Decal(Thing):
         self.properties.setdefault('text_scale', 1.0)
         self.properties.setdefault('text_offset_x', 0.0)
         self.properties.setdefault('text_offset_y', 0.0)
+        self.properties.setdefault('emissive', False)
+        self.properties.setdefault('emissive_intensity', 1.0)
+        self.properties.setdefault('emissive_radius', 256.0)
+
+    def get_icon_pixmap(self):
+        """The 2D views' marker: the same icon as the Asset Browser's DECAL
+        button (``assets/decal_button.png``)."""
+        return self._pixmap_for_path(self.ICON_PATH)
 
     @staticmethod
     def default_texture():
@@ -1483,6 +1534,32 @@ class LogicSpawner(Thing):
         self.properties.setdefault('max_spawn', 0)
         # Extra properties merged into the spawned entity
         self.properties.setdefault('spawn_properties', {})
+        # Entities made by one Spawn, and how far around the spawn point
+        # they are scattered (0: all on it)
+        self.properties.setdefault('spawn_count', 1)
+        self.properties.setdefault('spawn_radius', 0.0)
+
+
+# =============================================================================
+# SHAKE ENTITY
+# =============================================================================
+
+class Shake(Thing):
+    """Shakes the screen when triggered (its Shake input, from any I/O -- a
+    trigger brush's OnTrigger, a button, a timer). Purely visual: the camera
+    view wobbles, dying away over ``duration`` seconds; the player, physics
+    and the world are untouched (engine.shake).
+
+    Properties: ``intensity`` 0..1 (how hard), ``duration`` seconds.
+    """
+    pixmap_path = "assets/sprites/shake.png"
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        from engine.shake import SHAKE_DEFAULTS
+        self.properties['type'] = 'shake'
+        for key, value in SHAKE_DEFAULTS.items():
+            self.properties.setdefault(key, value)
 
 
 # =============================================================================
@@ -1914,6 +1991,24 @@ class LogicState(Thing):
         if store_name:
             LogicState._persistent_registry[store_name] = dict(self._runtime_data)
 
+    @classmethod
+    def reset_stores(cls, things=()):
+        """Forget every store, and put the stores in *things* back to their
+        authored ``initial_data``.
+
+        The registry carries values from level to level while a game runs.
+        That is a play session's memory, so whoever starts or ends a session
+        calls this: without it a playtest's values were still there on the
+        next Play, were written into the map by the next save, and replaced
+        the ``initial_data`` of any map opened later that used the same store
+        name. The registry is cleared in place: plugins hold a reference to it.
+        """
+        cls._persistent_registry.clear()
+        for thing in things:
+            if isinstance(thing, cls):
+                thing._sync_from_persistent()
+                thing._sync_to_persistent()
+
     # ------------------------------------------------------------------
     # Reading
     # ------------------------------------------------------------------
@@ -2240,6 +2335,7 @@ ENTITY_TYPES = {
     'PathNode': PathNode,
     'LogicCamera': LogicCamera,
     'LogicSpawner': LogicSpawner,
+    'Shake': Shake,
     'Portal': Portal,
     'LogicState': LogicState,
 }
@@ -2256,7 +2352,7 @@ if _effect_class is not None:
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Prop', 'LevelChanger'],
-    'Environment': ['Light', 'Effect', 'Speaker', 'ReflectionProbe', 'Portal', 'Decal'],
+    'Environment': ['Light', 'Effect', 'Speaker', 'ReflectionProbe', 'Portal', 'Decal', 'Shake'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }

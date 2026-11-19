@@ -1,4 +1,5 @@
 import contextlib
+import html
 import math
 import os
 import json
@@ -7,7 +8,7 @@ import glm
 from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QTimer
 
-from editor.debug_console import debug_log
+from editor.debug_console import debug_log, get_debug_logger, write_console_dump
 from editor.portal_links import set_group_active, sync_group_to
 from engine.change_journal import touch
 from engine.items import ITEM_IDS
@@ -113,6 +114,7 @@ class ConsoleCommandHandler:
             'god': self.cmd_god,
             'buddha': self.cmd_buddha,
             'clear': self.cmd_clear,
+            'condump': self.cmd_condump,
             'quit': self.cmd_quit,
             'fps': self.cmd_fps,
             'map': self.cmd_map,
@@ -977,120 +979,213 @@ class ConsoleCommandHandler:
         """Draw a transient Rushford-font message on the third play-view message line."""
         self._cmd_view_message(args, "3")
 
-    def cmd_help(self, args):
-        
-        sep = '<span style="color:white;"> / </span>'
-        
-        help_text = f"""
-<i>Here is a full list of all available commands:</i><br><br>
+    # ===================================================================
+    # HELP
+    # ===================================================================
 
-<b style="color:orange;">clear</b> — Clear console<br>
-<b style="color:orange;">help</b> — Show this help<br>
-<b style="color:orange;">fps</b> — Toggle FPS display<br>
-<b style="color:orange;">hudstyle</b>{sep}<b style="color:orange;">hudtext</b> 0|1|2|3|4 [font] — Hide/select the HUD font (1 Rushford, 2 O.K. Retro, 3 HornetDisplay, 4 LCD/custom)<br>
-<b style="color:orange;">hudopacity</b> 0..100 — Set HUD opacity<br>
-<b style="color:orange;">hudfade</b> 0|1 — Enable/disable damage-driven HUD fading<br>
-<b style="color:orange;">message</b> &quot;text&quot; — Show a timed message on the first play-view line<br>
-<b style="color:orange;">message2</b> &quot;text&quot; — Show a timed message on the second play-view line<br>
-<b style="color:orange;">message3</b> &quot;text&quot; — Show a timed Rushford-font message on the third play-view line<br>
-<b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
-<b style="color:orange;">quit</b> — Quit Fio at once (no confirmation; unsaved changes are lost)<br>
-<b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
-<b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>
-<b style="color:orange;">load</b> [name] — Load a saved play session<br>
-<b style="color:orange;">quicksave</b>{sep}<b style="color:orange;">qs</b> — Save to the quicksave slot<br>
-<b style="color:orange;">quickload</b>{sep}<b style="color:orange;">ql</b> — Load the quicksave slot<br>
-<b style="color:orange;">saves</b> — List available save files<br>
-<b style="color:cyan;">=== Entity / I/O Commands ===</b><br>
-<b style="color:orange;">list</b>{sep}<b style="color:orange;">ents</b>{sep}<b style="color:orange;">ls</b>{sep}<b style="color:orange;">entities</b> — List all entities<br>
-<b style="color:orange;">ent</b>{sep}<b style="color:orange;">info</b> &lt;name&gt; — Show entity details<br>
-<b style="color:orange;">spawn</b> &lt;type&gt; — Spawn a new entity (thing)<br>
-<b style="color:orange;">delete</b>{sep}<b style="color:orange;">kill</b> &lt;name&gt; — Remove an entity from the scene; <b style="color:orange;">delete all</b> &lt;type&gt; — Remove all entities of a type (with confirmation)<br>
-<b style="color:orange;">set</b>{sep}<b style="color:orange;">setprop</b> &lt;ent&gt; &lt;prop&gt; &lt;val&gt; — Modify a property<br>
-<b style="color:orange;">get</b>{sep}<b style="color:orange;">getprop</b> &lt;ent&gt; &lt;prop&gt; — Read a property value<br>
-<b style="color:orange;">fire</b>{sep}<b style="color:orange;">ent_fire</b> &lt;ent&gt; &lt;output&gt; [param]<br>
-<b style="color:orange;">send</b> &lt;ent&gt; &lt;input&gt; [param]<br>
-<b style="color:orange;">trigger</b> — Smart toggle for doors/triggers<br>
-<b style="color:orange;">toggle</b> — Flip an entity's state<br>
-<b style="color:cyan;">=== Connection Management ===</b><br>
-<b style="color:orange;">outputs</b> &lt;ent&gt; — List available outputs for type<br>
-<b style="color:orange;">inputs</b> &lt;ent&gt; — List available inputs for type<br>
-<b style="color:orange;">connections</b>{sep}<b style="color:orange;">list_connections</b> &lt;ent&gt; — Show active I/O links<br>
-<b style="color:orange;">connect</b> &lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt; [delay]<br>
-<b style="color:orange;">disconnect</b> &lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt;<br>
-<b style="color:cyan;">=== Monsters ===</b><br>
-<b style="color:orange;">botdebug</b> [on|off] — Floating live decisions: overview and one tab per bot<br>
-<b style="color:orange;">monsterdebug</b> [on|off] — Floating Monster Debug window: overview, inspector, perception, combat, patrol (F7 in play)<br>
-<b style="color:orange;">monster_kill</b> &lt;name&gt; — Instantly kill a named monster<br>
-<b style="color:orange;">monster_revive</b> &lt;name&gt; — Restore a named monster to full health<br>
-<b style="color:orange;">monster_revive_all</b> — Restore every monster in the level<br>
-<b style="color:cyan;">=== Visibility & Tint ===</b><br>
-<b style="color:orange;">hide</b> &lt;name&gt; — Hide a brush or entity<br>
-<b style="color:orange;">show</b> &lt;name&gt; — Show a hidden brush or entity<br>
-<b style="color:orange;">tint</b> &lt;name&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; — Set tint colour (0-255) or 'clear'<br>
-<b style="color:cyan;">=== Rendering ===</b><br>
-<b style="color:orange;">ss</b> — Toggle split-screen mode (F9)<br>
-<b style="color:orange;">r_list</b> — Show all current render settings<br>
-<b style="color:orange;">r_renderer</b> [name] — List the registered renderers, or switch to one live<br>
-<b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> [on|off] — Wireframe display (the Display box); off returns to the previous mode<br>
-<b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
-<b style="color:orange;">r_waterquality</b>{sep}<b style="color:orange;">waterquality</b> [cheap|expensive] — Debug cap: cheap forces all water cheap; expensive lets each brush's High quality decide<br>
-<b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
-<b style="color:cyan;">=== View Distance &amp; Far-Plane Fog ===</b><br>
-<i>Fog always reaches full opacity before the clip, so pulling the view
-distance in never makes geometry pop. Fire these from a logic_command
-entity to drive them from the I/O system.</i><br>
-<b style="color:orange;">r_viewdistance</b>{sep}<b style="color:orange;">culldistance</b>{sep}<b style="color:orange;">cullfogdist</b>{sep}<b style="color:orange;">cullfogdistance</b>{sep}<b style="color:orange;">farplane</b> &lt;units&gt; — Max render/cull/fog distance<br>
-<b style="color:orange;">r_distancefog</b>{sep}<b style="color:orange;">distancefog</b> [on|off] — Toggle far-plane fog<br>
-<b style="color:orange;">r_fogdistance</b>{sep}<b style="color:orange;">fogdist</b> &lt;start&gt; &lt;end&gt;{sep}<b style="color:orange;">auto</b> — Where fog ramps up and goes opaque<br>
-<b style="color:orange;">r_fogstart</b> &lt;units&gt;{sep}<b style="color:orange;">auto</b> — Where fog begins<br>
-<b style="color:orange;">r_fogend</b> &lt;units&gt;{sep}<b style="color:orange;">auto</b> — Where fog is fully opaque<br>
-<b style="color:orange;">r_fogdensity</b> &lt;value&gt; — 0 = linear ramp; higher thickens the near half<br>
-<b style="color:orange;">r_fogcolor</b> &lt;R&gt; &lt;G&gt; &lt;B&gt; — Fog colour, and the sky behind it<br>
-<b style="color:orange;">ambient</b> &lt;level&gt;{sep}&lt;R&gt; &lt;G&gt; &lt;B&gt;{sep}<b style="color:orange;">off</b> — Global omnidirectional light (no entity added)<br>
-<b style="color:cyan;">=== Movement & Physics ===</b><br>
-<b style="color:orange;">physics</b> on/off/toggle — Player movement physics<br>
-<b style="color:orange;">phys_gravity</b> &lt;units/s²&gt; — Global dynamic-body gravity<br>
-<b style="color:orange;">phys_timescale</b> &lt;multiplier&gt; — Dynamic-body simulation speed (0 pauses)<br>
-<b style="color:orange;">phys_friction</b> &lt;multiplier&gt; — Global friction multiplier<br>
-<b style="color:orange;">phys_damping</b> &lt;multiplier&gt; — Global damping multiplier<br>
-<b style="color:orange;">phys_sleep</b> on/off/toggle — Automatic body sleeping<br>
-<b style="color:orange;">phys_info</b> — Show global physics controls<br>
-<b style="color:orange;">phys_reset</b> — Restore physics defaults<br>
-<b style="color:orange;">phys_engine</b> [name] — List the registered physics, or choose the one the next Play uses<br>
-<b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
-<b style="color:orange;">cam</b>{sep}<b style="color:orange;">camera</b> [overhead|fp] [seconds] — Tween between overhead &amp; first person (e.g. 'cam 2')<br>
-<b style="color:cyan;">=== Portals ===</b><br>
-<b style="color:orange;">portal_list</b> — List all portals and their links<br>
-<b style="color:orange;">portal_create</b> &lt;name1&gt; &lt;name2&gt; [x y z] — Create a linked portal pair<br>
-<b style="color:orange;">portal_link</b> &lt;name&gt; &lt;target&gt; — Link an existing portal to another<br>
-<b style="color:orange;">portal_color</b> &lt;name&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; — Set rim color (0-255)<br>
-<b style="color:orange;">portal_enable</b> &lt;name&gt; — Activate a portal<br>
-<b style="color:orange;">portal_disable</b> &lt;name&gt; — Deactivate a portal<br>
-<b style="color:orange;">portal_delete</b> &lt;name&gt; [and_pair] — Remove portal(s)<br>
-<b style="color:cyan;">=== Debug ===</b><br>
-<b style="color:orange;">sg</b> — Toggle spatial grid visualisation<br>
-<b style="color:orange;">hitboxes</b> [1|0] — Outline monsters' actual hit spheres (pink)<br>
-<b style="color:orange;">reflections</b> [1|0] — All screen-space reflections (water, wet decals) on or off<br>
-<b style="color:orange;">decalfade</b> [distance] — How far wet decals reflect (default 1536; 0 = never)<br>
-<b style="color:orange;">god</b> — Toggle invincibility<br>
-<b style="color:orange;">buddha</b> — Toggle buddha mode (health cannot go below 2)<br>
-<b style="color:orange;">noclip</b> — Toggle noclip<br>
-<b style="color:orange;">notarget</b> — Toggle notarget (monsters ignore the player)<br>
-"""
-        # Append any console commands plugins registered (API 1.4.0).
+    #: What ``help`` says about each built-in command, grouped by section:
+    #: ``(title, intro, [(names, usage), ...])``.  *names* are keys of
+    #: :attr:`commands` (the first is the main name, the rest its aliases) and
+    #: *usage* is the inert console HTML after them.  This table only words
+    #: the help: the list itself comes from :meth:`accepted_commands`, the
+    #: same table the dispatcher reads, and a command missing here is still
+    #: listed (under "Other Commands"), so help cannot leave one out.
+    HELP_SECTIONS = (
+        (None, None, [
+            (('clear',), '— Clear console'),
+            (('help',), '— Show this help'),
+            (('condump',), '[N] — Write the console history (or only its last N messages) '
+                           'to logs/console.txt; an existing file is never overwritten'),
+            (('fps',), '— Toggle FPS display'),
+            (('bind',), '&lt;key&gt; &lt;command&gt; — Bind a key to a console command '
+                        '(no arguments opens the bind dialog)'),
+            (('pos',), '— Open the live camera-position window'),
+            (('hudstyle', 'hudtext'), '0|1|2|3|4 [font] — Hide/select the HUD font '
+                                      '(1 Rushford, 2 O.K. Retro, 3 HornetDisplay, 4 LCD/custom)'),
+            (('hudopacity',), '0..100 — Set HUD opacity'),
+            (('hudfade',), '0|1 — Enable/disable damage-driven HUD fading'),
+            (('message',), '&quot;text&quot; — Show a timed message on the first play-view line'),
+            (('message2',), '&quot;text&quot; — Show a timed message on the second play-view line'),
+            (('message3',), '&quot;text&quot; — Show a timed Rushford-font message on the third play-view line'),
+            (('map',), '&lt;name&gt; — Load a different map'),
+            (('quit',), '— Quit Fio at once (no confirmation; unsaved changes are lost)'),
+        ]),
+        ('Save / Load (Play Session)', None, [
+            (('save', 'savegame'), '[name] — Save the current play session (Play Mode only)'),
+            (('load', 'loadgame'), '[name] — Load a saved play session'),
+            (('quicksave', 'qs'), '— Save to the quicksave slot'),
+            (('quickload', 'ql'), '— Load the quicksave slot'),
+            (('saves', 'listsaves'), '— List available save files'),
+        ]),
+        ('Entity / I/O Commands', None, [
+            (('list', 'ents', 'ls', 'entities'), '— List all entities'),
+            (('ent', 'info'), '&lt;name&gt; — Show entity details'),
+            (('spawn',), '&lt;type&gt; — Spawn a new entity (thing)'),
+            (('delete', 'kill'), '&lt;name&gt; — Remove an entity from the scene; '
+                                 '<b style="color:orange;">delete all</b> &lt;type&gt; — '
+                                 'Remove all entities of a type (with confirmation)'),
+            (('set', 'setprop'), '&lt;ent&gt; &lt;prop&gt; &lt;val&gt; — Modify a property'),
+            (('get', 'getprop'), '&lt;ent&gt; &lt;prop&gt; — Read a property value'),
+            (('fire', 'ent_fire'), '&lt;ent&gt; &lt;output&gt; [param]'),
+            (('send',), '&lt;ent&gt; &lt;input&gt; [param]'),
+            (('trigger',), '— Smart toggle for doors/triggers'),
+            (('toggle',), "— Flip an entity's state"),
+        ]),
+        ('Connection Management', None, [
+            (('outputs',), '&lt;ent&gt; — List available outputs for type'),
+            (('inputs',), '&lt;ent&gt; — List available inputs for type'),
+            (('connections', 'list_connections'), '&lt;ent&gt; — Show active I/O links'),
+            (('connect',), '&lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt; [delay]'),
+            (('disconnect',), '&lt;src&gt; &lt;out&gt; &lt;tgt&gt; &lt;in&gt;'),
+        ]),
+        ('Monsters', None, [
+            (('botdebug',), '[on|off] — Floating live decisions: overview and one tab per bot'),
+            (('monsterdebug',), '[on|off] — Floating Monster Debug window: overview, inspector, '
+                                'perception, combat, patrol (F7 in play)'),
+            (('monster_kill', 'kill_monster'), '&lt;name&gt; — Instantly kill a named monster'),
+            (('monster_revive',), '&lt;name&gt; — Restore a named monster to full health'),
+            (('monster_revive_all',), '— Restore every monster in the level'),
+        ]),
+        ('Visibility &amp; Tint', None, [
+            (('hide',), '&lt;name&gt; — Hide a brush or entity'),
+            (('show',), '&lt;name&gt; — Show a hidden brush or entity'),
+            (('tint',), "&lt;name&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; — Set tint colour (0-255) or 'clear'"),
+        ]),
+        ('Rendering', None, [
+            (('ss',), '— Toggle split-screen mode (F9)'),
+            (('showglasses',), '[on|off|toggle] — Show or hide the player glasses billboards (Play Mode only)'),
+            (('r_list',), '— Show all current render settings'),
+            (('r_info',), '— Detailed renderer status (same as r_list)'),
+            (('r_renderer',), '[name] — List the registered renderers, or switch to one live'),
+            (('r_wireframe', 'wireframe'), '[on|off] — Wireframe display (the Display box); '
+                                           'off returns to the previous mode'),
+            (('r_shadows', 'shadows'), '— Toggle shadows'),
+            (('r_waterquality', 'waterquality'), "[cheap|expensive] — Debug cap: cheap forces all water "
+                                                 "cheap; expensive lets each brush's High quality decide"),
+            (('r_vsync', 'vsync'), '— Toggle VSync (saved to settings)'),
+            (('r_clearcolor',), 'r g b — Set background colour'),
+        ]),
+        ('View Distance &amp; Far-Plane Fog',
+         '<i>Fog always reaches full opacity before the clip, so pulling the view '
+         'distance in never makes geometry pop. Fire these from a logic_command '
+         'entity to drive them from the I/O system.</i>', [
+            (('r_viewdistance', 'viewdistance', 'r_culldistance', 'culldistance',
+              'r_cullfogdist', 'cullfogdist', 'r_cullfogdistance', 'cullfogdistance',
+              'farplane'), '&lt;units&gt; — Max render/cull/fog distance'),
+            (('r_distancefog', 'distancefog'), '[on|off] — Toggle far-plane fog'),
+            (('r_fogdistance', 'fogdistance', 'fogdist'), '&lt;start&gt; &lt;end&gt; | auto — '
+                                                          'Where fog ramps up and goes opaque'),
+            (('r_fogstart', 'fogstart'), '&lt;units&gt; | auto — Where fog begins'),
+            (('r_fogend', 'fogend'), '&lt;units&gt; | auto — Where fog is fully opaque'),
+            (('r_fogdensity', 'fogdensity'), '&lt;value&gt; — 0 = linear ramp; higher thickens the near half'),
+            (('r_fogcolor', 'r_fogcolour', 'fogcolor', 'fogcolour'), '&lt;R&gt; &lt;G&gt; &lt;B&gt; — '
+                                                                     'Fog colour, and the sky behind it'),
+            (('r_ambient', 'ambient'), '&lt;level&gt; | &lt;R&gt; &lt;G&gt; &lt;B&gt; | off — '
+                                       'Global omnidirectional light (no entity added)'),
+        ]),
+        ('Movement &amp; Physics', None, [
+            (('physics',), 'on/off/toggle — Player movement physics'),
+            (('phys_gravity',), '&lt;units/s²&gt; — Global dynamic-body gravity'),
+            (('phys_timescale',), '&lt;multiplier&gt; — Dynamic-body simulation speed (0 pauses)'),
+            (('phys_friction',), '&lt;multiplier&gt; — Global friction multiplier'),
+            (('phys_damping',), '&lt;multiplier&gt; — Global damping multiplier'),
+            (('phys_sleep',), 'on/off/toggle — Automatic body sleeping'),
+            (('phys_info', 'phys'), '— Show global physics controls'),
+            (('phys_reset',), '— Restore physics defaults'),
+            (('phys_engine',), '[name] — List the registered physics, or choose the one the next Play uses'),
+            (('setpos', 'teleport'), 'x y z'),
+            (('cam', 'camera'), "[overhead|fp] [seconds] — Tween between overhead &amp; first person "
+                                "(e.g. 'cam 2')"),
+        ]),
+        ('Portals', None, [
+            (('portal_list',), '— List all portals and their links'),
+            (('portal_create',), '&lt;name1&gt; &lt;name2&gt; [x y z] — Create a linked portal pair'),
+            (('portal_link',), '&lt;name&gt; &lt;target&gt; — Link an existing portal to another'),
+            (('portal_color',), '&lt;name&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; — Set rim color (0-255)'),
+            (('portal_enable',), '&lt;name&gt; — Activate a portal'),
+            (('portal_disable',), '&lt;name&gt; — Deactivate a portal'),
+            (('portal_delete',), '&lt;name&gt; [and_pair] — Remove portal(s)'),
+        ]),
+        ('Debug', None, [
+            (('sg',), '— Toggle spatial grid visualisation'),
+            (('hitboxes',), "[1|0] — Outline monsters' actual hit spheres (pink)"),
+            (('reflections',), '[1|0] — All screen-space reflections (water, wet decals) on or off'),
+            (('decalfade',), '[distance] — How far wet decals reflect (default 1536; 0 = never)'),
+            (('showcollision', 'collisionvis', 'collision'), '[on|off|mesh|aabb|all] — Collision wireframes '
+                                                             '(AABB boxes yellow, mesh triangles cyan)'),
+            (('god',), '— Toggle invincibility'),
+            (('buddha',), '— Toggle buddha mode (health cannot go below 2)'),
+            (('noclip',), '— Toggle noclip'),
+            (('notarget',), '— Toggle notarget (monsters ignore the player)'),
+        ]),
+    )
+
+    def plugin_commands(self):
+        """``{name: help_text}`` for the plugin commands the console would run.
+
+        The same test :meth:`_dispatch_plugin_command` makes: a command of an
+        enabled plugin (API 1.4.0), and not one a built-in command of the same
+        name shadows -- :meth:`handle_command` tries :attr:`commands` first.
+        """
         try:
             mgr = self._plugin_manager()
-            cmds = mgr.console_commands() if mgr is not None else {}
+            registered = mgr.console_commands() if mgr is not None else {}
         except Exception:
-            cmds = {}
-        if cmds:
-            help_text += '<b style="color:cyan;">=== Plugin Commands ===</b><br>'
-            for name, entry in sorted(cmds.items()):
-                chelp = entry.get("help", "")
-                suffix = f" — {chelp}" if chelp else ""
-                help_text += f'<b style="color:orange;">{name}</b>{suffix}<br>'
-        debug_log("Info", help_text)
+            registered = {}
+        return {name: str(entry.get("help", "") or "")
+                for name, entry in registered.items()
+                if name not in self.commands}
+
+    def accepted_commands(self):
+        """Every command name :meth:`handle_command` would run, sorted.
+
+        Built-in commands and their aliases (one table, :attr:`commands`,
+        whether or not they need Play Mode) and the plugin commands.
+        """
+        return sorted(set(self.commands) | set(self.plugin_commands()))
+
+    def help_sections(self):
+        """``help``'s content: ``[(title, intro, [(names, usage), ...])]``.
+
+        :attr:`HELP_SECTIONS` with every name the dispatcher does not accept
+        dropped, then an "Other Commands" section for any built-in command
+        the table does not word, then the plugin commands.
+        """
+        accepted = set(self.commands)
+        sections, worded = [], set()
+        for title, intro, entries in self.HELP_SECTIONS:
+            kept = []
+            for names, usage in entries:
+                names = tuple(n for n in names if n in accepted)
+                if names:
+                    kept.append((names, usage))
+                    worded.update(names)
+            if kept:
+                sections.append((title, intro, kept))
+        others = sorted(accepted - worded)
+        if others:
+            sections.append(('Other Commands', None, [((name,), '') for name in others]))
+        plugin = self.plugin_commands()
+        if plugin:
+            sections.append(('Plugin Commands', None, [
+                ((name,), f'— {html.escape(text, quote=False)}' if text else '')
+                for name, text in sorted(plugin.items())
+            ]))
+        return sections
+
+    def cmd_help(self, args):
+        """help — List every command the console accepts (see help_sections)."""
+        sep = '<span style="color:white;"> / </span>'
+        lines = ['<i>Here is a full list of all available commands:</i><br><br>']
+        for title, intro, entries in self.help_sections():
+            if title:
+                lines.append(f'<b style="color:cyan;">=== {title} ===</b><br>')
+            if intro:
+                lines.append(f'{intro}<br>')
+            for names, usage in entries:
+                label = sep.join(f'<b style="color:orange;">{name}</b>' for name in names)
+                lines.append(f'{label} {usage}<br>' if usage else f'{label}<br>')
+        debug_log("Info", "\n".join(lines))
 
     # ===================================================================
     # HELPER: Get renderer safely
@@ -2478,6 +2573,60 @@ entity to drive them from the I/O system.</i><br>
     def cmd_clear(self, args):
         self.main_window.debug_console.clear()
 
+    #: Where ``condump`` writes, under the install folder (or the per-user
+    #: data folder when the install is read-only; see editor/user_paths.py).
+    LOGS_DIR_NAME = 'logs'
+
+    def _logs_dir(self):
+        """The folder ``condump`` writes to: ``logs`` beside settings.ini and
+        the crash log -- the install folder while it is writable, else the
+        same name under the per-user data folder (autosaves follow the same
+        rule)."""
+        from editor.user_paths import writable_dir
+        return writable_dir(self.main_window.root_dir, self.LOGS_DIR_NAME)
+
+    def cmd_condump(self, args):
+        """condump [N] -- Write the console history, or its last N messages,
+        to logs/console.txt; an existing file gets a new name, never replaced.
+
+        The history is the debug logger's buffer, which keeps the newest
+        :data:`editor.debug_console.HISTORY_LIMIT` messages (``clear`` empties
+        it).  The echo of this ``condump`` line itself is left out.
+        """
+        usage = "Usage: condump [N]  (N: how many of the latest messages, a whole number above 0)"
+        arg = args.strip()
+        last = None
+        if arg:
+            try:
+                last = int(arg)
+            except ValueError:
+                last = 0
+            if last <= 0 or len(arg.split()) != 1:
+                debug_log("Error", usage)
+                return
+        logger = get_debug_logger()
+        entries = logger.get_buffer()
+        if entries and logger.is_command_echo(entries[-1], 'condump'):
+            entries = entries[:-1]
+        if last is not None:
+            entries = entries[-last:]
+        if not entries:
+            debug_log("Warning", "condump: the console history is empty; nothing written.")
+            return
+        try:
+            path = write_console_dump(self._logs_dir(), entries)
+        except OSError as exc:
+            debug_log("Error", f"condump: could not write the console log: {exc}")
+            return
+        count = len(entries)
+        noun = "message" if count == 1 else "messages"
+        note = ""
+        if last is not None and last > count:
+            note = f" (asked for {last}; the history held only {count})"
+        elif last is None and len(logger.get_buffer()) >= logger.history_limit():
+            note = f" (the console keeps only its last {logger.history_limit()} messages)"
+        debug_log("Info", f"Dumped {count} console {noun} to {path}{note}")
+
     def cmd_quit(self, args):
         """quit — Quit Fio immediately, without asking (unsaved work is lost)."""
         # After this command returns: it may be running inside a key event of
@@ -2622,6 +2771,9 @@ entity to drive them from the I/O system.</i><br>
                 return None
             with open(fp, 'r', encoding='utf-8') as f:
                 raw_level = json.load(f)
+            # The map's placed terrain stamps are kept beside it.
+            from engine import terrain_stamp
+            raw_level = terrain_stamp.join_level(raw_level, fp)
         except Exception as exc:
             debug_log("Warning", f"save: could not read base map for delta: {exc}")
             return None
@@ -2651,7 +2803,7 @@ entity to drive them from the I/O system.</i><br>
                                   save_mode=save_mode, base_level=base_level)
         debug_log("Info" if ok else "Error", msg)
         if ok:
-            self.main_window.show_toast(f"Saved: {os.path.basename(path)}")
+            self.main_window.show_toast(f"Saved: {os.path.basename(path)}", level='success')
         return ok
 
     def cmd_quicksave(self, args):
@@ -2680,7 +2832,7 @@ entity to drive them from the I/O system.</i><br>
                                        base_level=self._base_level())
             debug_log("Info" if ok else "Error", msg)
             if ok:
-                self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
+                self.main_window.show_toast(f"Loaded: {os.path.basename(path)}", level='success')
                 self.main_window.sync_camera_mode_combo()
                 self.main_window.update_all_ui()
             return ok
@@ -2752,7 +2904,7 @@ entity to drive them from the I/O system.</i><br>
                     ok, msg = False, f"Load failed: {exc}"
         debug_log("Info" if ok else "Error", msg)
         if ok:
-            self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
+            self.main_window.show_toast(f"Loaded: {os.path.basename(path)}", level='success')
             self.main_window.sync_camera_mode_combo()
             self.main_window.update_all_ui()
         return ok

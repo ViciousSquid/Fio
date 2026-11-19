@@ -17,7 +17,7 @@ import re
 
 import pytest
 
-from engine.physics import PhysicsWorld
+from engine.physics.soma import Soma
 from engine.spatial import (SIM_TIER_KEY, TIER_DISTANT, clear_live_flag,
                             set_authored_flag, set_live_flag)
 from engine.spatial_grid import SpatialGrid
@@ -142,7 +142,7 @@ def test_a_tier_stamp_is_heard_through_the_journal():
 
 def test_a_steps_look_at_flags_is_the_journal_not_the_bodies():
     """With nothing journalled, a step reads no entity's properties at all."""
-    world = PhysicsWorld(SpatialGrid())
+    world = Soma(SpatialGrid())
     reads = []
 
     class Watched(dict):

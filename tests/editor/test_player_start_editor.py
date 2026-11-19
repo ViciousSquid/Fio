@@ -483,7 +483,7 @@ def test_sky_image_dropdown_options_are_in_requested_order(window):
     combo = window.property_editor._widgets["player_start_sky_image"]
 
     assert [combo.itemText(i) for i in range(combo.count())] == [
-        "None", "Cloudy sky", "Space"]
+        "None", "Clouds", "Space"]
     assert [combo.itemData(i) for i in range(combo.count())] == [
         "",
         "assets/backgrounds/cloudy-sky-panorama.webp",
@@ -526,6 +526,6 @@ def test_sky_image_custom_entry_can_be_cleared_to_none(window):
     assert combo.currentText() == "None"
     assert combo.currentData() == ""
     assert [combo.itemText(i) for i in range(combo.count())] == [
-        "None", "Cloudy sky", "Space"]
+        "None", "Clouds", "Space"]
     assert not panel._widgets["player_start_sky_image_clear"].isEnabled()
     assert window.view_3d.sky_image_path == ""

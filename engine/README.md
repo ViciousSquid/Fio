@@ -92,11 +92,14 @@
 | `core/tables.py` | Lookups into the render and entity tables. |
 | `core/visibility.py` | Culling, pass classification, light selection, portal cameras. |
 | `forward/__init__.py` | Exports `ForwardRenderer`. |
-| `forward/distance.py` | The Wireframe and Points display modes. |
 | `forward/instancing.py` | Instance buffers. |
 | `forward/lighting.py` | Lights and shadow maps. |
 | `forward/occlusion.py` | Chained occlusion queries over the cell groups (play mode). |
-| `forward/passes.py` | Draw passes. |
+| `forward/passes.py` | Draw passes shared by every display mode (glow, terrain, models, sprites, effects, water, glass, fog). |
+| `forward/textured/` | The Textured display mode (and the Unlit render mode). |
+| `forward/solid_lit/` | The Solid Lit display mode, and every untextured brush. |
+| `forward/wireframe/` | The Wireframe display mode: brush edges coloured by distance. |
+| `forward/overlay/` | The Overlay display mode. |
 | `forward/portals.py` | Stencil portals. |
 | `forward/renderer.py` | `ForwardRenderer`, the built-in renderer. |
 | `forward/shaders.py` | The forward renderer's shaders. |

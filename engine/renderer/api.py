@@ -65,6 +65,10 @@ FRAME_INPUT = {
                            'outlines) draws only these rows. The editor\'s view '
                            'filters leave rows out; a light left out still lights',
     'thing_hidden': 'bool per entity row: hidden or collected in the running world',
+    'hide_hidden_lights': 'optional bool: while editing, a light whose thing_hidden '
+                          'row is set (hidden with H) does not light. Off (the '
+                          'default), hidden lights light the editor; in play a '
+                          'hidden light never lights',
     'light_focus': 'optional (x, y, z): only lights within light_range of this '
                    'point light the frame, nearest first, so every shader\'s '
                    'light cap keeps the closest (the host passes the player in play)',
@@ -91,12 +95,13 @@ FRAME_INPUT = {
                           'single-view GPU occlusion history must not run',
     'render_mode': 'one of engine.constants.RENDER_MODE_* (lit, unlit, wireframe, vertex)',
     'brush_display_mode': "the editor's Display box: 'Textured' (everything as "
-                          "normal), 'Solid Lit' (brushes shaded, no textures), "
-                          "'Wireframe' (the world as lines), 'Points' (the "
-                          "world as points) or 'Overlay' (Textured with the "
-                          "world's wireframe drawn over it). How each looks is "
-                          "the renderer's choice. The host publishes 'Textured' "
-                          "in play unless Wireframe, Points or Overlay is on",
+                          "normal), 'Solid Lit' (everything shaded in its "
+                          "colours, nothing textured), 'Wireframe' (the world "
+                          "as lines) or 'Overlay' (Textured with the world's "
+                          "wireframe drawn over it). How each looks is the "
+                          "renderer's choice; one it does not know is drawn "
+                          "as 'Textured'. The host publishes 'Textured' in "
+                          "play unless Wireframe or Overlay is on",
     'show_triggers_as_solid': 'bool: draw trigger volumes filled rather than outlined',
     'show_sprites_in_play_mode': 'bool: keep editor entity sprites visible in play',
     'grid_visible': 'bool: draw the editor grid',
@@ -180,6 +185,29 @@ class SelectionOverlay:
     effect_billboard: Optional[EffectBillboard] = None
     #: Where the transform gizmo is drawn; None draws none.
     gizmo_pos: Optional[Vec3] = None
+
+
+#: The version of the renderer contract (:class:`Renderer`, the frame input
+#: and the descriptors here), apart from the plugin API's
+#: (plugins.api.API_VERSION). A renderer says which it was written against
+#: with a ``contract_version`` attribute, as a physics does
+#: (engine.physics.PHYSICS_CONTRACT_VERSION); the registry refuses one
+#: written for a newer contract or another major version
+#: (contract_compatible).
+RENDERER_CONTRACT_VERSION = "1.0.0"
+
+
+def _version_info(value):
+    parts = []
+    for piece in str(value).strip().split('.')[:3]:
+        digits = ''.join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+RENDERER_CONTRACT_VERSION_INFO = _version_info(RENDERER_CONTRACT_VERSION)
 
 
 @runtime_checkable
@@ -291,3 +319,44 @@ class Renderer(Protocol):
         """Debug wireframes of collision shapes: GL_LINES ``vertices`` (n, 3)
         float32 and ``runs`` of ``(first, count, colour)``
         (``engine.overlay_geometry.collision_wireframes``)."""
+
+
+def missing_members(renderer: Any) -> list:
+    """The members of :class:`Renderer` *renderer* lacks, sorted: an
+    attribute it does not have, or a method it has that cannot be called.
+    Empty for an object that satisfies the contract."""
+    import typing
+    names = (typing.get_protocol_members(Renderer)
+             if hasattr(typing, 'get_protocol_members')
+             else [n for n in vars(Renderer) if not n.startswith('_')]
+             + list(getattr(Renderer, '__annotations__', {})))
+    missing = []
+    for name in sorted(set(names)):
+        try:
+            value = getattr(renderer, name)
+        except AttributeError:
+            missing.append(name)
+            continue
+        except Exception:
+            continue                    # a property that raised: it is there
+        if callable(getattr(Renderer, name, None)) and not callable(value):
+            missing.append(name)
+    return missing
+
+
+def contract_compatible(renderer: Any) -> Optional[str]:
+    """Why *renderer* cannot run on this contract, or None when it can.
+
+    One that does not say (no ``contract_version``) is taken as written for
+    this one. One written for a newer version, or another major version --
+    or, while the major is 0, another minor version -- is refused."""
+    declared = getattr(renderer, 'contract_version', None)
+    if declared is None or callable(declared):
+        return None
+    wanted = _version_info(declared)
+    have = RENDERER_CONTRACT_VERSION_INFO
+    if (wanted[0] != have[0] or wanted > have
+            or (have[0] == 0 and wanted[1] != have[1])):
+        return ("written for renderer contract %s; this Fio has %s"
+                % (declared, RENDERER_CONTRACT_VERSION))
+    return None

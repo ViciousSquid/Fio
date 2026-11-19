@@ -474,6 +474,10 @@ class Terrain:
         self.selected_stamp_ids: set = set()
         self._paint_display: Dict[Tuple[int, int], np.ndarray] = {}
         self._stamp_dirty_chunks: set = set()
+        # Grass slots whose only change is a stamp added over them:
+        # slot -> (allocation order, table.grass_epoch) when it was marked.
+        self._grass_thin: dict = {}
+        self._paint_added_only = False
         # What a drag does not move, by chunk (see _drag_layers).
         self._drag_cache: dict = {}
         # Chunks whose *stored* paint has a selected stamp in it; None when
@@ -1298,9 +1302,13 @@ class Terrain:
         # the grass, thinning out across a feathered one. (Drawn after the
         # rolls above, so painting changes no other blade.)
         if self.texture_paint_maps:
-            covered = self._paint_cover_at(bx, bz)
+            # Asked at the blade's published (float32) position and rolled
+            # from it, so thinning the published blades under a new stamp
+            # (_thin_grass) keeps exactly the blades a rebuild would.
+            px, pz = bx.astype(np.float32), bz.astype(np.float32)
+            covered = self._paint_cover_at(px.astype(np.float64), pz.astype(np.float64))
             if covered is not None:
-                grows = rng.random(count) >= covered
+                grows = self._grass_grow_roll(px, pz) >= covered
                 if not np.all(grows):
                     bx, bz = bx[grows], bz[grows]
                     size_roll, yaw_roll, tint_roll = (
@@ -1324,6 +1332,32 @@ class Terrain:
             slot, data[:, 1], np.repeat(tuft_raw, per_tuft),
             np.repeat(tuft_slope, per_tuft))
         return data
+
+    @staticmethod
+    def _grass_grow_roll(x, z):
+        """A blade's fixed roll in 0..1 against the paint over it, from its
+        position alone: paint more over it and the same blades go."""
+        v = np.sin(x.astype(np.float64) * 12.9898 + z.astype(np.float64) * 78.233) * 43758.5453
+        return v - np.floor(v)
+
+    def _thin_grass(self, slot: int):
+        """A stamp was added over this chunk and nothing else changed: paint
+        only ever covers more, so its grass is the grass it has without the
+        blades now under paint. Costs a paint lookup per blade instead of
+        growing the chunk again (noise heights for every tuft and blade).
+        ``None`` when the chunk has no current grass to thin."""
+        held = self.products.grass.get(int(slot))
+        if held is None or held[1] != int(self.table.order[slot]):
+            return None
+        blades = held[2]
+        if not len(blades):
+            return blades
+        covered = self._paint_cover_at(blades[:, 0].astype(np.float64),
+                                       blades[:, 2].astype(np.float64))
+        if covered is None:
+            return blades
+        grows = self._grass_grow_roll(blades[:, 0], blades[:, 2]) >= covered
+        return blades if np.all(grows) else blades[grows]
 
     def _paint_cover_at(self, x, z):
         """How covered by paint the ground is at world points, 0..1 (the
@@ -1357,8 +1391,17 @@ class Terrain:
         coords = table.coord[:cap]
         live = table.live[:cap]
         dirty = table.grass_dirty[:cap]
+        thin = self._grass_thin
+        added_only = self._paint_added_only
         for cx, cz in keys:
-            dirty[live & (coords[:, 0] == cx) & (coords[:, 1] == cz)] = True
+            hit = live & (coords[:, 0] == cx) & (coords[:, 1] == cz)
+            for slot in np.flatnonzero(hit).tolist():
+                if added_only and (not dirty[slot] or slot in thin):
+                    # Its grass is current but for this stamp: thin it.
+                    thin[slot] = (int(table.order[slot]), table.grass_epoch)
+                else:
+                    thin.pop(slot, None)
+            dirty[hit] = True
 
     def _ground_colors(self, slot: int, y: np.ndarray, raw: np.ndarray,
                        slope: np.ndarray) -> np.ndarray:
@@ -1545,8 +1588,13 @@ class Terrain:
 
     def _build_grass(self, slot: int):
         """Publish one chunk's deterministic grass instances."""
-        self.products.put(self.products.grass, slot, self.table.order[slot],
-                          self._generate_grass_blades(slot))
+        blades = None
+        thin = self._grass_thin.pop(int(slot), None)
+        if thin == (int(self.table.order[slot]), self.table.grass_epoch):
+            blades = self._thin_grass(slot)
+        if blades is None:
+            blades = self._generate_grass_blades(slot)
+        self.products.put(self.products.grass, slot, self.table.order[slot], blades)
         self.table.grass_dirty[slot] = False
 
     # -- the builder thread ---------------------------------------------------
@@ -2878,8 +2926,13 @@ class Terrain:
         else:
             self._invalidate_stamp_index()
         # A new stamp goes on top of everything already baked, so it is baked
-        # straight onto the current paint rather than recomposing its chunks.
-        self._bake_stamp(stamp, None, None)
+        # straight onto the current paint rather than recomposing its chunks
+        # -- and the grass under it is thinned, not grown again.
+        self._paint_added_only = True
+        try:
+            self._bake_stamp(stamp, None, None)
+        finally:
+            self._paint_added_only = False
         display = self._stamp_chunks(stamp) & self._paint_display.keys()
         if display:
             self._bake_stamp(stamp, self._paint_display, display)
@@ -3115,6 +3168,10 @@ class Terrain:
 
 
     
+    #: The editor's lock: a locked terrain is not picked in the 3D view and
+    #: its editor does not open, as a locked brush's does not. Saved with it.
+    locked = False
+
     def to_dict(self) -> dict:
         # While the editor is previewing a Big World fill the live bounds are
         # widened to the whole world; persist the *authored* bounds instead so a
@@ -3155,6 +3212,11 @@ class Terrain:
             'appearance': self.appearance.to_dict(),
             'custom_biome': self.biome.to_dict()
         }
+        if self.locked:
+            # The editor's lock ("Prevent selection/editing"), as a brush's.
+            # Written only when set, so an unlocked terrain's record is
+            # exactly what it was.
+            data['lock'] = True
         # Sculpt offsets — serialise sparse dict as list of [gx, gz, offset]
         if self.sculpt_offsets:
             # Rebuilt only when the sculpt changes (same key as _dense_sculpt).
@@ -3220,6 +3282,7 @@ class Terrain:
 
     def from_dict(self, data: dict):
         self.enabled = data.get('enabled', True)
+        self.locked = bool(data.get('lock', False))
         self.solid = data.get('solid', True)
         self.seed = data.get('seed', 42)
         self.noise = PerlinNoise(self.seed)

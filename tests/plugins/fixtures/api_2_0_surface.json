@@ -156,6 +156,7 @@
   "GlobalStore",
   "HEAVY_MASS",
   "NO_PHYSICS",
+  "PHYSICS_CONTRACT_VERSION",
   "PHYSICS_EVENTS",
   "Physics",
   "PlayerState",

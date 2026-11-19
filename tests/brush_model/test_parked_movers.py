@@ -42,7 +42,7 @@ from engine import mover_table as mt                               # noqa: E402
 from engine.change_journal import VISIBILITY, touch                 # noqa: E402
 from engine.constants import brush_aabb_bounds                     # noqa: E402
 from engine.logic_thread import LogicThread                        # noqa: E402
-from engine.physics import SpatialGrid                             # noqa: E402
+from engine.spatial_grid import SpatialGrid                             # noqa: E402
 from engine.spatial import PARKED_HIDDEN_KEY                       # noqa: E402
 from engine.threaded_game_state import ThreadedGameState            # noqa: E402
 from tests.helpers.worlds import box_brush                          # noqa: E402

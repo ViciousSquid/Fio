@@ -16,6 +16,8 @@ same accessors can be reused by anything else that needs to touch a face's
 mapping.
 """
 
+import os
+
 import numpy as np
 
 from engine import brush_faces
@@ -38,6 +40,27 @@ _TAG_EXTENT_AXES = {
     'west': (2, 1), 'east': (2, 1),
     'down': (0, 2), 'top': (0, 2),
 }
+
+
+def texture_name(path):
+    """The name a face stores for the texture file at *path*.
+
+    Face textures are named relative to ``assets/textures`` -- the renderer
+    loads ``assets/textures/<name>`` -- so an image in a subfolder keeps its
+    folder: ``decals/Signage.png``, ``Dev/512.jpg``. Storing only the file
+    name made every texture outside the top folder (all of textures/decals)
+    load as the plain default texture. A path outside ``assets/textures``
+    falls back to its file name, as before.
+    """
+    text = os.fspath(path).replace('\\', '/')
+    marker = 'assets/textures/'
+    lowered = text.lower()
+    at = lowered.rfind('/' + marker)
+    if at >= 0:
+        return text[at + 1 + len(marker):]
+    if lowered.startswith(marker):
+        return text[len(marker):]
+    return os.path.basename(text)
 
 
 def face_plane(brush, face_key):

@@ -9,7 +9,7 @@ because once any other test in the session has imported the runtime the module
 is in ``sys.modules`` for good.
 
 **Shared infrastructure.** Big World streams the same 512-unit columns
-:class:`engine.physics.SpatialGrid` buckets collision brushes into, and it does
+:class:`engine.spatial_grid.SpatialGrid` buckets collision brushes into, and it does
 so through the *engine's* implementation of that convention rather than a copy
 of its own. If the two ever disagreed about which cell a brush is in, streaming
 would activate one set of geometry and collide against another.
@@ -193,7 +193,7 @@ def test_bigworld_reads_the_cell_maths_from_the_engine():
 
 def test_the_collision_grid_and_bigworld_agree_on_every_brush():
     """The point of sharing: one brush, one answer about which cells it is in."""
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     from plugins.bigworld.manager import BigWorldManager
 
     brushes = [
@@ -224,7 +224,7 @@ def test_the_collision_grid_keeps_parked_brushes():
     Rebuilding the grid mid-play (a model-collision toggle) used to drop every
     brush Big World had parked, permanently — even once its cell came back.
     """
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     from engine.spatial import PARKED_HIDDEN_KEY
 
     parked = {'id': 'parked', 'pos': [0, 0, 0], 'size': [64, 64, 64],

@@ -70,7 +70,8 @@ import os
 
 import numpy as np
 
-from engine.constants import is_water_brush, normalize_color, water_high_quality
+from engine.constants import (is_water_brush, normalize_color, water_flow_velocity,
+                              water_high_quality)
 from engine.spatial import authored_hidden
 import functools
 import itertools
@@ -350,6 +351,10 @@ _COLUMNS = (
     #: The brush's "High quality" flag: depth-based colour, shoreline foam,
     #: caustics and screen-space reflections (see engine.renderer.WATER_QUALITIES).
     ('water_high_quality', (), bool, False),
+    #: "Direction": the surface's velocity, world (x, z) units a second --
+    #: its direction times its Flow Speed (engine.constants.
+    #: water_flow_velocity); (0, 0) is still water.
+    ('water_flow', (2,), np.float32, 0.0),
     ('glass_color', (3,), np.float32, 0.0),
     #: opacity, distortion, refraction, roughness, fresnel
     ('glass_params', (5,), np.float32, 0.0),
@@ -422,6 +427,58 @@ def _can_adopt(peer, rows, epoch, dirty_objects, peer_dirty):
     return peer._epoch == epoch or peer_dirty is not None
 
 
+def emissive_brushes(brushes):
+    """The brushes of *brushes* that are lights: emissive Glow and Water
+    brushes whose amounts make light. For a host that draws without a
+    :class:`RenderTable` (the Android player); looks at every brush, so it is
+    called when the world changes, not every frame."""
+    return [brush for brush in brushes
+            if isinstance(brush, dict) and brush.get('emissive')
+            and _brush_class_bits(brush) & (CLASS_GLOW | CLASS_WATER)
+            and _emissive_light(brush) is not None]
+
+
+def brush_lights_of(emissive):
+    """:meth:`RenderTable.brush_lights` for the brushes
+    :func:`emissive_brushes` found: the same five arrays, read from the
+    brushes where they are now. None for none."""
+    if not emissive:
+        return None
+    from engine import brush_placement
+    k = len(emissive)
+    positions = np.empty((k, 3), dtype=np.float64)
+    colours = np.empty((k, 3), dtype=np.float32)
+    params = np.empty((k, 2), dtype=np.float32)
+    on = np.empty(k, dtype=bool)
+    sizes = np.empty(k, dtype=np.float32)
+    for row, brush in enumerate(emissive):
+        cx, cy, cz, hx, hy, hz = brush_placement.world_box(brush)
+        water = bool(_brush_class_bits(brush) & CLASS_WATER)
+        positions[row] = (cx, cy + (hy if water else 0.0), cz)
+        if water:
+            base = normalize_color(brush.get('water_tint', [0.0, 0.4, 0.6]))
+        else:
+            base = normalize_color(brush.get('tint') or brush.get('colour'),
+                                   default=[1.0, 1.0, 1.0])
+        colours[row] = [min(max(c, 0.0), 1.0) for c in base]
+        params[row] = _emissive_light(brush)
+        on[row] = not brush.get('hidden', False)
+        sizes[row] = max(hx, hy, hz)
+    return positions, colours, params, on, sizes
+
+
+def _emissive_light(brush):
+    """``(intensity, radius)`` of an emissive Glow brush's light, or None for
+    amounts that make no light (zero, or not numbers)."""
+    intensity = _num(brush.get('emissive_intensity'), 1.0)
+    radius = _num(brush.get('emissive_radius'), 256.0)
+    if not (math.isfinite(intensity) and math.isfinite(radius)):
+        return None
+    if intensity <= 0.0 or radius <= 0.0:
+        return None
+    return (intensity, radius)
+
+
 class RenderTable:
     """A dense projection of a brush list, kept current by change, not polling.
 
@@ -433,7 +490,7 @@ class RenderTable:
 
     __slots__ = (tuple(name for name, *_ in _COLUMNS) + (
         'generation', 'count', 'ids', 'slot_of_id', 'brushes',
-        'dynamic_slots', 'geometry_records', 'geometry_serial',
+        'dynamic_slots', 'emissive_slots', '_emissive_of', '_emit_colour', '_emit_params', 'geometry_records', 'geometry_serial',
         'geometry_version',
         '_tex_ids', '_tex_names',
         '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', 'refs',
@@ -488,6 +545,16 @@ class RenderTable:
         #: re-read per frame.  Recomputed whenever the table reconciles, from
         #: :data:`CLASS_DYNAMIC`, so it cannot drift from the classification.
         self.dynamic_slots = np.empty(0, dtype=np.int32)
+        #: The emissive Glow and Water brushes -- the rows that are lights --
+        #: kept apart from the per-row columns: a row pays nothing for a
+        #: light it is not. ``_emissive_of`` is what the rows resolved
+        #: (brush identity -> its light's colour and ``(intensity, radius)``);
+        #: the three arrays are that, by slot, rebuilt when rows change. All
+        #: empty in a map with none, and then nothing looks at them again.
+        self._emissive_of = {}
+        self.emissive_slots = np.empty(0, dtype=np.int32)
+        self._emit_colour = np.empty((0, 3), dtype=np.float32)
+        self._emit_params = np.empty((0, 2), dtype=np.float32)
         #: Dense geometry records keyed directly by geometry_id. AABB
         #: brushes have no record; their geometry_id stays -1.
         self.geometry_records: list = []
@@ -829,6 +896,7 @@ class RenderTable:
         uv_has = np.empty((count, 6), dtype=bool)
         colour = np.empty((count, 3), dtype=np.float32)
         glow = np.empty((count, 3), dtype=np.float32)
+        emissive_of = self._emissive_of
         geo_epoch = np.empty(count, dtype=np.int64)
         special = []                     # (row, slot, brush, class bits)
         intern = self.intern_texture
@@ -867,6 +935,21 @@ class RenderTable:
             glow_base = normalize_color(tint or brush.get('colour'),
                                         default=[1.0, 1.0, 1.0])
             glow[row] = [min(c * intensity, 10.0) for c in glow_base]
+            if b & (CLASS_GLOW | CLASS_WATER) and brush.get('emissive'):
+                # Neon, or glowing water: the brush lights its surroundings
+                # in the colour it glows -- a Glow brush's tint or colour,
+                # water's Water Tint. Only an emissive brush of those two
+                # kinds is read any further.
+                emit = _emissive_light(brush)
+                if emit is not None:
+                    base = (normalize_color(brush.get('water_tint', [0.0, 0.4, 0.6]))
+                            if b & CLASS_WATER else glow_base)
+                    emissive_of[id(brush)] = (
+                        tuple(min(max(c, 0.0), 1.0) for c in base), emit)
+                elif emissive_of:
+                    emissive_of.pop(id(brush), None)
+            elif emissive_of:
+                emissive_of.pop(id(brush), None)
 
             # The brush's own geometry epoch, which every change to its shape
             # bumps (brush_geometry._invalidate) whether or not anything marks
@@ -893,7 +976,8 @@ class RenderTable:
     #: The special-shader columns, and the fill a row of no special class
     #: holds (nothing reads them for such a row, but a rebuild gives it too).
     _SPECIAL_COLUMNS = ('water_tint', 'water_params', 'water_plane', 'water_wave_spread',
-                        'water_high_quality', 'glass_color', 'glass_params', 'fog_color', 'fog_params')
+                        'water_high_quality', 'water_flow', 'glass_color', 'glass_params',
+                        'fog_color', 'fog_params')
 
     def _resolve_special_rows(self, idx, special):
         """Water, glass and fog shader state -- only for rows of those classes.
@@ -920,6 +1004,7 @@ class RenderTable:
                 self.water_wave_spread[slot] = min(max(
                     _num(brush.get('water_wave_spread'), 1.0), 0.0), 1.0)
                 self.water_high_quality[slot] = water_high_quality(brush)
+                self.water_flow[slot] = water_flow_velocity(brush)
             if b & CLASS_GLASS:
                 self.glass_color[slot] = normalize_color(
                     brush.get('glass_color', [0.7, 0.85, 0.95]))
@@ -1051,6 +1136,58 @@ class RenderTable:
             self.refresh_edited(brushes, edited)
         return self.hidden[:n]
 
+    def _index_emissive(self):
+        """Put the emissive brushes the rows resolved into slot order. With
+        none -- any map without neon or glowing water -- there is nothing to
+        do; with some, the brushes are walked once (rows changed)."""
+        found = self._emissive_of
+        if not found:
+            if len(self.emissive_slots):
+                self.emissive_slots = np.empty(0, dtype=np.int32)
+                self._emit_colour = np.empty((0, 3), dtype=np.float32)
+                self._emit_params = np.empty((0, 2), dtype=np.float32)
+            return
+        slots, colours, params, live = [], [], [], {}
+        for slot, brush in enumerate(self.brushes[:self.count]):
+            entry = found.get(id(brush))
+            if entry is not None:
+                live[id(brush)] = entry
+                slots.append(slot)
+                colours.append(entry[0])
+                params.append(entry[1])
+        self._emissive_of = live            # brushes that have gone are dropped
+        self.emissive_slots = np.asarray(slots, dtype=np.int32)
+        self._emit_colour = np.asarray(colours, dtype=np.float32).reshape(-1, 3)
+        self._emit_params = np.asarray(params, dtype=np.float32).reshape(-1, 2)
+
+    def is_emissive(self, slots):
+        """Which of *slots* are emissive brushes (a boolean per slot)."""
+        return np.isin(slots, self.emissive_slots)
+
+    def brush_lights(self):
+        """The lights the emissive Glow brushes are, or None when there are
+        none: ``(positions (k, 3), colours (k, 3), params (k, 2), on (k,),
+        sizes (k,))``.
+
+        A brush's light stands at its centre, where it is now (a mover's
+        neon moves with it), and is off while the brush is hidden. Its size
+        is half the brush's longest side: the light comes from the length of
+        the tube, not from a point at its middle, so it fades in over that
+        distance instead of making a bright spot on whatever is nearest.
+        """
+        slots = self.emissive_slots
+        if not len(slots):
+            return None
+        positions = self.center[slots]              # a copy: fancy-indexed
+        half = self.half[slots]
+        water = (self.class_bits[slots] & CLASS_WATER) != 0
+        if water.any():
+            # Water glows from its surface, not from the middle of its depth.
+            positions[water, 1] += half[water, 1]
+        return (positions, self._emit_colour,
+                self._emit_params, ~self.hidden[slots],
+                half.max(axis=1).astype(np.float32))
+
     def shown(self):
         """``(mask, slots)`` of the rows not hidden, over the live rows.
 
@@ -1083,6 +1220,10 @@ class RenderTable:
         self.brushes = list(peer.brushes)
         self.refs = peer.refs.copy()
         self.dynamic_slots = peer.dynamic_slots.copy()
+        self._emissive_of = dict(peer._emissive_of)
+        self.emissive_slots = peer.emissive_slots.copy()
+        self._emit_colour = peer._emit_colour.copy()
+        self._emit_params = peer._emit_params.copy()
         self.geometry_records = list(peer.geometry_records)
         self.geometry_serial = peer.geometry_serial.copy()
         self.geometry_version = peer.geometry_version   # same records
@@ -1243,6 +1384,7 @@ class RenderTable:
         self.count = n
         self.dynamic_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_DYNAMIC).astype(np.int32)
+        self._index_emissive()
         self._forget_row_changes()    # mapping or row set may have changed
         self.generation += 1
         self.material_version += 1
@@ -1313,6 +1455,7 @@ class RenderTable:
         if slots:
             self.dynamic_slots = np.flatnonzero(
                 self.class_bits[:self.count] & CLASS_DYNAMIC).astype(np.int32)
+            self._index_emissive()
 
     def _refresh_in_place(self, brushes, n, epoch, dirty_objects, rows_known=False):
         """Apply a precise journal without a reconcile, when that is exact.

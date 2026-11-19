@@ -36,10 +36,11 @@ import glm
 import numpy as np
 
 from . import brush_placement as _placement
+from . import mesh_columns
 from .brush_placement import collision_shape, shared_bulk_boxes, world_bounds
 from .mover_table import travel_range
 from .constants import is_water_brush, brush_aabb_bounds
-from .spatial import CELL_SIZE, CellIndex, authored_hidden
+from .spatial import CELL_SIZE, CellIndex, authored_hidden, cell_range
 
 _chain = chain.from_iterable
 
@@ -151,6 +152,7 @@ class _CellRows:
         #: What it is now is asked of it (SpatialGrid.columns).
         self.shaped = np.fromiter(
             ('geometry' in b or bool(b.get('is_mover') or b.get('is_door'))
+             or b.get('_collision_mode') == 'mesh'
              for b in brushes), dtype=np.bool_, count=count)
         self.movers = []
         for row, brush in enumerate(brushes):
@@ -298,6 +300,21 @@ class _CellRows:
 
 
 _EMPTY_CELL_ROWS = _CellRows({})
+
+
+#: The most cells one mover's or door's travel is filed under.  A travel is
+#: filed in every cell it can reach so that a query finds the brush with one
+#: bucket lookup; that is a few cells for any real door or lift, about 2,000
+#: for a travel of a million units along an axis, and without a limit it is
+#: every cell a typo'd ``distance`` spans.  Past this the brush is filed where
+#: it stands and handled as off range (see :meth:`SpatialGrid.populate`).
+MAX_TRAVEL_CELLS = 1 << 16
+
+
+def _travel_cells(box, cell_size):
+    """How many cells the XZ footprint of *box* overlaps."""
+    cx0, cz0, cx1, cz1 = cell_range(box[0], box[2], box[3], box[5], cell_size)
+    return (cx1 - cx0 + 1) * (cz1 - cz0 + 1)
 
 
 def _off_range_filed():
@@ -495,6 +512,9 @@ class SpatialGrid:
         self._box_rows = _EMPTY_BOX_ROWS
         # The map's terrain, or a callable giving it (see set_terrain).
         self._terrain = None
+        # Bumped by populate/clear: half of world_version (shape queries).
+        self._generation = 0
+        self._shape_keys = {}
 
     def set_terrain(self, terrain):
         """The map's terrain, for :meth:`terrain_heights`: the terrain, a
@@ -523,6 +543,79 @@ class SpatialGrid:
         if terrain is None:
             return None
         return terrain.get_heights_at_safe(x, z)
+
+    # ------------------------------------------------------------------
+    # Shapes (WORLD_QUERIES): the world for a physics fed shapes up front
+    # ------------------------------------------------------------------
+
+    @property
+    def world_version(self):
+        """Changes whenever the set of solid shapes or any shape's authored
+        form changes (a populate, an edit): ask :meth:`solid_shapes` again
+        then. A mover or door moving does not change it (:meth:`shape_pose`)."""
+        return (self._generation, _placement.authored_generation)
+
+    def solid_shapes(self):
+        """Every solid brush once: ``[(key, kind, data, centre, moves)]``.
+
+        *key* is an opaque int for :meth:`shape_pose`; *centre* the shape's
+        authored centre, the origin *data* is given about. *kind* is
+        ``'box'`` (*data*: half extents), ``'convex'`` (*data*: its vertices)
+        or ``'mesh'`` (*data*: its triangles, three vertices each). *moves*:
+        a mover or door, whose pose changes in play."""
+        shapes = []
+        keyed = {}
+        for brush in self._all_solid:
+            box = _placement.authored_box(brush)
+            centre = (float(box[0]), float(box[1]), float(box[2]))
+            triangles = (brush.get('_mesh_triangles')
+                         if brush.get('_collision_mode') == 'mesh' else None)
+            convex = None if triangles is not None else _placement.shape_convex(brush)
+            if triangles is not None and len(triangles):
+                kind = 'mesh'
+                data = tuple(
+                    tuple(tuple(float(v[i]) - centre[i] for i in range(3)) for v in tri)
+                    for tri in (item[0] if hasattr(item[0][0], '__len__') else item
+                                for item in triangles))
+            elif convex is not None:
+                kind = 'convex'
+                local = convex.shape_box
+                data = tuple(tuple(float(p[i]) - local[i] for i in range(3))
+                             for p in convex.verts)
+            else:
+                kind = 'box'
+                data = (float(box[3]), float(box[4]), float(box[5]))
+            keyed[id(brush)] = brush
+            shapes.append((id(brush), kind, data, centre, _placement.is_dynamic(brush)))
+        self._shape_keys = keyed
+        return shapes
+
+    def shape_pose(self, key):
+        """``(centre, axis, angle_degrees)``: where a :meth:`solid_shapes`
+        shape is now, turned by *angle* about *axis* through *centre*; None
+        for a key the world no longer has."""
+        brush = self._shape_keys.get(key)
+        if brush is None:
+            return None
+        runtime = _placement.resolved_runtime(brush)
+        if runtime is None:
+            box = _placement.authored_box(brush)
+            return ((float(box[0]), float(box[1]), float(box[2])), (0.0, 1.0, 0.0), 0.0)
+        return ((float(runtime[0]), float(runtime[1]), float(runtime[2])),
+                (float(runtime[3]), float(runtime[4]), float(runtime[5])),
+                float(runtime[6]))
+
+    @staticmethod
+    def prepare_mesh(triangles):
+        """A physics body's ``_mesh_triangles`` made ready for
+        :meth:`mesh_columns`, or None when none is usable (WORLD_QUERIES)."""
+        return mesh_columns.prepare(triangles)
+
+    @staticmethod
+    def mesh_columns(mesh, x, z, shift=(0.0, 0.0, 0.0)):
+        """``(bottom, top)`` of a :meth:`prepare_mesh` surface over each point,
+        moved by *shift* since it was prepared; NaN where a point misses it."""
+        return mesh_columns.column(mesh, x, z, shift)
 
     def columns(self, rows, row, x, z):
         """``(bottom, top)``: the solid column of brush ``row[k]`` over each
@@ -556,16 +649,32 @@ class SpatialGrid:
             return bottom, top
         brushes = rows.brushes
         for brush_row in np.unique(row[shaped]).tolist():
-            planes = _world_planes(brushes[brush_row])
+            brush = brushes[brush_row]
+            at = np.flatnonzero(row == brush_row)
+            if brush.get('_collision_mode') == 'mesh':
+                # A Prop whose Collision Shape is Mesh: its model's triangles
+                # (engine.mesh_columns), prepared once and kept on the proxy.
+                mesh = brush.get('_mesh_columns')
+                if mesh is None:
+                    mesh = brush['_mesh_columns'] = (
+                        mesh_columns.prepare(brush.get('_mesh_triangles')),)
+                if mesh[0] is None:
+                    continue                # nothing usable: its box
+                b, t = mesh_columns.column(mesh[0], x[at], z[at])
+                bottom[at] = b
+                top[at] = t
+                continue
+            planes = _world_planes(brush)
             if planes is None:
                 continue                    # its box is its shape
-            at = np.flatnonzero(row == brush_row)
             b, t = _column(planes, x[at], z[at])
             bottom[at] = b
             top[at] = t
         return bottom, top
 
     def clear(self):
+        self._generation += 1
+        self._shape_keys = {}
         self.cells.clear()
         self._all_solid.clear()
         self.water_brushes.clear()
@@ -671,6 +780,8 @@ class SpatialGrid:
         and published in one assignment (:meth:`_build_los_rows`)."""
         # Buckets only: line of sight keeps the rows it has until the new ones
         # are published below.
+        self._generation += 1
+        self._shape_keys = {}
         self.cells.clear()
         self._all_solid.clear()
         self.water_brushes.clear()
@@ -712,6 +823,31 @@ class SpatialGrid:
                 box = (min(lo_x, lo[0] - reach[0]), min(lo_y, lo[1] - reach[1]),
                        min(lo_z, lo[2] - reach[2]), max(hi_x, hi[0] + reach[0]),
                        max(hi_y, hi[1] + reach[1]), max(hi_z, hi[2] + reach[2]))
+                if _travel_cells(box, self.cell_size) > MAX_TRAVEL_CELLS:
+                    # A travel too long to file cell by cell (a `distance`
+                    # of 1e9 is millions of buckets, and exhausted memory at
+                    # Play start): filed where it stands instead, and the
+                    # range recorded is that one, so the brush is off range
+                    # (brush_placement.off_range, MoverTable.check_range)
+                    # and every query adds it wherever it looks -- the
+                    # route a path follower already takes.
+                    centre = _placement.authored_box(brush)[:3]
+                    margin = 1.0 + 1e-6 * max(abs(float(v)) for v in centre)
+                    lo = tuple(float(v) - margin for v in centre)
+                    hi = tuple(float(v) + margin for v in centre)
+                    box = (min(lo_x, lo[0] - reach[0]), min(lo_y, lo[1] - reach[1]),
+                           min(lo_z, lo[2] - reach[2]), max(hi_x, hi[0] + reach[0]),
+                           max(hi_y, hi[1] + reach[1]), max(hi_z, hi[2] + reach[2]))
+                    if _travel_cells(box, self.cell_size) > MAX_TRAVEL_CELLS:
+                        # Displaced that far already: where it is now, only.
+                        box = (lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)
+                    # Marked here as well: a mover that starts on has its
+                    # state -- and its range check -- before the grid exists
+                    # to be checked against. The mover table forgets the mark
+                    # when play stops, as it does its own.
+                    if id(brush) not in _placement.off_range:
+                        _placement.off_range[id(brush)] = brush
+                        _placement.note_off_range()
                 brush['_travel_filed'] = (lo, hi, turns, box)
                 self._index.insert(brush, box[0], box[2], box[3], box[5])
             elif ('geometry' in brush or '_mesh_bounds' in brush

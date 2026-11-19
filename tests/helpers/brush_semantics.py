@@ -549,6 +549,8 @@ def shipped_maps(root):
     """
     out = {}
     for path in sorted(glob.glob(os.path.join(root, 'maps', '*.json'))):
+        if path.endswith('_autosave.json'):
+            continue        # the editor's autosave of a level, not a shipped map
         with open(path) as handle:
             data = json.load(handle)
         legacy_world_planes = int(data.get('version', 0) or 0) < 5

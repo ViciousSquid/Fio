@@ -205,9 +205,16 @@ class OBJLoader:
     
     def _load_mtl(self, obj_path: str, mtl_name: str) -> None:
         """Resolve MTL path relative to OBJ location and load."""
-        obj_dir = os.path.dirname(obj_path)
-        normalized_name = str(mtl_name).strip().strip('"').replace('\\', os.sep).replace('/', os.sep)
-        mtl_path = os.path.normpath(os.path.join(obj_dir, normalized_name))
+        # The name is model data: it may point beside the OBJ or elsewhere in
+        # the same assets folder, never to an absolute, drive, UNC or
+        # '..'-escaping path (engine.asset_paths).
+        from engine.asset_paths import companion_path, warn_refused
+        mtl_path = companion_path(obj_path, mtl_name)
+        if mtl_path is None:
+            warn_refused(mtl_name, 'material library')
+            self._discover_base_color_texture(obj_path)
+            return
+        mtl_path = os.path.normpath(mtl_path)
         mtl_dir = os.path.dirname(mtl_path)
         
         reader = getattr(self, "_text_reader", None)

@@ -2,7 +2,10 @@
 
 Fio's performance architecture is deliberate: vectorised NumPy where the data is
 bulk, plain Python kept out of per-frame and per-element work, and derived
-geometry cached so nothing rebuilds while nothing has changed.  Those are easy
+geometry cached so nothing rebuilds while nothing has changed. Bulk means
+bulk: for small N a Python loop beats NumPy's fixed cost a call, so such
+paths keep their loop below a measured crossover -- an invariant of its own,
+held by ``test_small_n_invariant.py``.  Those are easy
 to undo by accident — an abstraction added in one place turns into a rebuild in
 another — and hard to notice, because the result is still correct.
 
@@ -23,7 +26,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from engine import brush_geometry as bg  # noqa: E402
 from engine import spatial  # noqa: E402
-from engine.physics import SpatialGrid  # noqa: E402
+from engine.spatial_grid import SpatialGrid  # noqa: E402
 
 
 @pytest.fixture

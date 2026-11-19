@@ -68,7 +68,7 @@ class World:
         from engine import brush_placement
         from engine.change_journal import VISIBILITY, touch
         from engine.logic_thread import LogicThread
-        from engine.physics import SpatialGrid
+        from engine.spatial_grid import SpatialGrid
         from engine.spatial import PARKED_HIDDEN_KEY
         from engine.threaded_game_state import ThreadedGameState
         self.placement = brush_placement

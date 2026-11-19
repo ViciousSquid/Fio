@@ -1,16 +1,28 @@
 """Read desktop entity projections rather than inventing mobile entity rules."""
 import time
 from engine.entity_table import EntityTable
+from engine.render_table import brush_lights_of, emissive_brushes
 from engine.shaders import MAX_LIGHTS
 
 
 class EntityProjection:
     def __init__(self):
         self.table = EntityTable()
+        #: The world's emissive brushes (neon, glowing water), found again
+        #: when its brush list changes, and the list they were found in.
+        self._emissive = (None, 0, [])
 
     def update(self, world):
         self.table.begin_frame(world.state.things, effect_runtime=True,
                               effect_store=world.logic.session_runtime.effect_store)
+        # As the desktop's frame does: emissive brushes are lights that are
+        # not entities. A world with none costs one comparison here.
+        brushes = world.state.brushes
+        known, count, emissive = self._emissive
+        if known is not brushes or count != len(brushes):
+            emissive = emissive_brushes(brushes)
+            self._emissive = (brushes, len(brushes), emissive)
+        self.table.set_aux_lights(brush_lights_of(emissive))
         return self.table
 
 
@@ -38,7 +50,10 @@ def lights(table, eye, limit=MAX_LIGHTS, *, player_position=None, cutscene=False
                         max(1, float(table.light_params[i, 1]))**2)
     return [dict(pos=table.pos[i], color=table.light_color[i],
                  intensity=float(table.light_params[i, 0]), radius=float(table.light_params[i, 1]),
-                 casts_shadows=bool(table.light_casts_shadows[i])) for i in candidates[:limit]]
+                 casts_shadows=bool(table.light_casts_shadows[i]),
+                 size=float(table.light_size[i]),
+                 cookie=int(table.light_cookie[i]),
+                 cookie_floor=float(table.light_cookie_floor[i])) for i in candidates[:limit]]
 
 
 def effect_image(table, row):

@@ -33,7 +33,7 @@ from engine import brush_placement as bp                           # noqa: E402
 from engine import player as player_module                         # noqa: E402
 from engine.change_journal import touch                            # noqa: E402
 from engine.logic_thread import LogicThread                        # noqa: E402
-from engine.physics import SpatialGrid                             # noqa: E402
+from engine.spatial_grid import SpatialGrid                             # noqa: E402
 from engine.player import Player                                   # noqa: E402
 from engine.threaded_game_state import ThreadedGameState            # noqa: E402
 from tests.helpers.worlds import angled_brush, box_brush           # noqa: E402

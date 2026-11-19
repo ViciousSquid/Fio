@@ -182,6 +182,10 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
     def cleanup(self):
         """Release the GL resources RendererCore owns, including every
         program and VAO a subclass registered in ``shaders`` / ``vaos``."""
+        lens = getattr(self, '_lens_water_pass', None)
+        if lens is not None:
+            lens.cleanup()
+            self._lens_water_pass = None
         # Delete VAOs and VBOs
         for name, vao in self.vaos.items():
             if vao:

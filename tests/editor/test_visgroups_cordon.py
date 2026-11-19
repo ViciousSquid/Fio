@@ -93,7 +93,8 @@ def test_visgroups_and_the_cordon_are_saved_with_the_map(main_window):
     state.brushes.remove(gone)
 
     data = state.get_level_data()
-    assert data["visgroups"] == [{"name": "Crates", "visible": False, "ids": [crate["id"]]}]
+    assert data["visgroups"] == [{"id": group.id, "name": "Crates", "visible": False,
+                                  "ids": [crate["id"]]}]
     assert data["cordon"] == {"enabled": True, "min": [-10, -20, -30], "max": [10, 20, 30]}
 
     state.clear_scene()
@@ -101,6 +102,7 @@ def test_visgroups_and_the_cordon_are_saved_with_the_map(main_window):
     state.load_from_data(data)
     loaded = state.view_filters
     assert [g.name for g in loaded.visgroups] == ["Crates"]
+    assert [g.id for g in loaded.visgroups] == [group.id]       # its I/O identity
     assert loaded.hides(next(b for b in state.brushes if b["name"] == "crate"))
     assert loaded.cordon.enabled and loaded.cordon.hi == [10, 20, 30]
 
@@ -121,7 +123,7 @@ def test_the_eye_on_the_toolbar_opens_and_closes_the_window(main_window):
     window = main_window.visgroups_window
     assert window.isVisible() and button.isChecked()           # lit while open
     assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == \
-        ["User", "Auto", "Cordon"]
+        ["User", "Groups", "Auto", "Cordon"]
     button.click()
     assert not window.isVisible() and not button.isChecked()
     main_window.toggle_visgroups_window()
@@ -294,6 +296,34 @@ def test_the_scene_hierarchy_visgroup_menu(main_window):
     _visgroup_menu(main_window, [crate])["Manage Visgroups..."].trigger()
     assert window.isVisible() and window.current_group() is group
     window.hide()
+    _MENUS.clear()
+
+
+def test_the_scene_hierarchy_selects_a_whole_group(main_window):
+    """Right-click a light in a group: "Select Group 'name'" selects every
+    member -- what an I/O connection targeting that name reaches."""
+    from PyQt5.QtWidgets import QMenu
+    state = main_window.state
+    lamps = [make_thing(Light, "lamp%d" % i, (i * 64, 0, 0)) for i in range(3)]
+    loner = make_thing(Light, "loner", (0, 0, 300))
+    state.things.extend(lamps + [loner])
+    state.view_filters.add_visgroup("hall lights", lamps)
+
+    parent = QMenu()
+    _MENUS.append(parent)
+    actions = main_window.scene_hierarchy._add_select_group_actions(parent, [lamps[1]])
+    assert [a.text() for a in actions] == ["Select Group 'hall lights'"]
+    actions[0].trigger()
+    assert list(state.selected_objects) == lamps
+
+    assert main_window.scene_hierarchy._add_select_group_actions(parent, [loner]) == []
+
+    # Two groups with one name stay two: each is selected by its UUID.
+    twin = state.view_filters.add_visgroup("hall lights", [loner])
+    actions = main_window.scene_hierarchy._add_select_group_actions(parent, [loner])
+    actions[0].trigger()
+    assert list(state.selected_objects) == [loner]
+    assert twin.id != state.view_filters.visgroups[0].id
     _MENUS.clear()
 
 

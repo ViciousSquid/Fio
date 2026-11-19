@@ -48,6 +48,7 @@ jobs:
             --include-package=editor `
             --include-package=PIL `
             --include-data-dir=assets=assets `
+            --include-data-files=assets/noise_3d.bin=assets/noise_3d.bin `
             --include-package=plugins `
             --include-package-data=plugins `
             --include-data-dir=tools=tools `
@@ -69,6 +70,9 @@ jobs:
             Write-Error "Build failed: Fio.exe not found"
             exit 1
           }
+          $fog = "build/main.dist/assets/noise_3d.bin"
+          if (-not (Test-Path $fog)) { throw "Packaged volumetric fog texture not found: $fog" }
+          if ((Get-Item $fog).Length -ne 32768) { throw "Packaged volumetric fog texture has the wrong size." }
 
       - uses: actions/upload-artifact@v7
         with:

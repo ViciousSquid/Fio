@@ -594,14 +594,24 @@ class TerrainGL:
         """*paint* (n, n, 4 uint8) at half the side, colour weighted by alpha
         (an unpainted texel is black, and must not darken its neighbours)."""
         n = paint.shape[0] // 2
-        blocks = paint[:n * 2, :n * 2].reshape(n, 2, n, 2, 4).astype(np.float32)
-        alpha = blocks[..., 3:4]
-        weight = alpha.sum(axis=(1, 3))
-        colour = (blocks[..., :3] * alpha).sum(axis=(1, 3))
-        np.divide(colour, weight, out=colour, where=weight > 0.0)
+        texels = paint[:n * 2, :n * 2]
+        # In integers, a 2x2 block at a time: the same values the float
+        # version rounded to, several times quicker (this runs three times
+        # for every chunk a stamp touches, on the frame that shows it).
+        alpha = texels[..., 3].astype(np.uint32)
+        weight = (alpha[0::2, 0::2] + alpha[0::2, 1::2]
+                  + alpha[1::2, 0::2] + alpha[1::2, 1::2])
         out = np.empty((n, n, 4), dtype=np.uint8)
-        out[..., :3] = np.clip(colour + 0.5, 0, 255)
-        out[..., 3:4] = np.clip(weight * 0.25 + 0.5, 0, 255)
+        if not weight.any():
+            out[:] = 0
+            return out
+        divisor = np.maximum(weight, 1)
+        for channel in range(3):
+            scaled = texels[..., channel] * alpha
+            total = (scaled[0::2, 0::2] + scaled[0::2, 1::2]
+                     + scaled[1::2, 0::2] + scaled[1::2, 1::2])
+            out[..., channel] = (2 * total + divisor) // (2 * divisor)
+        out[..., 3] = (weight + 2) >> 2
         return out
 
     def _upload_paint_chunk(self, slot: int):
@@ -797,6 +807,7 @@ class TerrainGL:
         # raise GL_INVALID_OPERATION.
         names = self.UNIFORM_NAMES + tuple(frame.appearance) + tuple(env_uniforms or ())
         names += tuple(f'shadowMaps[{i}]' for i in range(shaders.MAX_SHADOW_LIGHTS))
+        names += ('fioCookies',)
         for name in names:
             if name not in u:
                 u[name] = gl.glGetUniformLocation(prog, name)
@@ -825,7 +836,9 @@ class TerrainGL:
         # Textures off in flat mode, or while they are not loaded.
         textures_loaded = (self.grass_tex != 0 and self.rock_tex != 0
                            and self.sand_tex != 0 and self.snow_tex != 0)
-        use_tex = 0 if frame.flat_mode or not textures_loaded else (1 if frame.use_textures else 0)
+        use_tex = (0 if frame.flat_mode or not textures_loaded
+                   or getattr(self, 'untextured', False)
+                   else (1 if frame.use_textures else 0))
         gl.glUniform1i(u['use_textures'], use_tex)
 
         # Distance fog + global ambient (engine.shaders.FOG_GLSL): this
@@ -863,6 +876,12 @@ class TerrainGL:
             gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
             gl.glUniform1i(loc, shadow_unit_base + i)
         gl.glActiveTexture(gl.GL_TEXTURE0)
+        # The light-cookie array (engine.light_cookies) on its own unit, for
+        # the same reason; the renderer binds the array there when a light
+        # has a cookie, and nothing is sampled when none has.
+        loc = u.get('fioCookies', -1)
+        if loc is not None and loc != -1:
+            gl.glUniform1i(loc, shaders.COOKIE_TEXTURE_UNIT)
 
         lod_level_loc = u.get('lod_level', -1)
         slots = table.live_slots()

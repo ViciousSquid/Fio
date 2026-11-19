@@ -538,7 +538,11 @@ def test_client_learns_of_a_disconnect_when_its_event_queue_was_full(arena):
     # first and calls the disconnected callback (``lost.set``) only after the
     # socket shutdown, so on a slow runner a drain between the two had not
     # yet learnt of the disconnect.
-    wait_until(lambda: connection.lost.is_set())
+    # Wait for the channel to be published too: Channel() starts its reader
+    # before LanClient._connect assigns ``connection.channel``, and with the
+    # whole burst already buffered the reader can overflow the queue and close
+    # the channel before that assignment.
+    wait_until(lambda: connection.lost.is_set() and connection.channel is not None)
     assert connection.channel.closed.is_set()
     events = list(connection.drain())
     assert len(events) > 100

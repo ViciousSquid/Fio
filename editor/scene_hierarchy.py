@@ -2,8 +2,8 @@ from engine.asset_qt import load_icon
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, 
                              QMenu, QAction, QHeaderView, QAbstractItemView, 
                              QPushButton, QHBoxLayout, QLabel, QFrame, QGridLayout,
-                             QLineEdit, QStyle)
-from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
+                             QLineEdit, QStyle, QStyledItemDelegate)
+from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap, QPen
 from PyQt5 import QtCore
 import re
 from PyQt5.QtCore import Qt, QTimer, QEvent
@@ -11,6 +11,47 @@ from PyQt5.QtCore import Qt, QTimer, QEvent
 from engine.change_journal import touch
 from engine.spatial import set_live_flag
 from editor.selection import SelectionLookup
+from editor import brush_groups
+
+#: Item data: a grouped brush row's group colour ('#rrggbb') and which edges
+#: of its group's outline box it carries (1: first row, 2: last row).
+GROUP_COLOUR_ROLE = Qt.UserRole + 1
+GROUP_EDGE_ROLE = Qt.UserRole + 2
+GROUP_FIRST, GROUP_LAST = 1, 2
+#: How strongly a group's colour tints its rows' background.
+GROUP_TINT_ALPHA = 46
+
+
+def group_tint(colour):
+    """The row background for a group of *colour* (transparent for none)."""
+    if not colour:
+        return QBrush(Qt.transparent)
+    tint = QColor(colour)
+    tint.setAlpha(GROUP_TINT_ALPHA)
+    return QBrush(tint)
+
+
+class GroupOutlineDelegate(QStyledItemDelegate):
+    """Draws one box, in the group's colour, round the rows of each brush
+    group: sides on every member, the top on the first, the bottom on the
+    last."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        colour = index.data(GROUP_COLOUR_ROLE)
+        if not colour:
+            return
+        edges = index.data(GROUP_EDGE_ROLE) or 0
+        rect = option.rect.adjusted(1, 0, -1, 0)
+        painter.save()
+        painter.setPen(QPen(QColor(colour), 2))
+        painter.drawLine(rect.topLeft(), rect.bottomLeft())
+        painter.drawLine(rect.topRight(), rect.bottomRight())
+        if edges & GROUP_FIRST:
+            painter.drawLine(rect.left(), rect.top() + 1, rect.right(), rect.top() + 1)
+        if edges & GROUP_LAST:
+            painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
+        painter.restore()
 
 
 try:
@@ -158,6 +199,7 @@ class SceneHierarchy(QWidget):
         self.tree = QTreeWidget()
         self.tree.setUniformRowHeights(True)
         self.tree.setIndentation(12)
+        self.tree.setItemDelegate(GroupOutlineDelegate(self.tree))
         content_layout.addWidget(self.tree, stretch=2)
         
         # Configure tree widget
@@ -175,6 +217,9 @@ class SceneHierarchy(QWidget):
         self.lock_icon = load_icon("assets/lock.png")
         self.hidden_icon = load_icon("assets/hidden.png")
         self.tree.itemSelectionChanged.connect(self.handle_selection_change)
+        #: True while a selection made in the tree is being applied (its
+        #: rebuild keeps the list still: refresh_list).
+        self._selecting_in_tree = False
         # Double-clicks are read off the viewport, not itemDoubleClicked: the
         # first click of a double-click changes the selection, which rebuilds
         # the tree, so Qt never pairs the two clicks on one item.
@@ -393,13 +438,54 @@ class SceneHierarchy(QWidget):
                     obj = None
                 matched = obj is not None and id(obj) in self._search_matches
                 background = (QBrush(QColor("#4a4320")) if matched
-                              else QBrush(Qt.transparent))
+                              else group_tint(item.data(0, GROUP_COLOUR_ROLE)))
                 if item is self._highlighted_item:
                     # A search can change before the temporary highlight's
                     # timer expires. Its cleanup must keep the new styling.
                     self._highlight_backgrounds = (background, background)
                 for column in (0, 1):
                     item.setBackground(column, background)
+
+    def groups_of(self, objects):
+        """``(id, name)`` of the groups any of *objects* is in: visgroups by
+        their UUID, then brush groups (id '')."""
+        filters = self.main_window.state.view_filters
+        found = []
+        for obj in objects:
+            for group in filters.visgroups_of(obj):
+                if (group.id, group.name) not in found:
+                    found.append((group.id, group.name))
+        for obj in objects:
+            name = brush_groups.group_of(obj) if isinstance(obj, dict) else ''
+            if name and ('', name) not in found:
+                found.append(('', name))
+        return found
+
+    def select_group(self, name='', group_id=''):
+        """Select every member of a group -- what an I/O connection targeting
+        it reaches (engine.io_groups): the visgroup whose UUID is *group_id*,
+        else the group called *name*."""
+        from engine.io_groups import resolve_group
+        main_window = self.main_window
+        members = resolve_group(main_window.state, name, group_id) or []
+        main_window.set_selected_objects(members)
+        main_window.update_views()
+        return members
+
+    def _add_select_group_actions(self, menu, objects):
+        """"Select Group 'name'" for each group the clicked objects are in."""
+        actions = []
+        for group_id, name in self.groups_of(objects):
+            action = menu.addAction("Select Group '%s'" % name)
+            action.setToolTip(
+                "Select every member of this group. An I/O connection that "
+                "targets the group sends its input to all of them; members "
+                "without that input ignore it."
+                + ("\nGroup ID: %s" % group_id if group_id else ""))
+            action.triggered.connect(
+                lambda _checked=False, n=name, g=group_id: self.select_group(n, g))
+            actions.append(action)
+        return actions
 
     def _add_visgroup_menu(self, menu, objects):
         """The Visgroup submenu: put the clicked objects in a visgroup, take
@@ -435,6 +521,36 @@ class SceneHierarchy(QWidget):
             lambda _checked=False: main_window.show_visgroup(groups[0] if groups else None))
         return sub
 
+    def _add_group_action(self, menu, brushes):
+        """"Add to Group..." for objects (brushes and/or entities) that are in
+        none, "Edit Group..." when one of them already is: both open the
+        group dialog."""
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
+        if not brushes:
+            return None
+        grouped = any(brush_groups.group_of(b) for b in brushes)
+        action = menu.addAction("Edit Group..." if grouped else "Add to Group...")
+        action.setToolTip("Grouped objects are attached: they always move together "
+                          "in the editor (and brushes in Play)")
+        action.triggered.connect(
+            lambda _checked=False, chosen=list(brushes):
+            self.main_window.open_brush_group_dialog(chosen))
+        if grouped:
+            ungroup = menu.addAction("Ungroup")
+            ungroup.setToolTip("Take these objects out of their group")
+            ungroup.triggered.connect(
+                lambda _checked=False, chosen=list(brushes):
+                self.main_window.ungroup_brushes(chosen))
+            every = self.main_window.with_group_mates(
+                [b for b in brushes if brush_groups.group_of(b)])
+            hidden = all(brush_groups.is_hidden(b) for b in every)
+            toggle = menu.addAction("Show Group" if hidden else "Hide Group")
+            toggle.setToolTip("Show or hide every object in the group")
+            toggle.triggered.connect(
+                lambda _checked=False, chosen=every, hide=not hidden:
+                self.main_window.set_brushes_hidden(chosen, hide))
+        return action
+
     def cycle_sort_mode(self):
         """Cycle through sort modes and refresh."""
         self.sort_mode = (self.sort_mode + 1) % self.SORT_MODE_COUNT
@@ -452,7 +568,35 @@ class SceneHierarchy(QWidget):
         # Default brush name
         return f'Brush {index + 1}'
 
+    @staticmethod
+    def _get_thing_display_name(thing_obj, index):
+        """Get display name for an entity: its name, else 'Thing N'."""
+        return thing_obj.name if thing_obj.name else f'Thing {index + 1}'
+
+    @staticmethod
+    def _mark_group_row(item, rows, row, group_colours):
+        """Tint and box *item* (``rows[row]``) in its group's colour: the
+        box's top on a group's first row, its bottom on the last."""
+        group = brush_groups.group_of(rows[row][1])
+        if not group:
+            return
+        colour = group_colours[group]
+        edges = 0
+        if row == 0 or brush_groups.group_of(rows[row - 1][1]) != group:
+            edges |= GROUP_FIRST
+        if row + 1 == len(rows) or brush_groups.group_of(rows[row + 1][1]) != group:
+            edges |= GROUP_LAST
+        item.setData(0, GROUP_COLOUR_ROLE, colour)
+        item.setData(0, GROUP_EDGE_ROLE, edges)
+        item.setBackground(0, group_tint(colour))
+        item.setToolTip(0, "Group: %s" % group)
+
     def _get_sorted_brushes(self):
+        """Brushes in the current sort order, each brush group's members
+        kept together (where the group's first member sorts)."""
+        return brush_groups.ordered(self._sorted_brushes())
+
+    def _sorted_brushes(self):
         """Return brushes in sorted order based on current sort mode."""
         brushes = list(enumerate(self.main_window.state.brushes))
         
@@ -487,6 +631,11 @@ class SceneHierarchy(QWidget):
         return brushes
 
     def _get_sorted_things(self):
+        """Things in the current sort order, each group's entities kept
+        together (where the group's first entity sorts)."""
+        return brush_groups.ordered(self._sorted_things())
+
+    def _sorted_things(self):
         """Return things in sorted order based on current sort mode."""
         things = list(enumerate(self.main_window.state.things))
         
@@ -533,18 +682,70 @@ class SceneHierarchy(QWidget):
         return terrain_data is not None
 
     def refresh_list(self):
+        """Rebuild the tree (every selection change does, through the editor's
+        update_all_ui) without the list moving under the cursor.
+
+        The scroll position is kept across the rebuild. A selection made in
+        the tree itself -- a click, a Ctrl-click adding a row, a Shift-click
+        range -- does not scroll at all, and the row clicked stays the current
+        row (the anchor the next Shift-click ranges from). A selection made
+        elsewhere (the 2D or 3D view) scrolls only if its first row is out of
+        sight. Scrolling to the first selected row after every rebuild made
+        the list jump to the top of a Ctrl-click selection on each click.
+        """
+        bar = self.tree.verticalScrollBar()
+        scrolled = bar.value()
+        current_obj = self._object_of(self.tree.currentItem())
+        from_tree = self._selecting_in_tree
         # A failed rebuild must not leave selection notifications disabled,
         # and callers may already have blocked signals for a larger operation.
         was_blocked = self.tree.blockSignals(True)
         try:
             self._rebuild_items()
+            # Lay the new rows out now, so the scroll range is the rebuilt
+            # tree's (rebuilding row by row clamped the position as it went).
+            self.tree.doItemsLayout()
+            bar.setValue(min(scrolled, bar.maximum()))
+            if current_obj is not None:
+                item = self._find_item(current_obj)
+                if item is not None:
+                    self.tree.setCurrentItem(item, 0, QtCore.QItemSelectionModel.NoUpdate)
         finally:
             self.tree.blockSignals(was_blocked)
 
-        # Scroll after restoring signals, as in the original refresh path.
+        if from_tree:
+            return
         first_selected = self.tree.selectedItems()
         if first_selected:
             self.tree.scrollToItem(first_selected[0], QAbstractItemView.EnsureVisible)
+
+    def _object_of(self, item):
+        """The brush or Thing a tree row stands for, or None."""
+        if item is None:
+            return None
+        data = item.data(0, Qt.UserRole)
+        if not data:
+            return None
+        kind, index = data
+        state = self.main_window.state
+        try:
+            if kind == 'brush':
+                return state.brushes[index]
+            if kind == 'thing':
+                return state.things[index]
+        except (IndexError, TypeError):
+            return None
+        return None
+
+    def _find_item(self, obj):
+        """The row standing for *obj*, at any depth (groups nest), or None."""
+        stack = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
+        while stack:
+            item = stack.pop()
+            if self._object_of(item) is obj:
+                return item
+            stack.extend(item.child(j) for j in range(item.childCount()))
+        return None
 
     def _rebuild_items(self):
         self.tree.clear()
@@ -582,6 +783,10 @@ class SceneHierarchy(QWidget):
             terrain_item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             terrain_item.setData(0, Qt.UserRole, ('terrain', 0))
             terrain_item.setForeground(0, QBrush(QColor("#8FBC8F")))  # Earthy green
+            if self.main_window.terrain_locked():
+                terrain_item.setIcon(0, self.lock_icon)
+            if getattr(self.main_window, 'terrain_selected', False):
+                terrain_item.setSelected(True)
 
         # =====================================================================
         # BRUSHES SECTION
@@ -597,12 +802,18 @@ class SceneHierarchy(QWidget):
         brushes_header.setFont(0, header_font)
         brushes_header.setExpanded(True)
         
-        # Add Brushes (sorted)
-        for i, brush_dict in self._get_sorted_brushes():
+        # Add Brushes (sorted; a group's members adjacent, tinted and boxed)
+        sorted_brushes = self._get_sorted_brushes()
+        # One colour per group across both sections: a group holding brushes
+        # and entities is boxed in the same colour under each header.
+        group_colours = brush_groups.colours(
+            brush_groups.scene_objects(self.main_window.state))
+        for row, (i, brush_dict) in enumerate(sorted_brushes):
             item_text = self._get_brush_display_name(brush_dict, i)
             item = QTreeWidgetItem(brushes_header, [item_text, ""])
             item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             item.setData(0, Qt.UserRole, ('brush', i))
+            self._mark_group_row(item, sorted_brushes, row, group_colours)
             
             if brush_dict.get('hidden', False):
                 item.setForeground(0, QBrush(QColor("#FFAC1C")))
@@ -646,12 +857,14 @@ class SceneHierarchy(QWidget):
         things_header.setFont(0, header_font)
         things_header.setExpanded(True)
         
-        # Add Things (sorted)
-        for i, thing_obj in self._get_sorted_things():
-            item_text = thing_obj.name if thing_obj.name else f'Thing {i+1}'
+        # Add Things (sorted; a group's members adjacent, tinted and boxed)
+        sorted_things = self._get_sorted_things()
+        for row, (i, thing_obj) in enumerate(sorted_things):
+            item_text = self._get_thing_display_name(thing_obj, i)
             item = QTreeWidgetItem(things_header, [item_text, ""])
             item.setTextAlignment(0, Qt.AlignLeft | Qt.AlignVCenter)
             item.setData(0, Qt.UserRole, ('thing', i))
+            self._mark_group_row(item, sorted_things, row, group_colours)
             
             # Check if hidden
             if thing_obj.properties.get('hidden', False):
@@ -810,7 +1023,10 @@ class SceneHierarchy(QWidget):
         # Terrain context menu
         # -----------------------------------------------------------------
         if terrain_items and not brush_items and not thing_items:
+            locked = self.main_window.terrain_locked()
             edit_action = menu.addAction("Edit Terrain...")
+            edit_action.setEnabled(not locked)
+            lock_action = menu.addAction("Unlock" if locked else "Lock")
             menu.addSeparator()
             delete_action = menu.addAction("Delete Terrain")
 
@@ -818,16 +1034,17 @@ class SceneHierarchy(QWidget):
 
             if action == edit_action:
                 self.main_window.open_terrain_editor()
+            elif action == lock_action:
+                self.main_window.set_terrain_locked(not locked)
             elif action == delete_action:
                 self.main_window.save_state()
                 self.main_window.state.terrain_data = None
                 # Remove the live terrain object so the 3D view stops rendering it
                 self.main_window.terrain = None
-                panel = self.main_window._current_overlay
-                if panel is not None:
-                    if self.main_window._current_overlay is panel:
-                        self.main_window._close_current_overlay()
-                    self.main_window.terrain_editor_window = None
+                if self.main_window.terrain_editor_window is not None:
+                    self.main_window.close_terrain_editor()
+                elif self.main_window._current_overlay is not None:
+                    self.main_window._close_current_overlay()
                 self.main_window.set_selected_objects([])
                 self.main_window.update_all_ui()
             return
@@ -856,7 +1073,9 @@ class SceneHierarchy(QWidget):
             focus_action.triggered.connect(
                 lambda _checked=False, targets=list(focus_targets):
                 self.focus_on(targets))
+            self._add_select_group_actions(menu, focus_targets)
             self._add_visgroup_menu(menu, focus_targets)
+            self._add_group_action(menu, focus_targets)
             menu.addSeparator()
 
         # If multiple items of the same type selected, show bulk operations
@@ -1057,6 +1276,14 @@ class SceneHierarchy(QWidget):
         self.main_window.show_properties_panel()
 
     def handle_selection_change(self):
+        # The tree made this selection: its rebuild must not scroll.
+        self._selecting_in_tree = True
+        try:
+            self._apply_tree_selection()
+        finally:
+            self._selecting_in_tree = False
+
+    def _apply_tree_selection(self):
         selected_items = self.tree.selectedItems()
         if not selected_items:
             self.main_window.set_selected_objects([])
@@ -1076,7 +1303,9 @@ class SceneHierarchy(QWidget):
                     terrain_selected = True
         
         if terrain_selected and not selected_objects:
-            self.main_window.set_selected_objects([])
+            # The terrain's row: selected as such, locked or not (the row is
+            # how a locked terrain is reached to unlock it).
+            self.main_window.select_terrain()
             return
 
         self.main_window.set_selected_objects(selected_objects)

@@ -187,6 +187,9 @@ class QtGameView(QOpenGLWidget):
 
         self.face_mode_active = False
         self.hovered_face_info = None
+        #: What :attr:`hovered_face_info` was picked under (see
+        #: :meth:`face_under_cursor`): cursor, camera and world.
+        self._face_hover_key = None
 
         # --- Component editing (shares the main window's ComponentController) ---
         # Only the drag anchors are per-view; the mode, hover and component
@@ -252,6 +255,10 @@ class QtGameView(QOpenGLWidget):
         self.show_glasses = self.editor.config.getboolean(
             'Display', 'show_glasses', fallback=True
         )
+        #: Settings > Editor > 3D View: a light hidden with H gives no light
+        #: in the editor while it is hidden.
+        self.hide_hidden_lights = self.editor.config.getboolean(
+            'Display', 'hide_hidden_lights', fallback=False)
         # The glasses player 1 wears (Settings > Appearance); player 2
         # always wears the default pair.
         self.player1_glasses = normalize_glasses(self.editor.config.get(
@@ -446,6 +453,74 @@ class QtGameView(QOpenGLWidget):
 
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
+
+    #: Turning the camera this fast (radians a second) pushes the lens drops
+    #: as hard as they are pushed (engine.lens_water's motion of 1).
+    LENS_TURN_FOR_FULL_PUSH = 4.0
+
+    def _draw_lens_water(self, render_state, splitscreen):
+        """Advance and draw the water on the camera's lens (engine.lens_water).
+
+        When the player's eye comes up out of the water -- from deep water,
+        or standing up after crouching under -- the lens is splashed, and the
+        drops run off and dry: gone within LENS_WATER_SECONDS, always. Waist deep
+        with the eye above the water, the bottom half of the lens has drops;
+        shallower, none. Under water there are none. Purely visual, by real time, on this thread;
+        nothing at all is done while the lens is dry and the eye is not under.
+        """
+        lens = getattr(self, '_lens_water', None)
+        if lens is None:
+            from engine.lens_water import LensWater
+            lens = self._lens_water = LensWater()
+            self._lens_was_under = False
+            self._lens_clock = None
+            self._lens_look = None
+        if not self.play_mode or render_state is None:
+            if lens.active:
+                lens.clear()
+            self._lens_was_under = False
+            self._lens_clock = None
+            self._lens_look = None
+            return
+        under = bool(getattr(render_state, 'player_underwater', False))
+        if under:
+            if lens.active:
+                lens.submerged()
+        elif self._lens_was_under:
+            lens.surfaced()
+        self._lens_was_under = under
+        now = time.perf_counter()
+        dt = 0.0 if self._lens_clock is None else now - self._lens_clock
+        # Waist deep, the eye above the water: drops on the bottom half.
+        if getattr(render_state, 'player_wading', False):
+            lens.standing_in_water(dt)
+        look = (float(render_state.player_angle), float(render_state.player_pitch))
+        if not lens.active:
+            self._lens_clock, self._lens_look = now, look
+            return
+        motion = (0.0, 0.0)
+        if self._lens_look is not None and dt > 1e-4:
+            turn = (look[0] - self._lens_look[0] + math.pi) % (2.0 * math.pi) - math.pi
+            nod = look[1] - self._lens_look[1]
+            full = self.LENS_TURN_FOR_FULL_PUSH * dt
+            # Turning right lowers the angle; looking up raises the pitch and
+            # moves the view up the screen (y down).
+            motion = (-turn / full, -nod / full)
+        self._lens_clock, self._lens_look = now, look
+        lens.update(dt, motion)
+        drops = lens.frame()
+        if not drops:
+            return
+        ratio = self.devicePixelRatioF()
+        width = max(1, int(self.width() * ratio))
+        height = max(1, int(self.height() * ratio))
+        viewport = (0, 0, width // 2, height) if splitscreen else (0, 0, width, height)
+        # Optional, like animate_textures and draw_face_hover: a renderer that
+        # does not offer it (it is not in the locked contract) shows none.
+        # The built-in one has it from engine.renderer.core.
+        draw = getattr(self.renderer, 'draw_lens_water', None)
+        if draw is not None:
+            draw(drops, viewport)
 
     def _clear_play_mode_hint(self):
         self._play_mode_hint = ""
@@ -942,10 +1017,10 @@ class QtGameView(QOpenGLWidget):
         self._view_ptr = glm.value_ptr(self.view_matrix)
         self._render_config["culling_enabled"] = self.culling_enabled
         # The Display box is published as-is while editing. In Play the game
-        # is drawn textured; only the debug views (Wireframe, Points, Overlay)
+        # is drawn textured; only the debug views (Wireframe, Overlay)
         # carry over.
         _display = self.brush_display_mode
-        if self.play_mode and _display not in ("Wireframe", "Points", "Overlay"):
+        if self.play_mode and _display not in ("Wireframe", "Overlay"):
             _display = "Textured"
         self._render_config["brush_display_mode"] = _display
         self._render_config["show_triggers_as_solid"] = self.show_triggers_as_solid
@@ -958,6 +1033,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["show_glasses"] = bool(self.show_glasses)
+        self._render_config["hide_hidden_lights"] = bool(self.hide_hidden_lights)
         from engine.glasses import world_glasses
         self.logic_thread.player_runtime.glasses_style = normalize_glasses(self.player1_glasses)
         (_glass_positions, _glass_sprites, _spectator_positions, _spectator_sprites,
@@ -1168,11 +1244,23 @@ class QtGameView(QOpenGLWidget):
                 _segments, _colours = connection_segments(conn_lines)
                 self.renderer.draw_connection_lines(
                     self.projection_matrix, self.view_matrix, _segments, _colours)
-        if self.face_mode_active and self.hovered_face_info:
-            brush, face_name = self.hovered_face_info
+        # The face being edited -- the Surface Inspector's, which stays put
+        # whatever the cursor passes over -- in orange; in Face Mode the face
+        # under the cursor too: faintly while another face is selected.
+        selected = None if self.play_mode else self.editor.selected_face_target()
+        hovered = self.face_under_cursor() if self.face_mode_active else None
+        if selected is not None:
             self.renderer.draw_face_highlight(
                 self.projection_matrix, self.view_matrix,
-                face_highlight_triangles(brush, face_name))
+                face_highlight_triangles(*selected))
+        if hovered is not None and not (
+                selected is not None and hovered[0] is selected[0]
+                and hovered[1] == selected[1]):
+            draw = (self.renderer.draw_face_highlight if selected is None
+                    else getattr(self.renderer, 'draw_face_hover', None))
+            if draw is not None:
+                draw(self.projection_matrix, self.view_matrix,
+                     face_highlight_triangles(*hovered))
         # Component handles.  The arrays come from the editor's controller,
         # which rebuilds them only when the selection, hover or geometry
         # changed; here it is a version check and a draw call.
@@ -1200,6 +1288,10 @@ class QtGameView(QOpenGLWidget):
             _pmgr.emit("render.post_scene", viewport=self, renderer=self.renderer,
                        projection=self.projection_matrix, view=self.view_matrix,
                        camera_pos=camera_pos, play_mode=self.play_mode)
+
+        # Water on the lens after coming up out of the water: over the whole
+        # world, under the HUD.
+        self._draw_lens_water(render_state, _splitscreen)
 
         restore_default_pixel_store()
         # The native renderer may leave viewport/scissor/depth state from a
@@ -1638,6 +1730,8 @@ class QtGameView(QOpenGLWidget):
                          else o.properties.get('lock', False))]
         if primary not in group:
             group = [primary]
+        # Brushes grouped with a moved one are attached to it.
+        group = self.editor.movable_with_mates(group)
         for obj in group:
             self.editor._translate_object(obj, delta)
         self.update()
@@ -1720,7 +1814,9 @@ class QtGameView(QOpenGLWidget):
                     return
 
         if self.face_mode_active and event.button() == Qt.LeftButton:
-            if self.hovered_face_info:
+            # Picked here, at the press: the hover is only as fresh as the
+            # last mouse move, and the camera may have moved since.
+            if self.face_under_cursor(event.pos()):
                 # Arm the press: a drag from here moves the face's plane, a
                 # click without movement textures it (the original behaviour,
                 # decided on release).
@@ -1757,7 +1853,15 @@ class QtGameView(QOpenGLWidget):
             # the ray passes through, so buried geometry stays reachable.
             cycle = bool(QApplication.keyboardModifiers() & Qt.AltModifier)
             obj = self.picking.get_object_at_3d(event.x(), event.y(), cycle=cycle)
-            if obj:
+            # The terrain is picked like anything else: when it is what the
+            # ray meets first (or all it meets). Cycling walks objects only.
+            ground = self.picking.terrain_pick_distance(event.x(), event.y())
+            nearest = self.picking.last_pick_distance
+            if ground is not None and (obj is None or (
+                    not cycle and nearest is not None and ground < nearest)):
+                self.editor.select_terrain()
+                self.update()
+            elif obj:
                 self.editor.save_state()
                 self.editor.set_selected_objects([obj])
                 self.update()
@@ -1786,6 +1890,13 @@ class QtGameView(QOpenGLWidget):
                     return
         if not self.play_mode and event.button() == Qt.RightButton:
             self._editor_right_mouse_held = True
+            window = self.window()
+            if not window.isActiveWindow():
+                # A right-click does not activate a window on macOS: this
+                # one, after a dialog or a floating panel, may not be.
+                window.activateWindow()
+            if not self.hasFocus():
+                self.setFocus(Qt.MouseFocusReason)      # WASD comes here
             self._sync_editor_mouselook()
         super().mousePressEvent(event)
 
@@ -1816,8 +1927,9 @@ class QtGameView(QOpenGLWidget):
         it showed and the view stopped seeing the mouse. Polled, the cursor
         is back in the middle every frame and each movement counts once.
         """
-        held = (self._mouse_look_captured() and self.window().isActiveWindow()
-                and self.hasFocus())
+        held = (self._mouse_look_captured() and self._look_window_active()
+                and self._look_has_focus())
+        self._report_dead_look(held)
         self._sync_play_mouse_grab(held)
         if self._mac_mouse is not None:
             self._poll_mouse_look_macos()
@@ -1837,6 +1949,51 @@ class QtGameView(QOpenGLWidget):
         if dx or dy:
             self.game_state.set_mouse_delta(float(dx), float(dy))
             QCursor.setPos(centre)
+
+    def _look_has_focus(self):
+        """Whether the look may turn the camera, as far as focus goes.
+
+        Play needs this view's focus. Editor look does not: it holds the
+        mouse grab, so every movement is this view's whoever has the keys,
+        and focus moving to a panel mid-drag (a property panel rebuilt, a
+        floating tool window) left right-drag dead until pressed again."""
+        return self.hasFocus() or (not self.play_mode and self.mouselook_active)
+
+    def _look_window_active(self):
+        """Whether the look may turn the camera, as far as windows go.
+
+        Play needs this view's window to be the active one. Editor look also
+        counts while it holds the mouse grab and Fio is the frontmost
+        application: another Fio window can be active -- a floating panel,
+        or wherever a dialog (the colour picker) handed activation back --
+        with the keys still reaching the editor, and on macOS a right-click
+        does not activate a window, so right-drag there was left dead until
+        a left click. Switching to another application still stops it."""
+        if self.window().isActiveWindow():
+            return True
+        return (not self.play_mode and self.mouselook_active
+                and self.mouseGrabber() is self
+                and QApplication.applicationState() == Qt.ApplicationActive)
+
+    def _report_dead_look(self, held):
+        """Say once, in the console, why an editor look is not turning the
+        camera (so a report says which condition it was)."""
+        if self.play_mode or not self.mouselook_active or held:
+            self._dead_look_reported = False
+            return
+        if getattr(self, '_dead_look_reported', False):
+            return
+        self._dead_look_reported = True
+        debug_log("Input", "3D view look is held but not turning: window active=%s, "
+                           "app active=%s, mouse grab=%s, focus=%s" % (
+                               self.window().isActiveWindow(),
+                               QApplication.applicationState() == Qt.ApplicationActive,
+                               self.mouseGrabber() is self, self._look_has_focus()))
+
+    @staticmethod
+    def _right_button_down():
+        """Whether the right button is physically down now."""
+        return bool(QApplication.mouseButtons() & Qt.RightButton)
 
     def _sync_play_mouse_grab(self, held):
         """Play: while the look holds the mouse, every click belongs to this view.
@@ -1895,8 +2052,8 @@ class QtGameView(QOpenGLWidget):
         reports (deltaX/deltaY), summed by the native event filter.
         """
         mouse = self._mac_mouse
-        if (not self._mouse_look_captured() or not self.window().isActiveWindow()
-                or not self.hasFocus()):
+        if (not self._mouse_look_captured() or not self._look_window_active()
+                or not self._look_has_focus()):
             self._attach_mac_cursor()
             mouse.take()                       # movement made with the cursor free
             self._skip_next_look_poll = True
@@ -1931,6 +2088,12 @@ class QtGameView(QOpenGLWidget):
             self.game_state.set_mouse_delta(dx, dy)
 
     def mouseMoveEvent(self, event):
+        if (not self.play_mode and self._editor_right_mouse_held
+                and not (event.buttons() & Qt.RightButton)):
+            # The release went somewhere else (another window, another app):
+            # the button is up, so the right-drag look is over.
+            self._editor_right_mouse_held = False
+            self._sync_editor_mouselook()
         if not self.play_mode and self.floating_windows.handle_mouse_move(
                 event, self.width(), self.height()):
             self.update()
@@ -2005,10 +2168,43 @@ class QtGameView(QOpenGLWidget):
                 self.update()
             return
         if self.face_mode_active:
-            self.hovered_face_info = self.picking.get_brush_face_at_coords(event.x(), event.y())
+            self.face_under_cursor(event.pos())
             self.update()
             return
         super().mouseMoveEvent(event)
+
+    def face_under_cursor(self, pos=None):
+        """``(brush, face key)`` under the cursor in Face Mode, or None.
+
+        :attr:`hovered_face_info` picked again whenever the cursor, the camera
+        or the world has changed since it was last picked. It used to be
+        picked on mouse moves only, and Qt sends none while the cursor is
+        still: fly the camera (WASD, mouse look, framing a selection), undo,
+        or move a brush, and the hover -- what a click textures, what Page
+        Up/Down rotates, what is highlighted -- was still the face that had
+        been under the cursor before, on another brush (after an undo, a
+        detached copy of one). *pos* is the cursor in widget coordinates;
+        by default where the cursor is now.
+        """
+        if not self.face_mode_active:
+            return None
+        if pos is None:
+            pos = self.mapFromGlobal(QCursor.pos())
+            if not self.rect().contains(pos):
+                return self.hovered_face_info
+        state = self.editor.state
+        key = (pos.x(), pos.y(), self.width(), self.height(),
+               self.view_matrix.to_tuple(), self.projection_matrix.to_tuple(),
+               tuple(self.logic_thread.camera.get_editor_camera().pos)
+               if self.logic_thread is not None else None,
+               getattr(state, 'world_epoch', None),
+               brush_placement.placement_stamps, id(state.brushes),
+               len(state.brushes))
+        if key != self._face_hover_key:
+            self._face_hover_key = key
+            self.hovered_face_info = self.picking.get_brush_face_at_coords(
+                pos.x(), pos.y())
+        return self.hovered_face_info
 
     def mouseReleaseEvent(self, event):
         if self.play_mode and self.pause_menu is not None:
@@ -2098,9 +2294,17 @@ class QtGameView(QOpenGLWidget):
             self.game_state.consume_mouse_delta()
             self._skip_next_look_poll = True
         elif self.mouselook_active:
-            self.stop_editor_mouselook()
-            self.editor.keys_pressed.clear()
-            self.game_state.set_keys(set())
+            if (self._editor_right_mouse_held and self._right_button_down()
+                    and event.reason() != Qt.ActiveWindowFocusReason):
+                # Focus moved to another widget of this window while the
+                # right button is still down: the drag goes on (the mouse is
+                # grabbed). A Z latch ends, as it does on any focus loss.
+                self.editor_freelook_active = False
+                self._sync_editor_mouselook()
+            else:
+                self.stop_editor_mouselook()
+                self.editor.keys_pressed.clear()
+                self.game_state.set_keys(set())
         super().focusOutEvent(event)
 
     def leaveEvent(self, event):

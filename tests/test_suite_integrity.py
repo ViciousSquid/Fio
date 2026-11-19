@@ -347,6 +347,7 @@ PRODUCTION_OWNER_NAMES = {
     "ForwardRenderer",
     "RendererCore",
     "Terrain",
+    "Soma",
     "PhysicsWorld",
     "PropSession",
     "PluginHost",

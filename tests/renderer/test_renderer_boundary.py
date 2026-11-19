@@ -371,3 +371,14 @@ def test_the_renderer_writes_nothing_on_a_published_table():
                     written.append("%s:%d %s" % (path.relative_to(ROOT), node.lineno,
                                                  ast.unparse(target)))
     assert not written, written
+
+
+def test_the_renderer_contract_has_its_own_version():
+    """Versioned apart from the plugin API, as the physics contract is."""
+    import engine.renderer as boundary
+    from engine.renderer.api import RENDERER_CONTRACT_VERSION
+    assert boundary.RENDERER_CONTRACT_VERSION == RENDERER_CONTRACT_VERSION == "1.0.0"
+    assert 'RENDERER_CONTRACT_VERSION' in boundary.__all__
+    source = (ROOT / 'engine/renderer/forward/renderer.py').read_text(encoding='utf-8')
+    assert 'contract_version = RENDERER_CONTRACT_VERSION' in source, (
+        "Forward declares the contract it is written against")

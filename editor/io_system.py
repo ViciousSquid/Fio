@@ -286,6 +286,10 @@ class IOManager:
         # Entity lookup function - set by logic_thread
         self._find_entity: Optional[Callable] = None
         self._find_entity_by_id: Optional[Callable] = None
+        # finder(name, group_id) -> the members of that group (a list,
+        # possibly empty) or None when there is no such group. See
+        # set_group_finder.
+        self._find_group: Optional[Callable] = None
         
         self._logic_thread = None
         self._game_state = None
@@ -323,6 +327,20 @@ class IOManager:
         # LogicGate signal state belongs to the event dispatcher: it is
         # transient, session-local I/O state, not world-owner state.
         self.gate_inputs = {}
+
+        # Zero-delay re-entrancy guard.  An input handler that fires an output
+        # delivers its zero-delay connections in place, so a relay wired
+        # A -> B -> A (or a state whose OnValueChanged writes itself) nests one
+        # delivery inside another without end.  ``_chain_depth`` counts the
+        # nested deliveries of the chain being dispatched; past
+        # MAX_CHAIN_DEPTH the whole chain is abandoned (``_chain_aborted``
+        # makes every frame still on the stack stop delivering, so a loop with
+        # fan-out cannot keep branching while it unwinds) and one console
+        # error names the entities involved.  Delayed connections are queued,
+        # not nested, so a timer loop never comes near the limit.
+        self._chain_depth = 0
+        self._chain_aborted = False
+        self._chain_trail = []
     
     def set_logic_thread(self, logic_thread):
         """Set reference to logic thread."""
@@ -374,6 +392,19 @@ class IOManager:
         finder(entity_id: str) -> entity or None
         """
         self._find_entity_by_id = finder
+
+    def set_group_finder(self, finder: Callable):
+        """
+        Set the function used to find a *group*.
+        finder(name: str, group_id: str) -> list of member entities (by the
+        group's UUID when *group_id* is given, else by name), or None.
+
+        A connection whose target is a group (a visgroup, by its UUID or its
+        name; a brush group, by name) delivers its input to every member, in
+        order. A member that does not accept the input ignores it, as any
+        entity does. Resolution: entity id, group id, entity name, group name.
+        """
+        self._find_group = finder
     
     def register_input_handler(self, entity_type: str, input_name: str, 
                                 handler: Callable):
@@ -395,6 +426,30 @@ class IOManager:
         self._source_id = ""
         self._activator_entity = None
         self._activator_id = ""
+        self._chain_depth = 0
+        self._chain_aborted = False
+        self._chain_trail = []
+
+    #: How many zero-delay deliveries may nest inside one another before the
+    #: chain is treated as a loop and abandoned.  Far deeper than any authored
+    #: chain, and shallow enough that the dispatcher's own frames stay well
+    #: inside Python's recursion limit.
+    MAX_CHAIN_DEPTH = 64
+
+    def _abort_chain(self, target_name: str, input_name: str):
+        """Abandon the zero-delay chain being dispatched, reporting it once."""
+        self._chain_aborted = True
+        # The tail of the trail is the loop itself; its distinct members, in
+        # the order they repeat, are what the designer has to look at.
+        seen = []
+        for hop in self._chain_trail[-16:] + ["%s.%s" % (target_name, input_name)]:
+            if hop not in seen:
+                seen.append(hop)
+        debug_log("Error",
+                  "I/O: zero-delay loop — a chain of connections nested more "
+                  "than %d deliveries deep and was stopped. Involved: %s. "
+                  "Give one connection in the loop a delay, or break the cycle."
+                  % (self.MAX_CHAIN_DEPTH, " -> ".join(seen)))
     
     def fire_output(
         self,
@@ -449,6 +504,10 @@ class IOManager:
         for conn in connections:
             if conn.output_name.lower() != output_name.lower():
                 continue
+            if self._chain_aborted:
+                # The chain this output belongs to was stopped as a loop:
+                # nothing further is delivered or queued on its behalf.
+                return
             
             matching_count += 1
             
@@ -533,16 +592,56 @@ class IOManager:
         # Prefer stable-ID lookup when available
         if target_id and self._find_entity_by_id:
             target = self._find_entity_by_id(target_id)
+        # A group's UUID: every member receives the input, each exactly as
+        # if it had been the target.
+        if target is None and target_id and self._find_group:
+            if self._deliver_to_group(self._find_group('', target_id), input_name,
+                                      parameter, source_entity, source_id,
+                                      activator_id):
+                return
         # Fallback to name lookup (legacy maps or missing ID)
         if target is None:
             target = self._find_entity(target_name)
+        # No entity by that name: a group of that name.
+        if target is None and target_name and self._find_group:
+            if self._deliver_to_group(self._find_group(target_name, ''), input_name,
+                                      parameter, source_entity, source_id,
+                                      activator_id):
+                return
         if target is None:
             debug_log("Error", f"I/O: Target '{target_name}' (id={target_id}) not found!")
             return
+        self._deliver_input(target, target_name, input_name, parameter,
+                            source_entity, source_id, activator_id)
 
+    def _deliver_to_group(self, members, input_name, parameter,
+                          source_entity, source_id, activator_id):
+        """Deliver to every member of a group; False when *members* is None
+        (there is no such group)."""
+        if members is None:
+            return False
+        for member in list(members):
+            # '' : the member's own name in loop reports.
+            self._deliver_input(member, '', input_name, parameter,
+                                source_entity, source_id, activator_id)
+        return True
+
+    def _deliver_input(self, target, target_name, input_name, parameter,
+                       source_entity, source_id, activator_id):
+        """Run *input_name* on the resolved entity *target*."""
         if not io_enabled(target):
             return
         
+        if self._chain_aborted:
+            if self._chain_depth:
+                return
+            # A new top-level delivery: the aborted chain has fully unwound.
+            self._chain_aborted = False
+        if self._chain_depth >= self.MAX_CHAIN_DEPTH:
+            self._abort_chain(target_name or self._get_entity_name(target),
+                              input_name)
+            return
+
         entity_type = self._get_entity_type(target)
         
         handler_key = (entity_type.lower(), input_name.lower())
@@ -572,6 +671,9 @@ class IOManager:
             # brought to now first, so the input acts on where it has got
             # to and takes effect from now (brush_placement.asleep).
             settle_parked(target)
+        self._chain_depth += 1
+        self._chain_trail.append(
+            "%s.%s" % (target_name or self._get_entity_name(target), input_name))
         try:
             if handler:
                 try:
@@ -593,6 +695,10 @@ class IOManager:
                     self._logic_thread.collision_runtime.mark_dirty()
             (self._source_entity, self._source_id,
              self._activator_entity, self._activator_id) = previous
+            self._chain_trail.pop()
+            self._chain_depth -= 1
+            if not self._chain_depth:
+                self._chain_aborted = False
     
     #: Inputs every entity accepts, whatever its type, because
     #: :meth:`_try_generic_input` implements them for anything with properties.
@@ -913,6 +1019,8 @@ def register_default_io():
             IODef('Hide', 'Hide this prop'),
             IODef('Show', 'Show this prop'),
             IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
+            IODef('Explode', 'Blow up this prop now, if it is Explosive'),
+            IODef('Damage', 'Damage this prop (param: amount); an Explosive prop explodes once it has taken its Health', 'int'),
         ],
         outputs=[
             IODef('OnCarried', 'Fired when the player carries this prop'),
@@ -920,6 +1028,7 @@ def register_default_io():
             IODef('OnRest', 'Fired when this prop comes to rest'),
             IODef('OnCollected', 'Fired when the player collects this prop'),
             IODef('OnRespawn', 'Fired when this prop respawns'),
+            IODef('OnExplode', 'Fired when this Explosive prop explodes'),
         ]
     )
 
@@ -1053,6 +1162,8 @@ def register_default_io():
             IODef('Hide', 'Hide this prop'),
             IODef('Show', 'Show this prop'),
             IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
+            IODef('Explode', 'Blow up this prop now, if it is Explosive'),
+            IODef('Damage', 'Damage this prop (param: amount); an Explosive prop explodes once it has taken its Health', 'int'),
         ],
         outputs=[
             IODef('OnCarried', 'Fired when the player carries this prop'),
@@ -1060,6 +1171,7 @@ def register_default_io():
             IODef('OnRest', 'Fired when this prop comes to rest'),
             IODef('OnCollected', 'Fired when the player collects this prop'),
             IODef('OnRespawn', 'Fired when this prop respawns'),
+            IODef('OnExplode', 'Fired when this Explosive prop explodes'),
         ]
     )
 
@@ -1130,20 +1242,24 @@ def register_default_io():
     # === EFFECT ===
     # Effect TYPE selects the behaviour family. FIRE and ORB each have five
     # authored GIF variants; those variants are independent of effect_type.
+    # Any type may also carry a particle emitter; PARTICLES is one alone.
     register_io('effect',
         inputs=[
-            IODef('SetType', 'Set the Effect TYPE (FIRE, ORB, EXPLOSION, or CUSTOM)', 'string'),
+            IODef('SetType', 'Set the Effect TYPE (FIRE, ORB, EXPLOSION, CUSTOM, or PARTICLES)', 'string'),
             IODef('SetFireTexture', 'Select FIRE variant number 1-5', 'string'),
             IODef('SetOrbTexture', 'Select ORB variant number 1-5', 'string'),
             IODef('SetCustomGif', 'Set the CUSTOM GIF path', 'string'),
             IODef('SetLoop', 'Set whether a CUSTOM GIF loops', 'bool'),
+            IODef('SetEmitter', 'Set the particle emitter (NONE, SMOKE, STEAM, SPARKS, SPLASH, or MIST)', 'string'),
             IODef('Hide', 'Hide this Effect'),
             IODef('Show', 'Show this Effect'),
             IODef('ToggleVisibility', 'Toggle Effect visibility'),
-            IODef('Explode', 'Switch to EXPLOSION and play its animation once'),
+            IODef('Explode', 'Play its explosion once; a FIRE (or other type) burns again afterwards unless Return after exploding is off'),
         ],
         outputs=[
             IODef('OnChanged', 'Fired when an authored Effect control changes (parameter: value)', 'string'),
+            IODef('OnExplode', 'Fired when it explodes'),
+            IODef('OnExplodeFinished', 'Fired when its explosion has played (a returning Effect is its own type again)'),
         ]
     )
 
@@ -1182,6 +1298,18 @@ def register_default_io():
         outputs=[
             IODef('OnSpawn',       'Fired each time an entity is spawned'),
             IODef('OnMaxReached',  'Fired when max_spawn limit is hit'),
+        ]
+    )
+
+    # === SHAKE ===
+    # Purely visual: the camera view wobbles; nothing in the world moves.
+    register_io('shake',
+        inputs=[
+            IODef('Shake', 'Shake the screen (param: intensity 0-1, else its own)', 'string'),
+            IODef('Stop', 'Stop every shake now'),
+        ],
+        outputs=[
+            IODef('OnShake', 'Fired each time it shakes the screen'),
         ]
     )
 
@@ -1462,6 +1590,46 @@ def _io_names_lower(names):
     return {n.lower() for n in names}
 
 
+class GroupTarget:
+    """A connection's target that names a group (engine.io_groups): every
+    member receives the input; one without it ignores it."""
+
+    __slots__ = ('name', 'id', 'members')
+
+    def __init__(self, name, members, group_id=''):
+        self.name = name
+        self.id = group_id
+        self.members = list(members)
+
+
+def resolve_group_target(state, name='', group_id=''):
+    """The :class:`GroupTarget` a connection names in *state* (an editor or
+    world state): the visgroup whose UUID is *group_id*, else the group
+    called *name*; None when neither is a group. Its ``name`` is the group's
+    current name and its ``id`` its UUID ('' for a brush group)."""
+    from engine.io_groups import (group_id_of, group_members, group_members_by_id,
+                                  group_name_of)
+    members = group_members_by_id(state, group_id)
+    if members is not None:
+        return GroupTarget(group_name_of(state, group_id) or name, members, group_id)
+    members = group_members(state, name)
+    if members is None:
+        return None
+    return GroupTarget(name, members, group_id_of(state, name))
+
+
+def group_input_names(members):
+    """Every input some member of a group accepts, first-seen order: what a
+    connection targeting the group may call."""
+    names, seen = [], set()
+    for member in members:
+        for name in get_input_names(get_entity_type_for_io(member) or ''):
+            if name.lower() not in seen:
+                seen.add(name.lower())
+                names.append(name)
+    return names
+
+
 def validate_connection(conn, entity, target, source_type=None):
     """Problems with one connection, as ``[(code, message), ...]``.
 
@@ -1492,6 +1660,19 @@ def validate_connection(conn, entity, target, source_type=None):
         problems.append((
             PROBLEM_MISSING_TARGET,
             "targets '%s', which is not in this map" % (target_name or '<unnamed>',)))
+    elif isinstance(target, GroupTarget):
+        # A group is judged only when every member's type is known: then the
+        # input must be one at least one member accepts.
+        types = [get_entity_type_for_io(m) for m in target.members]
+        if types and all(is_registered_type(t) for t in types):
+            accepted = set(IOManager.GENERIC_INPUTS)
+            for t in types:
+                accepted |= _io_names_lower(get_input_names(t))
+            if input_name.lower() not in accepted:
+                problems.append((
+                    PROBLEM_UNKNOWN_INPUT,
+                    "calls '%s', which no member of group '%s' accepts"
+                    % (input_name, target.name)))
     else:
         target_type = get_entity_type_for_io(target)
         if is_registered_type(target_type):
@@ -1584,7 +1765,8 @@ def audit_io_coverage(io_manager):
     }
 
 
-def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=None):
+def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=None,
+                               find_group=None):
     """Every problem in a whole map, as ``[(entity, connection, code, message)]``.
 
     Resolution follows the runtime's own rule — id first, name second — so what
@@ -1608,13 +1790,26 @@ def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=No
         find_by_id = find_by_id or by_id.get
         find_by_name = find_by_name or by_name.get
 
+    if find_group is None:
+        # Brush groups live on the brushes; visgroups need the caller's state.
+        from types import SimpleNamespace
+        scene = SimpleNamespace(brushes=brushes, things=things)
+        find_group = lambda name, group_id='': resolve_group_target(scene, name, group_id)
+
     def _resolve(conn):
+        # As the runtime does: entity id, group id, entity name, group name.
         target_id = getattr(conn, 'target_id', '')
         if target_id:
             found = find_by_id(target_id)
+            if found is None:
+                found = find_group('', target_id)
             if found is not None:
                 return found
-        return find_by_name(getattr(conn, 'target_name', '') or '')
+        name = getattr(conn, 'target_name', '') or ''
+        found = find_by_name(name)
+        if found is None and name:
+            found = find_group(name, '')
+        return found
 
     report = []
     for entity in list(brushes) + list(things):
@@ -1626,7 +1821,7 @@ def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=No
     return report
 
 def validate_all_scene_connections(
-        brushes, things, find_by_id=None, find_by_name=None):
+        brushes, things, find_by_id=None, find_by_name=None, find_group=None):
     """Validate every authored graph connection in the scene.
 
     This covers both graph systems currently used by Fio:
@@ -1648,6 +1843,7 @@ def validate_all_scene_connections(
         things,
         find_by_id=find_by_id,
         find_by_name=find_by_name,
+        find_group=find_group,
     )
 
     io_count = sum(

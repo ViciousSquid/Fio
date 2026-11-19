@@ -17,7 +17,8 @@ import numpy as np
 import pytest
 
 from engine.change_journal import JOURNAL, touch
-from engine.physics import PhysicsWorld, SpatialGrid
+from engine.physics.soma import Soma
+from engine.spatial_grid import SpatialGrid
 from engine.prop_entity import Prop
 from engine.spatial import set_authored_flag
 from tests.helpers.soak import Soak, cycles
@@ -65,7 +66,7 @@ def _crowd(side):
 def _world():
     grid = SpatialGrid(cell_size=512.0)
     grid.populate([_floor()])
-    return PhysicsWorld(grid)
+    return Soma(grid)
 
 
 def _live_sinks():
@@ -118,7 +119,7 @@ def test_flag_churn_on_a_sleeping_crowd_stays_sparse_and_flat():
 
 
 def test_building_and_discarding_worlds_leaves_no_journal_subscribers():
-    """Each PhysicsWorld subscribes to the process-wide journal. Worlds come
+    """Each Soma subscribes to the process-wide journal. Worlds come
     and go with every Play session and level change; their sinks must go with
     them, or every later ``touch`` walks the dead ones."""
     gc.collect()

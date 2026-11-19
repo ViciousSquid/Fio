@@ -204,12 +204,13 @@ def test_carrying_refiles_the_held_prop():
 # ---------------------------------------------------------------------------
 
 def _real_physics_world(prop):
-    """Build the production PhysicsWorld around a real Prop entity."""
-    from engine.physics import PhysicsWorld, SpatialGrid
+    """Build the production Soma around a real Prop entity."""
+    from engine.physics.soma import Soma
+    from engine.spatial_grid import SpatialGrid
 
     grid = SpatialGrid()
     grid.populate([])
-    world = PhysicsWorld(grid)
+    world = Soma(grid)
     brush = {
         "pos": list(prop.pos),
         "size": [32.0, 32.0, 32.0],
@@ -226,7 +227,7 @@ def test_physics_cell_transitions_are_taken_as_a_batch():
     physics = _real_physics_world(prop)
     session = make_session([prop], physics=physics)
 
-    # Establish the real PhysicsWorld's baseline, then move the body through
+    # Establish the real Soma's baseline, then move the body through
     # its production handle so entities_that_changed_cell() reports it.
     assert physics.entities_that_changed_cell() == ()
     body = physics.bodies[id(prop)]
@@ -236,7 +237,7 @@ def test_physics_cell_transitions_are_taken_as_a_batch():
     session.sync_physics_positions()
 
     assert physics.entities_that_changed_cell() == (), (
-        "the PropSession should have consumed the PhysicsWorld cell transition")
+        "the PropSession should have consumed the Soma cell transition")
     assert session._filed[id(prop)] == cell_of_point(prop.pos[0], prop.pos[2])
     assert prop.pos[0] >= CELL_SIZE, (
         "the real physics step did not move the body across a spatial cell: %r"
@@ -256,14 +257,15 @@ def test_a_quiet_frame_refiles_nothing():
 
 
 # ---------------------------------------------------------------------------
-# PhysicsWorld's side of the batch interface
+# Soma's side of the batch interface
 # ---------------------------------------------------------------------------
 
 def _physics_world_with(positions):
-    from engine.physics import PhysicsWorld, SpatialGrid
+    from engine.physics.soma import Soma
+    from engine.spatial_grid import SpatialGrid
     grid = SpatialGrid()
     grid.populate([])
-    world = PhysicsWorld(grid)
+    world = Soma(grid)
     brushes = []
     for i, pos in enumerate(positions):
         entity = prop_at(*pos, physics_enabled=True, mass=1.0)

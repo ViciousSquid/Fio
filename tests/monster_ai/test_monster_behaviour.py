@@ -1,7 +1,7 @@
 """MonsterAI behaviour: waking, chasing, attacking, dying.
 
 Every test here drives ``MonsterAI.update(delta)`` with an explicit delta and a
-real :class:`engine.physics.SpatialGrid`, so nothing depends on wall-clock time
+real :class:`engine.spatial_grid.SpatialGrid`, so nothing depends on wall-clock time
 or on a fake that answers more kindly than the engine would.  The AI's state
 machine lives in ``monster_states[id(thing)]`` and in the monster's own
 properties; assertions name the monster and the state key rather than checking

@@ -127,3 +127,35 @@ def test_shared_gpu_payload_fades_live_without_mutating_authored_lights(monkeypa
     config['thing_hidden'][0] = False
     table.light_enabled[0] = False
     assert renderer._get_active_lights(config)[1].size == 0
+
+
+def test_packing_the_light_buffer_does_no_texture_work(monkeypatch):
+    """The light UBO is packed with no GL context assumptions beyond its
+    buffer: the cookie placeholder is bound with the samplers
+    (_bind_light_cookies), never by the packing. On Windows a texture call
+    made without a context fails, where Mesa lets it pass."""
+    pytest.importorskip('OpenGL')
+    from engine import light_cookies
+    from engine.renderer.core.visibility import VisibilityMixin
+    from engine.renderer.forward import lighting
+
+    class Renderer(lighting.LightingMixin, VisibilityMixin):
+        def __init__(self):
+            self._light_ubo = 1
+            self._light_ubo_key = None
+            self._light_ubo_data = np.zeros(4, dtype=self.LIGHT_UBO_DTYPE)
+            self._light_shadow_index = {}
+
+        def _ensure_light_ubo(self, count):
+            pass
+
+    def no_texture_work(*args, **kwargs):
+        raise AssertionError("the light UBO packing touched a texture")
+
+    monkeypatch.setattr(light_cookies, 'bind_placeholder', no_texture_work)
+    monkeypatch.setattr(lighting.gl, 'glBindBuffer', lambda *args: None)
+    monkeypatch.setattr(lighting.gl, 'glBufferData', lambda *args: None)
+    renderer = Renderer()
+    config = dict(entity_table=table_at(ACTIVE_LIGHT_RANGE), play_mode=True)
+    renderer._upload_light_ubo(renderer._get_active_lights(config), 1)
+    assert renderer._cookie_array_bound is False      # the samplers bind the placeholder

@@ -74,12 +74,16 @@ jobs:
     # Windows and the shards are balanced by test count, not time. Four shards
     # needed 52-71 min (three hit the old 60-min limit); six are simulated at
     # 26-60 min from those timings, so the limit keeps ~25% headroom.
+    # By 3.5.0's stable branch the slowest of six shards needed ~80 min and
+    # was cancelled at the limit every run. Simulated from that run's module
+    # timings, seven shards take 20-59 min (eight: up to 61, as count
+    # balancing groups the slow modules), restoring the headroom.
     timeout-minutes: 75
     continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -96,7 +100,7 @@ jobs:
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python tools/run_qt_suite_shard.py --shard-count 6 --shard-index ${{ matrix.shard }}
+        run: python tools/run_qt_suite_shard.py --shard-count 7 --shard-index ${{ matrix.shard }}
 
   windows_arm64_no_gpu:
     name: No-GPU fast core on Windows ARM64 (native, CPython 3.14)

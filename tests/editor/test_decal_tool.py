@@ -1,7 +1,8 @@
 """The Decal tool works as terrain stamps do: click to place the image chosen
 in the Asset Browser on a surface, Shift-click to select, drag across
 surfaces, nudge with the arrow keys, Delete, Escape -- each change one undo
-step. Decals are entities but never drawn in the 2D views."""
+step. Decals are entities, marked in the 2D views with the DECAL button's
+icon."""
 
 import pytest
 
@@ -118,11 +119,19 @@ def test_panel_changes_apply_to_the_selected_decal(main_window, tool):
     assert not hasattr(panel, 'type_combo')               # no Image / Wet setting
 
 
-def test_decals_are_not_in_the_2d_views(main_window, tool):
+def test_decals_are_in_the_2d_views_with_the_decal_button_icon(main_window, tool):
     tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
     press(tool, 10, 10)
     placed, = decals(main_window)
-    assert main_window.view_top._hidden(placed)
+    assert not main_window.view_top._hidden(placed)
+    icon = placed.get_icon_pixmap()
+    assert icon is not None and not icon.isNull()
+    import os
+    from engine.asset_qt import load_pixmap
+    from tests.helpers.paths import REPO_ROOT
+    button = load_pixmap(os.path.join(REPO_ROOT, "assets", "decal_button.png"))
+    assert not button.isNull()
+    assert icon.toImage() == button.toImage()        # the DECAL button's own icon
 
 
 def test_the_menu_item_and_button_turn_it_off_and_clear_the_selection(main_window, tool):
@@ -194,7 +203,7 @@ def test_the_tint_and_decal_buttons_have_a_size_menu_kept_in_settings(main_windo
     monkeypatch.setattr(QMenu, 'exec_', lambda self, *a: shown.append(self))
     tab._side_button_menu(tab.decal_btn.geometry().center())
     assert shown == []
-    empty = QPoint(tab.inspector_btn.geometry().right() + 20, tab.inspector_btn.geometry().center().y())
+    empty = QPoint(tab.inspector_btn.geometry().left() - 20, tab.inspector_btn.geometry().center().y())
     tab._side_button_menu(empty)
     assert len(shown) == 1
     tab.set_side_button_size('small')
@@ -222,3 +231,60 @@ def test_an_unselected_decal_stays_in_the_level(main_window, tool):
     tool.escape()                              # clears the selection
     tool.escape()                              # leaves the tool
     assert not tool.active and len(decals(main_window)) == 1
+
+
+# -- size: the picked image's, and its shape kept -----------------------------
+
+def test_picking_an_image_sets_the_size_new_decals_get(main_window, tool):
+    """Placing: the panel's Width and Height become the picked image's pixel
+    size (a 512x64 banner: 512 by 64 units), and can be changed."""
+    from editor.decal_tool import image_size
+    assert image_size('Decal02.jpg') == (512, 64)
+    tool.image_chosen('Decal02.jpg')
+    assert (tool.settings['width'], tool.settings['height']) == (512.0, 64.0)
+    panel = tool.panel()
+    assert (panel.width_spin.value(), panel.height_spin.value()) == (512.0, 64.0)
+    tool.keep_aspect = False
+    panel.height_spin.setValue(100.0)                     # changed by hand
+    assert (tool.settings['width'], tool.settings['height']) == (512.0, 100.0)
+
+
+def test_picking_an_image_in_the_asset_browser_tells_the_tool(main_window, tool, monkeypatch):
+    seen = []
+    monkeypatch.setattr(tool, 'image_chosen', seen.append)
+    tab = main_window.asset_browser.tab_textures
+    item = type('Tile', (), {'file_path': 'assets/textures/decals/Banner01.png'})()
+    monkeypatch.setattr(tab.model, 'refresh_path', lambda *_: None)
+    monkeypatch.setattr(tab, 'stop_preview', lambda *_: None, raising=False)
+    tab.select_item(item)
+    assert seen == ['assets/textures/decals/Banner01.png']
+    tool.set_active(False)
+    tab.select_item(None)
+    tab.select_item(item)                                 # tool off: not told
+    assert seen == ['assets/textures/decals/Banner01.png']
+
+
+def test_a_placed_decal_keeps_its_size_when_another_image_is_picked(main_window, tool):
+    tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    tool.settings.update(width=300.0, height=200.0)
+    press(tool, 10, 10)
+    placed, = decals(main_window)
+    tool.image_chosen('Decal02.jpg')
+    assert (placed.properties['width'], placed.properties['height']) == (300.0, 200.0)
+
+
+def test_keep_aspect_ratio_is_on_and_resizing_keeps_the_shape(main_window, tool):
+    panel = tool.panel()
+    assert tool.keep_aspect and panel.keep_aspect_cb.isChecked()
+    tool.surfaces[(10, 10)] = ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    tool.settings.update(width=400.0, height=100.0)
+    press(tool, 10, 10)
+    placed, = decals(main_window)                         # selected: 4:1
+    panel.width_spin.setValue(200.0)
+    assert (placed.properties['width'], placed.properties['height']) == (200.0, 50.0)
+    assert panel.height_spin.value() == 50.0
+    panel.height_spin.setValue(80.0)
+    assert (placed.properties['width'], placed.properties['height']) == (320.0, 80.0)
+    panel.keep_aspect_cb.setChecked(False)                # off: one side alone
+    panel.width_spin.setValue(100.0)
+    assert (placed.properties['width'], placed.properties['height']) == (100.0, 80.0)

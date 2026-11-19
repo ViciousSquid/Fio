@@ -228,9 +228,29 @@ class FioPackage:
             data = json.loads(_decode(raw))
             if not isinstance(data, dict):
                 raise PackageError(f"Map must be a JSON object: {archive_path}")
-            return data
         except json.JSONDecodeError as exc:
             raise PackageError(f"Corrupt map '{archive_path}': {exc}") from exc
+        return self._with_terrain_stamps(data, _normalize(archive_path))
+
+    def _with_terrain_stamps(self, level: Dict, map_member: str) -> Dict:
+        """The map's terrain paint and placed stamps are packaged beside it
+        (``<map name>.paint``) and laid over it here, as a delta. A missing
+        or unreadable paint file leaves the map as packaged: unpainted."""
+        from . import terrain_stamp
+        member = terrain_stamp.stamp_member(map_member)
+        if member not in self._names:
+            terrain = level.get(terrain_stamp.TERRAIN_KEY)
+            if isinstance(terrain, dict) and terrain.get(terrain_stamp.MARKER_KEY):
+                print("[Package] " + terrain_stamp.missing_paint_message(
+                    _basename(member)))
+            return level
+        try:
+            raw = self._read_raw(member)
+            stamps = json.loads(_decode(raw)) if raw is not None else None
+        except (PackageError, ValueError) as exc:
+            print(f"[Package] {member} was not used: {exc}")
+            return level
+        return terrain_stamp.apply_stamp_delta(level, stamps)
 
     def load_start_map(self) -> Dict:
         """Parse the entry-point map into a Python dict (ready for the engine)."""

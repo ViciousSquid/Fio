@@ -1,4 +1,4 @@
-"""``engine.physics.SpatialGrid``: the collision/AI broad phase.
+"""``engine.spatial_grid.SpatialGrid``: the collision/AI broad phase.
 
 This is the grid the player's physics and every MonsterAI query go through, so
 what matters is not just that a lookup finds the right brushes but that it can
@@ -15,7 +15,7 @@ import math
 import glm
 import pytest
 
-from engine.physics import SpatialGrid
+from engine.spatial_grid import SpatialGrid
 from engine.spatial import CELL_SIZE, PARKED_HIDDEN_KEY
 from tests.helpers.worlds import box_brush, pillar_grid, room
 

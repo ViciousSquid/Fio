@@ -161,6 +161,8 @@ class WaterSurfaces:
                                       np.ascontiguousarray(normal.T))
                 _set_vec3(gl,prog,'brushSize',size)
                 _set_vec3(gl,prog,'waterTint',normalize_color(brush.get('water_tint',[0,.4,.6])))
+                # Emissive water glows in its tint, as on the desktop.
+                _set_float(gl,prog,'waterEmissive',1.0 if brush.get('emissive') else 0.0)
                 fresnel = float(brush.get('water_fresnel',brush.get('water_reflectivity',.65)))
                 for name,value in (('waterOpacity',brush.get('water_opacity',.5)),
                                    ('waterReflectivity',fresnel),('fresnelIntensity',fresnel),

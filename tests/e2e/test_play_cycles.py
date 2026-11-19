@@ -48,9 +48,14 @@ def test_repeated_play_sessions_leak_no_threads_or_memory(fio_session):
     assert {t.name for t in threading.enumerate()} == threads
     assert not any(t.name == "MonsterAIThread" for t in threading.enumerate())
     growth = sum(stat.size_diff for stat in after.compare_to(before, "filename"))
-    # Allowance for interned strings and allocator slack, not for a per-Play
-    # leak: a single leaked copy of this map's tables is larger than this.
-    assert growth < 512 * 1024, "%d KiB retained over %d Play sessions:\n%s" % (
+    # What this must catch is a per-Play leak: one leaked copy of this map's
+    # tables is over 512 KiB, so CYCLES of them is over 15 MiB. What it must
+    # not trip on is memory that is bounded but lands inside the window: the
+    # console's 1000-line log filling, an undrained journal sink (nothing
+    # paints here), and caches the editor's timers fill once by the clock --
+    # together 0.5-0.9 MiB, and how much of it falls in the window depended
+    # on which tests had run before this one.
+    assert growth < 2 * 1024 * 1024, "%d KiB retained over %d Play sessions:\n%s" % (
         growth // 1024, CYCLES,
         "\n".join(str(s) for s in after.compare_to(before, "lineno")[:10]))
 

@@ -123,7 +123,7 @@ PROP_DEFAULTS = {
     'collision_size': [0.0, 0.0, 0.0],
     'physics_enabled': False,
     'no_collision': True,
-    'collision_shape': 'auto',
+    'collision_shape': 'aabb',
     'gravity': True,
     'friction': 0.55,
     'linear_damping': 0.08,
@@ -165,7 +165,7 @@ LEGACY_MODEL_DEFAULTS = {
 #: player's hands.
 OIL_BARREL_SETTINGS = {
     'model_path': DEFAULT_MODEL_PATH,
-    'collision_shape': 'auto',
+    'collision_shape': 'aabb',
     'rolls': False,
     'topples': True,
     'bounciness': 0.0,
@@ -198,13 +198,22 @@ MODEL_PRESETS = {
     'Oil Barrel': OIL_BARREL_SETTINGS,
     'Ball': BALL_SETTINGS,
 }
+#: The Oil Barrel's variants: its Variant list in the Prop panel, each a
+#: model file. Every variant is the Oil Barrel (its preset, its settings);
+#: only the look differs.
+OIL_BARREL_VARIANTS = {
+    'None': DEFAULT_MODEL_PATH,
+    'Grey': 'assets/models/Oil_Drum_Grey.obj',
+}
 _MODEL_SETTINGS = {settings['model_path']: settings for settings in (
     OIL_BARREL_SETTINGS, BALL_SETTINGS, BALL_NUMBERS_SETTINGS)}
+for _path in OIL_BARREL_VARIANTS.values():
+    _MODEL_SETTINGS.setdefault(_path, {**OIL_BARREL_SETTINGS, 'model_path': _path})
 
 #: The models that fall over unless a Prop says otherwise: the oil barrels.
 #: A map saved before barrels could fall over has no ``topples`` in it; its
 #: barrels take this.
-TOPPLING_MODELS = frozenset({DEFAULT_MODEL_PATH, 'assets/models/Oil_Drum_Grey.obj'})
+TOPPLING_MODELS = frozenset(OIL_BARREL_VARIANTS.values())
 
 
 def topples_by_default(model_path):
@@ -229,12 +238,31 @@ def model_settings(model_path):
 
 
 def model_preset_name(model_path):
-    """The Presets entry showing *model_path*, or None for another model."""
+    """The Presets entry showing *model_path*, or None for another model.
+    Every Oil Barrel variant is the Oil Barrel."""
     key = _model_key(model_path)
+    if oil_barrel_variant(key) is not None:
+        return 'Oil Barrel'
     for name, settings in MODEL_PRESETS.items():
         if settings['model_path'] == key:
             return name
     return None
+
+
+def oil_barrel_variant(model_path):
+    """The Oil Barrel variant *model_path* is ('None', 'Grey'), or None when
+    it is not an Oil Barrel."""
+    key = _model_key(model_path)
+    for name, path in OIL_BARREL_VARIANTS.items():
+        if path == key:
+            return name
+    return None
+
+
+def is_preset_only_model(model_path):
+    """Whether *model_path* is reached only through a preset (the Oil Barrel
+    and its variants): the asset browser does not list it."""
+    return oil_barrel_variant(model_path) is not None
 
 
 def legacy_model_properties(properties):

@@ -335,7 +335,7 @@ class LogicCollision:
     def build_model_collision_brushes(self):
         """Create collision data for model entities.
 
-        Props can explicitly choose Automatic, AABB, or Mesh collision. A
+        Props choose AABB (the default) or Mesh collision. A
         non-zero collision_size always overrides the shape choice with a
         custom AABB.
         """
@@ -344,10 +344,14 @@ class LogicCollision:
         brushes = []
 
         physics_on = bool(getattr(logic.session_runtime, 'physics_enabled', True))
+        explosions = getattr(logic, 'explosion_runtime', None)
+        exploded = explosions.exploded if explosions is not None else {}
         for thing in logic.editor_state.things:
             props = getattr(thing, 'properties', {})
             if not props.get('model_path'):
                 continue
+            if exploded and id(thing) in exploded:
+                continue            # blown up this session: nothing there
             # With physics switched off for the session nothing is a body: a
             # physics Prop collides as the scenery it otherwise is.
             physics_enabled = physics_on and bool(props.get('physics_enabled', False))
@@ -370,9 +374,14 @@ class LogicCollision:
 
             rot = props.get('rotation', [0, 0, 0])
             is_physics_body = physics_enabled
+            # Two shapes, both taken from the model: AABB (the default: a box
+            # around it, the cheap path everything was on) and Mesh (its
+            # triangles). 'auto', which older maps hold, is AABB.
             collision_shape = str(
-                props.get('collision_shape', 'auto')
+                props.get('collision_shape', 'aabb')
             ).lower()
+            if collision_shape != 'mesh':
+                collision_shape = 'aabb'
 
             # A non-zero explicit collision_size always forces a custom AABB.
             collision_size = props.get('collision_size')
@@ -451,13 +460,13 @@ class LogicCollision:
                 })
                 continue
 
-            # Automatic uses mesh collision where supported. Explicit Mesh
-            # behaves the same today and falls back to AABB if the model cannot
-            # provide mesh collision.
+            # Mesh: the model's own triangles. A model that cannot give any
+            # (an unreadable file, an unsupported format) falls back to the
+            # box below.
             mesh_tris = self.compute_model_collision_mesh(
                 model_path, pos, scale, rot
             )
-            if mesh_tris and collision_shape in ('auto', 'mesh'):
+            if mesh_tris and collision_shape == 'mesh':
                 brushes.append({
                     'pos': pos,
                     'size': [1, 1, 1],
@@ -537,24 +546,50 @@ class LogicCollision:
             return None
 
         ext = os.path.splitext(model_path)[1].lower()
-        if ext != '.glb':
-            return None  # Only GLB supports mesh collision for now
+        if ext not in ('.glb', '.obj'):
+            return None
 
         try:
-            # GLBLoader is pure file I/O + JSON parsing — zero OpenGL calls.
-            from .glb_loader import GLBLoader
-
-            loader = GLBLoader()
-            loader._filepath_hint = full_path
             from .model_source import load_model
-            if package:
-                loader = load_model(model_path, package)
-            if loader is None or (not package and not loader.load(full_path)):
-                debug_log("Collision", f"GLBLoader failed to load {model_path}")
-                return None
+            if ext == '.obj':
+                # CPU geometry only: the OpenGL-backed OBJ model is not made
+                # on the logic thread. The same origin repair the drawn model
+                # and its bounds get (compute_model_bounds), then each face
+                # as a fan of triangles.
+                from .obj_loader import OBJLoader
+                loader = OBJLoader()
+                if package:
+                    loader = load_model(model_path, package)
+                if loader is None or (not package and not loader.load(full_path)):
+                    debug_log("Collision", f"OBJLoader failed to load {model_path}")
+                    return None
+                source = np.asarray(loader.vertices, dtype=np.float32)
+                if source.size == 0:
+                    return None
+                source_min, source_max = source.min(axis=0), source.max(axis=0)
+                centre = (source_min + source_max) * 0.5
+                threshold = np.maximum((source_max - source_min) * 2.0, 2.0)
+                source = source - np.where(np.abs(centre) > threshold, centre, 0.0)
+                all_verts = [tuple(map(float, v)) for v in source]
+                all_tris = []
+                for face in loader.faces:
+                    corners = [c[0] for c in face['vertices']]
+                    for k in range(1, len(corners) - 1):
+                        all_tris.append((corners[0], corners[k], corners[k + 1]))
+            else:
+                # GLBLoader is pure file I/O + JSON parsing — zero OpenGL calls.
+                from .glb_loader import GLBLoader
 
-            all_verts = loader.get_flattened_vertices()   # list of (x, y, z)
-            all_tris  = loader.get_flattened_triangles()  # list of (i0, i1, i2)
+                loader = GLBLoader()
+                loader._filepath_hint = full_path
+                if package:
+                    loader = load_model(model_path, package)
+                if loader is None or (not package and not loader.load(full_path)):
+                    debug_log("Collision", f"GLBLoader failed to load {model_path}")
+                    return None
+
+                all_verts = loader.get_flattened_vertices()   # list of (x, y, z)
+                all_tris  = loader.get_flattened_triangles()  # list of (i0, i1, i2)
 
             if not all_verts or not all_tris:
                 debug_log("Collision", f"No geometry in {model_path}")
@@ -582,7 +617,8 @@ class LogicCollision:
 
             world_tris = []
             for i0, i1, i2 in all_tris:
-                if i0 >= len(all_verts) or i1 >= len(all_verts) or i2 >= len(all_verts):
+                if (i0 >= len(all_verts) or i1 >= len(all_verts) or i2 >= len(all_verts)
+                        or min(i0, i1, i2) < 0):
                     continue
                 w0 = transform_point(*all_verts[i0])
                 w1 = transform_point(*all_verts[i1])

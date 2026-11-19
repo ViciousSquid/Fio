@@ -19,6 +19,7 @@ from PyQt5.QtGui import (QPixmap, QColor, QPainter, QFont, QFontMetrics, QPen, Q
                          QImage, QImageReader, QLinearGradient, QRegion, QStandardItem,
                          QStandardItemModel)
 from engine.glb_loader import render_glb_thumbnail
+from engine.prop_entity import is_preset_only_model
 # The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
 # that opens that panel borrows it so the two read as a pair.
 from editor.surface_inspector import FACE_BUTTON_STYLE as INSPECTOR_BUTTON_STYLE
@@ -251,6 +252,20 @@ def audio_thumbnail(path, size):
     painter.drawText(QRect(0, size * 2 // 3, size, size // 3), Qt.AlignCenter, ext)
     painter.end()
     return pixmap
+
+
+#: The frame of a selected wet decal in the grid (any other tile: orange).
+WET_DECAL_ACCENT = '#4CAF50'
+
+
+def is_wet_decal(path):
+    """Whether *path* is a wet decal: an image in a ``decals`` folder with
+    "wet" or "puddle" in its name (engine.decal_textures.is_wet_image)."""
+    folder = os.path.basename(os.path.dirname(str(path or ''))).lower()
+    if folder != 'decals':
+        return False
+    from engine.decal_textures import is_wet_image
+    return bool(is_wet_image(os.path.basename(str(path))))
 
 
 class AssetItem:
@@ -734,6 +749,11 @@ class AssetDelegate(QStyledItemDelegate):
             return
         cell = QRect(option.rect)
         selected = item is tab.selected_item
+        # A wet decal (a mask of where the surface is wet, not a picture that
+        # is painted) is framed green when picked, so the two kinds of decal
+        # are told apart at the moment one is chosen.
+        accent = QColor(WET_DECAL_ACCENT if selected and is_wet_decal(item.file_path)
+                        else '#F08000')
         painter.save()
         # A flat tile, square-cornered, the picture filling it -- its own
         # shape kept and centred, so a 4:3 texture shows thin bars.
@@ -762,14 +782,14 @@ class AssetDelegate(QStyledItemDelegate):
         font.setPixelSize(10)
         font.setBold(selected)
         painter.setFont(font)
-        painter.setPen(QColor('#F08000') if selected else QColor('#eee'))
+        painter.setPen(accent if selected else QColor('#eee'))
         text_rect = strip.adjusted(4, 0, -3, 0)
         text = QFontMetrics(font).elidedText(item.name_text, Qt.ElideRight, text_rect.width())
         painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, text)
         if selected:
             painter.setRenderHint(QPainter.Antialiasing, False)
             painter.setBrush(Qt.NoBrush)
-            painter.setPen(QPen(QColor('#F08000'), 2))
+            painter.setPen(QPen(accent, 2))
             painter.drawRect(cell.adjusted(1, 1, -1, -1))
         painter.restore()
 
@@ -1171,8 +1191,8 @@ class AssetBrowserTab(QWidget):
         self._folder_before_decals = None
 
         # Create a container widget for buttons to allow stretching.
-        # The texture tab keeps INSPECTOR on the left and Tint brush on the
-        # far right; the stretch between them follows the browser width.
+        # The texture tab keeps INSPECT, Tint and Decal together on the right;
+        # the stretch before them follows the browser width.
         button_container = QWidget()
         button_layout = QHBoxLayout(button_container)
         button_layout.setContentsMargins(0, 0, 0, 0)
@@ -1205,7 +1225,9 @@ class AssetBrowserTab(QWidget):
             self.add_btn.clicked.connect(self.on_add_clicked)
             button_layout.addWidget(self.add_btn)
         else:
-            self.inspector_btn = QPushButton("INSPECTOR")
+            button_layout.addStretch()
+
+            self.inspector_btn = QPushButton("INSPECT")
             self.inspector_btn.setStyleSheet(INSPECTOR_BUTTON_STYLE)
             self.inspector_btn.setFixedHeight(32)
             self.inspector_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -1215,8 +1237,6 @@ class AssetBrowserTab(QWidget):
                 "for one face or every face of the selection")
             self.inspector_btn.clicked.connect(self.on_inspector_clicked)
             button_layout.addWidget(self.inspector_btn)
-
-            button_layout.addStretch()
 
             # Tint and DECAL are one size, side by side (apply_side_button_size).
             self.tint_btn = QPushButton(load_icon("assets/tint.png"), "")
@@ -1255,9 +1275,9 @@ class AssetBrowserTab(QWidget):
             banner_layout.addWidget(button_container, stretch=1)
             banner_layout.addStretch()
         else:
-            # The Inspector button sits next to the folder toggle at its natural
-            # width; the container's own trailing stretch fills the rest of the
-            # bar, so nothing centres it and nothing stretches it.
+            # The container's own leading stretch fills the bar, so INSPECT,
+            # Tint and Decal sit together at the right at their natural
+            # widths: nothing centres them and nothing stretches them.
             banner_layout.addWidget(button_container, stretch=1)
 
         main_layout.addWidget(self.action_bar)
@@ -1589,7 +1609,11 @@ class AssetBrowserTab(QWidget):
             extensions = self.extensions
             items = [AssetItem(f, os.path.join(path, f), is_model=self.is_model_tab,
                                is_audio=self.is_audio_tab)
-                     for f in files if os.path.splitext(f)[1].lower() in extensions]
+                     for f in files if os.path.splitext(f)[1].lower() in extensions
+                     # The Oil Barrel's models come through its preset and
+                     # Variant in the Prop panel, not from here.
+                     and not (self.is_model_tab and is_preset_only_model(
+                         os.path.join(path, f).replace('\\', '/')))]
             self.items = items
             self.model.set_entries(items)
             # Their shapes, from the headers, off the UI thread: wide and
@@ -1606,6 +1630,10 @@ class AssetBrowserTab(QWidget):
             if tile is not None:
                 self.model.refresh_path(tile.file_path)
         self.update_buttons_enabled()
+        # Placing decals: the Decal tool takes the picked image's size.
+        tool = getattr(getattr(self.editor, 'view_3d', None), 'decal_tool', None)
+        if item is not None and item is not previous and getattr(tool, 'active', False):
+            tool.image_chosen(item.file_path)
 
     def update_buttons_enabled(self):
         # Only the model and audio tabs have a button that needs a selection.

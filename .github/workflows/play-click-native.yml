@@ -110,7 +110,7 @@ jobs:
           run_tests() {
             set +e
             # A test still running after 3 minutes dumps every thread's stack.
-            python -m pytest tests/native -v -s -p no:cacheprovider \
+            python -m pytest tests/native/test_play_click_native.py -v -s -p no:cacheprovider \
               -o faulthandler_timeout=180 2>&1 | tee "$log"
             status=${PIPESTATUS[0]}
             set -e
@@ -159,3 +159,25 @@ jobs:
           [ "$status" -eq 0 ] || exit "$status"
           # A skip (no OpenGL, no display) is not a demonstration: all three must run.
           grep -qE '(^|[^0-9])3 passed' "$log" || { echo "::error::not every native test ran"; exit 1; }
+
+      # macOS only: right-drag look after a Glow brush's colour change
+      # (tests/native/test_editor_look_after_glow_colour.py). Its control
+      # reports, the main test asserts; both logs go to the summary.
+      - name: macOS - right-drag look after a Glow colour change
+        if: matrix.platform.id == 'macos'
+        timeout-minutes: 12
+        run: |
+          log="$RUNNER_TEMP/glow-look.log"
+          export QT_QPA_PLATFORM=cocoa PYOPENGL_PLATFORM=darwin
+          set +e
+          python -m pytest tests/native/test_editor_look_after_glow_colour.py -v -s \
+            -p no:cacheprovider -o faulthandler_timeout=180 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "## macOS: right-drag look after a Glow colour change"
+            echo '```'
+            grep -E '^\[(before|after|picked|control|debug console)|PASSED|FAILED|SKIPPED|ERROR| passed| failed' "$log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"

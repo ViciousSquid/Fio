@@ -960,13 +960,37 @@ def ray_to_shape(brush, ray_o, ray_d):
     or a convex brush against its local shape (:func:`shape_convex`), in this
     frame is hit exactly where it is drawn.
     """
-    ax, ay, az = shape_origin(brush)
-    px, py, pz = placed_box(brush)[:3]
+    o, d, _convex, _box = ray_to_shape_parts(brush, ray_o, ray_d)
+    return o, d
+
+
+def ray_to_shape_parts(brush, ray_o, ray_d):
+    """``(origin, direction, convex, box)``: :func:`ray_to_shape`'s ray with
+    the shape it is to be tested against -- :func:`shape_convex` (``None``
+    for a box) and :func:`authored_box` -- each looked up once. The same
+    values, to the bit, as calling the three separately (a picker that
+    tests every brush calls this once per brush)."""
+    convex = shape_convex(brush)
+    if convex is not None:
+        sb = convex.shape_box
+        pos = brush.get('pos') or DEFAULT_POS
+        box = (float(pos[0]) + sb[0], float(pos[1]) + sb[1], float(pos[2]) + sb[2],
+               sb[3], sb[4], sb[5])
+        ax, ay, az = sb[0], sb[1], sb[2]
+    else:
+        box = _mesh_box(brush) or _dict_box(brush)
+        ax, ay, az = box[0], box[1], box[2]
+    runtime = runtime_of(brush)
+    if runtime is None:
+        px, py, pz = box[0], box[1], box[2]
+        spin = None
+    else:
+        px, py, pz = runtime[0], runtime[1], runtime[2]
+        spin = runtime[3:7] if runtime[6] else None
     ox = float(ray_o[0]) - px
     oy = float(ray_o[1]) - py
     oz = float(ray_o[2]) - pz
     dx, dy, dz = float(ray_d[0]), float(ray_d[1]), float(ray_d[2])
-    spin = runtime_spin(brush)
     r = rotation_matrix(spin[:3], spin[3]) if spin is not None else None
     if r is not None:
         (r00, r01, r02), (r10, r11, r12), (r20, r21, r22) = r
@@ -976,7 +1000,7 @@ def ray_to_shape(brush, ray_o, ray_d):
         dx, dy, dz = (r00 * dx + r10 * dy + r20 * dz,
                       r01 * dx + r11 * dy + r21 * dz,
                       r02 * dx + r12 * dy + r22 * dz)
-    return (ax + ox, ay + oy, az + oz), (dx, dy, dz)
+    return (ax + ox, ay + oy, az + oz), (dx, dy, dz), convex, box
 
 
 def ray_box(box, ray_o, ray_d, eps=1e-6):
@@ -1004,6 +1028,22 @@ def ray_box(box, ray_o, ray_d, eps=1e-6):
         if t_min > t_max:
             return None
     return t_min
+
+
+def ray_box_entry(box, ray_o, ray_d, eps=1e-6):
+    """Distance at which a ray *enters* a ``(cx, cy, cz, hx, hy, hz)`` box,
+    or ``None`` when it misses or starts inside (or on) it.
+
+    :func:`ray_box` answers 0 for a ray that starts inside, which is right for
+    "is the cursor over this object" but wrong for "which surface is under the
+    cursor": a ray from inside a volume (the editor camera standing in a
+    trigger, a fog or water volume, a room-sized brush) passes through it to
+    whatever is drawn beyond, and enters none of its faces.
+    """
+    t = ray_box(box, ray_o, ray_d, eps)
+    if t is None or t <= eps:
+        return None
+    return t
 
 
 # ---------------------------------------------------------------------------

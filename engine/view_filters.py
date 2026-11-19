@@ -24,6 +24,7 @@ and, like the filter groups, apply while editing only.
 GL-free and Qt-free.
 """
 
+import uuid
 import numpy as np
 
 from engine import brush_placement
@@ -84,7 +85,8 @@ def entity_group(thing):
         return 'pathnodes'
     if bits & et.ENT_MONSTER:
         return 'monsters'
-    if bits & et.ENT_LIGHT:
+    if bits & et.ENT_LIGHT and type(thing).__name__ != 'Decal':
+        # An emissive decal is in the light list; it is still a decal.
         return 'lights'
     # A private editor model (the spawn sign) is presentation, not a prop.
     if bits & (et.ENT_PROP | et.ENT_HAS_MODEL) and not bits & et.ENT_EDITOR_MODEL:
@@ -110,15 +112,23 @@ def object_id(obj):
 
 
 class Visgroup:
-    """A user visgroup: a name, whether it shows, and its members' ids."""
+    """A user visgroup: a stable id, a name, whether it shows, and its
+    members' ids.
 
-    def __init__(self, name, ids=(), visible=True):
+    The id is a UUID, made once and saved with the map: it is what an I/O
+    connection targeting the group stores (engine.io_groups), as it stores an
+    entity's, so renaming the group does not break the connection.
+    """
+
+    def __init__(self, name, ids=(), visible=True, group_id=None):
         self.name = str(name)
         self.visible = bool(visible)
         self.ids = {str(i) for i in ids if i}
+        self.id = str(group_id) if group_id else str(uuid.uuid4())
 
     def to_data(self):
-        return {'name': self.name, 'visible': self.visible, 'ids': sorted(self.ids)}
+        return {'id': self.id, 'name': self.name, 'visible': self.visible,
+                'ids': sorted(self.ids)}
 
 
 class Cordon:
@@ -209,6 +219,14 @@ class ViewFilters:
         group.ids.difference_update(object_id(o) for o in objects)
         self._changed()
 
+    def visgroup_by_id(self, group_id):
+        """The visgroup whose id is *group_id*, or None."""
+        group_id = str(group_id or '')
+        for group in self.visgroups:
+            if group_id and group.id == group_id:
+                return group
+        return None
+
     def visgroups_of(self, obj):
         oid = object_id(obj)
         return [g for g in self.visgroups if oid and oid in g.ids]
@@ -241,8 +259,10 @@ class ViewFilters:
         self.visgroups = []
         for data in (level or {}).get('visgroups') or []:
             if isinstance(data, dict) and data.get('name'):
+                # Maps from before group ids get one now, kept from the next save.
                 self.visgroups.append(Visgroup(data['name'], data.get('ids') or (),
-                                               data.get('visible', True)))
+                                               data.get('visible', True),
+                                               data.get('id')))
         cordon = (level or {}).get('cordon') or {}
         try:
             self.cordon = Cordon(cordon.get('enabled', False),

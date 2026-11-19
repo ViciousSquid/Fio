@@ -244,7 +244,14 @@ class EditorLayoutRules(QObject):
                 if previous is None or obj.minimumHeight() != previous:
                     floor = obj.minimumHeight()
                 padding = 1 if isinstance(obj, (QCheckBox, QRadioButton)) else 0
-                height = max(floor or 0, obj.fontMetrics().height() + padding)
+                line = obj.fontMetrics().height() + padding
+                height = max(floor or 0, line)
+                if isinstance(obj, QLabel) and obj.minimumSizeHint().height() > height + line // 2:
+                    # More than one line (a paragraph, a rich-text table): an
+                    # explicit minimum replaces the label's own, so a one-line
+                    # floor let a layout sized from minimums -- a message box
+                    # -- cut the text off after its first line.
+                    height = floor or 0
                 obj.setProperty('_fio_label_floor', floor or 0)
                 obj.setProperty('_fio_label_height', height)
                 obj.setMinimumHeight(height)

@@ -128,7 +128,7 @@ def test_cell_math_matches_spatial_grid():
 
     # The engine's own SpatialGrid uses floor(coord/cell_size); prove identical.
     try:
-        from engine.physics import SpatialGrid  # noqa: F401
+        from engine.spatial_grid import SpatialGrid  # noqa: F401
         for x, z in [(0, 0), (513, -20), (-4000, 9000), (2047.5, -2048.1)]:
             gx = int(math.floor(x / 512.0)); gz = int(math.floor(z / 512.0))
             _check(cell_of_point(x, z) == (gx, gz),

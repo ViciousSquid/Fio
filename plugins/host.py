@@ -250,13 +250,23 @@ class PluginHost:
                 return handler(ev)
 
         # Remember the wrapper so off() can find it by the original handler.
-        self._gated = getattr(self, "_gated", {})
-        self._gated[handler] = gated
+        # Keyed by (event, handler): one handler subscribed to several events
+        # has one wrapper per event, and each must stay findable. A handler
+        # subscribed to the same event twice keeps both wrappers.
+        self._gated = self.__dict__.get("_gated") or {}
+        self._gated.setdefault((str(event), handler), []).append(gated)
         return self._manager.events.on(event, gated, priority)
 
     def off(self, event: str, handler: Callable) -> None:
-        gated = getattr(self, "_gated", {}).get(handler, handler)
-        self._manager.events.off(event, gated)
+        """Unsubscribe *handler* from *event* (no-op if it wasn't subscribed)."""
+        wrappers = (self.__dict__.get("_gated") or {}).pop(
+            (str(event), handler), None)
+        if not wrappers:
+            # Not subscribed through this host: maybe on the raw bus.
+            self._manager.events.off(event, handler)
+            return
+        for gated in wrappers:
+            self._manager.events.off(event, gated)
 
     def emit(self, event: str, **data):
         """Emit a custom event (e.g. for other plugins to observe)."""

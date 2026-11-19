@@ -1626,7 +1626,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._saved = True
         self._saved_signature = self._cutscene_signature()
         self.main_window.update_all_ui()
-        self.main_window.show_toast(f"Loaded cutscene {Path(filename).name}")
+        self.main_window.show_toast(f"Loaded cutscene {Path(filename).name}", level='success')
 
     def _apply_logic_camera(self, filename):
         from .things import LogicCamera
@@ -1716,7 +1716,11 @@ class CutsceneWizard(QtWidgets.QDialog):
             if result != QtWidgets.QMessageBox.Yes:
                 return False
         try:
-            path.write_text(
+            # Written aside and swapped in: a full disk or a crash mid-write
+            # must not leave the existing cutscene truncated.
+            from engine.fileio import write_text_atomic
+            write_text_atomic(
+                str(path),
                 json.dumps(self._build_cutscene_data(), indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
@@ -1736,7 +1740,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._saved = True
         self._saved_signature = self._cutscene_signature()
         self._delete_temporary_actors()
-        self.main_window.show_toast(f"Saved cutscene {filename}")
+        self.main_window.show_toast(f"Saved cutscene {filename}", level='success')
         super().accept()
 
     def _apply_to_map(self):

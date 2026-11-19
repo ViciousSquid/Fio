@@ -159,6 +159,62 @@ def _no_missed_change_record():
 
 
 # ---------------------------------------------------------------------------
+# Autosaves
+# ---------------------------------------------------------------------------
+
+#: Where the editor writes its autosaves (MainWindow._write_autosave): the
+#: open level's ``maps/<name>_autosave.json`` -- on its timer, and before a
+#: level change in Play with unsaved edits.
+_AUTOSAVE_GLOB = os.path.join(_ROOT, "maps", "*_autosave.json")
+#: When this test session began (autosaves older than this predate it).
+SESSION_STARTED_NS = __import__("time").time_ns()
+
+
+def _autosaves():
+    """``{path: (mtime, size)}`` of the autosaves in the checkout's maps/."""
+    import glob
+    found = {}
+    for path in glob.glob(_AUTOSAVE_GLOB):
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        found[path] = (stat.st_mtime_ns, stat.st_size)
+    return found
+
+
+@pytest.fixture(autouse=True)
+def _no_autosaves_left_behind():
+    """Remove every autosave a test writes, as soon as the test is over.
+
+    A test that runs the editor can autosave into the checkout's maps/ (a
+    level change in Play with unsaved edits does, at once). The file stayed
+    there: git ignores it, but every later test that lists maps/ -- the
+    brush-semantics snapshot of the shipped maps -- found a map too many and
+    failed. An autosave this test created or rewrote is deleted; one that was
+    already there untouched is left alone (it may be someone's unsaved work
+    from the editor run in this checkout).
+    """
+    before = _autosaves()
+    yield
+    remove_new_autosaves(before)
+
+
+def remove_new_autosaves(before, found=None):
+    """Delete the autosaves in *found* (default: maps/ now) that are not in
+    *before* (``{path: (mtime, size)}``) as they were; return their paths."""
+    removed = []
+    for path, stamp in (_autosaves() if found is None else found).items():
+        if before.get(path) != stamp:
+            try:
+                os.remove(path)
+            except OSError:
+                continue
+            removed.append(path)
+    return removed
+
+
+# ---------------------------------------------------------------------------
 # Determinism
 # ---------------------------------------------------------------------------
 

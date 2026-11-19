@@ -154,9 +154,10 @@ History:
   awake body every tick in case). Use `set_flag` / `clear_flag`; the physics
   engine prints a warning naming an entity changed any other way.
 
-  `SpatialGrid` — engine core — moved to `engine.spatial_grid`;
-  `from engine.physics import SpatialGrid, PhysicsWorld` still works. The
-  shipped plugins declare `api_version = "2.0.0"`.
+  `engine.physics` exports the physics boundary only. `SpatialGrid` (engine
+  core) is in `engine.spatial_grid`; Soma's classes (`Soma`, `PhysicsBody`)
+  are in `engine.physics.soma`. The shipped plugins declare
+  `api_version = "2.0.0"`.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin
@@ -429,14 +430,56 @@ does the same); a running session keeps its own. `tests/helpers/physics.py`
 has the smallest conforming implementation. See
 [the physics engine](#soma-api-200) for the contract's members and rules.
 
+The physics contract has a version of its own, `PHYSICS_CONTRACT_VERSION`
+(`"0.9.0"`; importable from `plugins.api` and `engine.physics`), apart from
+`API_VERSION`. A physics says which it was written against:
+
+```python
+from engine.physics import PHYSICS_CONTRACT_VERSION
+
+class BulletPhysics:
+    contract_version = PHYSICS_CONTRACT_VERSION
+```
+
+When a play session creates the selected physics, the registry checks what
+the factory returned. Not a `Physics` (a member missing or not callable), or
+written for a newer contract, another major version, or -- while the major is
+0 -- another minor version: `PhysicsContractError`. The factory could not be
+imported or raised (a missing native library, an exception in its
+constructor): `PhysicsInitError`, with the original exception as its cause.
+Either way Play still starts, on Soma, and the console says which it was.
+
 ```python
 def register_renderer(self, name: str, cls) -> bool
 ```
 Register a renderer under *name* in Fio's renderer registry (`"Forward"` is
-the built-in one). This contract is API 1.6.0: a plugin that registers a
-renderer declares `api_version = "1.6.0"`. *cls* is a factory called as `cls(config)` with the
+the built-in one). An implementation of the current renderer contract (the
+tables-only one API 1.9.0 introduced; `RENDERER_CONTRACT_VERSION` 1.0.0,
+below) requires `api_version = "1.9.0"`: a plugin that registers one
+declares it. Renderers written for 1.6-1.8 (which read the `Terrain` object
+and authored brushes) or for the 1.3-1.5 construction are not compatible.
+*cls* is a factory called as `cls(config)` with the
 viewport's GL context current — usually the renderer class itself — and what
 it returns must satisfy the `engine.renderer.Renderer` protocol:
+
+The renderer contract has a version of its own, `RENDERER_CONTRACT_VERSION`
+(`"1.0.0"`, from `engine.renderer`), apart from `API_VERSION`, as the physics
+contract does. A renderer says which it was written against:
+
+```python
+from engine.renderer import RENDERER_CONTRACT_VERSION
+
+class DeferredRenderer:
+    contract_version = RENDERER_CONTRACT_VERSION
+```
+
+When the host creates a renderer, the registry checks what the factory
+returned before anything is painted with it. Not a `Renderer` (a member
+missing or not callable), or written for a newer contract or another major
+version: `RendererContractError`, and the object's `cleanup()` is called so
+its GL objects do not outlive it. The factory could not be imported or
+raised: `RendererInitError`, with the original exception as its cause.
+Either way the view keeps the renderer it has (`r_renderer` says why).
 
 - **lifecycle:** `ready`, `cleanup()`
 - **the frame:** `render_scene(projection, view, camera_pos, primary_selection,
@@ -529,11 +572,11 @@ lifetime of the renderer that owns it.*
   earlier instance of your own, is still valid.
 
 **Display modes.** The frame input's `brush_display_mode` is the editor's
-Display box — `Textured`, `Solid Lit` (no textures), `Wireframe`, `Points`,
+Display box — `Textured`, `Solid Lit` (no textures), `Wireframe`,
 `Overlay` (Textured with the wireframe drawn over it); `r_wireframe` selects
 Wireframe. The host publishes it every frame and the renderer decides how each
-looks. In Play the host publishes `Textured` unless Wireframe, Points or Overlay
-is selected.
+looks. In Play the host publishes `Textured` unless Wireframe or Overlay is
+selected.
 
 **Diagnostics.** [Debug Tables](https://github.com/ViciousSquid/Fio/wiki/Debug-Tables)
 (**Debug → Debug Tables**) works unchanged with any renderer: it labels the

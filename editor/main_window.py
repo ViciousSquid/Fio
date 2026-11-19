@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QDialogButtonBox, QHBoxLayout, QStyle, QStatusBar, QTabWidget
 )
 from PyQt5.QtWidgets import QShortcut
-from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize
+from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize, QPoint
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
 from editor.things import Light, Prop, update_all_counters_from_entities
@@ -192,7 +192,8 @@ class MainWindow(QMainWindow):
         self.debug_console = None
         self.key_bindings = {}
 
-        self.config = configparser.ConfigParser()
+        from editor.settings_file import SettingsParser
+        self.config = SettingsParser()
         self.config.optionxform = str          # preserve case of option names
         # The working directory's settings.ini (main.py runs from the install
         # folder), or the per-user copy when that folder is read-only.
@@ -216,6 +217,9 @@ class MainWindow(QMainWindow):
         self._package = None
         self._previous_tab_index = None
         self.file_path = None
+        #: The open map is saved as minified JSON (File > Save As Minified...,
+        #: or a map that was opened minified).
+        self.map_minified = False
         self.recent_files = []
         self.load_level_signal.connect(self._on_level_change_requested)
         self.generate_level_signal.connect(self._on_generate_level_requested)
@@ -285,6 +289,9 @@ class MainWindow(QMainWindow):
         
         self.terrain = None
         self.terrain_editor_window = None
+        #: The terrain is selected (Shift+click on it, or its row in the Scene
+        #: Hierarchy) in place of any objects: see editor/terrain_selection.py.
+        self.terrain_selected = False
         self.surface_inspector = None  # lazily created Face-mode Surface Inspector
         self._entity_inspectors = {}   # id(entity) -> open EntityInspector (API 1.5.0)
         self.shortcuts_window = None   # lazily created Help > Keys window
@@ -299,6 +306,12 @@ class MainWindow(QMainWindow):
 
         # --- Play-mode console overlay (Quake-style drop-down input) ---
         self._create_play_console_overlay()
+
+        # Settings that could not be read are said once, where a level
+        # designer will see them, instead of stopping the start.
+        from editor import settings_file
+        for problem in settings_file.problems:
+            debug_log("Warning", f"Settings: {problem}")
 
         # If configured, switch to the Debug Console tab on startup
         if self.config.getboolean('Display', 'always_show_io_debug', fallback=False):
@@ -345,9 +358,10 @@ class MainWindow(QMainWindow):
         self.tooltip_interval = 30  # Seconds between occasional tooltips
         
         # Timer for occasional tooltips
+        # The occasional-tip timer: tips are no longer toasted (show_tooltip),
+        # so it is kept, stopped, for whatever reads it.
         self.tooltip_timer = QTimer(self)
         self.tooltip_timer.timeout.connect(self._check_occasional_tooltip)
-        self.tooltip_timer.start(10000)  # Check every 10 seconds (tooltip_interval throttles display)
         
         # Track right-click state for camera movement detection
         self.right_mouse_held = False
@@ -542,7 +556,10 @@ class MainWindow(QMainWindow):
     def save_recent_files(self):
         if not self.config.has_section('History'):
             self.config.add_section('History')
-        self.config.set('History', 'recent_files', json.dumps(self.recent_files))
+        # "%" is interpolation syntax to the parser: a map in "100% done/"
+        # made a save or a load that had worked report failure.
+        self.config.set('History', 'recent_files',
+                        json.dumps(self.recent_files).replace('%', '%%'))
         self.save_config()
 
     def add_recent_file(self, file_path):
@@ -601,7 +618,27 @@ class MainWindow(QMainWindow):
         """Background autosave to a specific autosave file."""
         if not self.unsaved_changes:
             return # Nothing to save
+        if self._in_play_mode():
+            # The scene is the running game's world, not the authored map.
+            return
         self._write_autosave()
+
+    def _in_play_mode(self):
+        view = getattr(self, 'view_3d', None)
+        return view is not None and bool(view.play_mode)
+
+    def _refuse_file_command_in_play(self, what):
+        """True (with a toast) when *what* must not run because Play is on.
+
+        During Play the scene holds the running game's world: monsters have
+        moved, doors are open, runtime keys sit on the entities. Writing it
+        would replace the authored map with that, and clearing it would pull
+        the world out from under the session.
+        """
+        if not self._in_play_mode():
+            return False
+        self.show_toast(f"Stop Play to {what}", is_error=True)
+        return True
 
     def _write_autosave(self):
         """Write the open level to its ``maps/*_autosave.json`` file.
@@ -624,13 +661,16 @@ class MainWindow(QMainWindow):
                 
             save_path = os.path.join(autosave_dir, save_name)
             
-            write_json_atomic(save_path, self.state.get_level_data(), indent=4)
+            self._write_map(save_path)
 
             print(f"[Autosave] Saved to {save_path}")
             return save_path
             
         except Exception as e:
             print(f"Autosave failed: {e}")
+            # Said where it is seen: a windowed build has no console, and an
+            # autosave that quietly stopped working is found out too late.
+            debug_log("Warning", f"Autosave failed: {e}")
             return None
 
     def show_procedural_map_generator(self):
@@ -660,7 +700,7 @@ class MainWindow(QMainWindow):
             # user saves it, so it opens untitled and unsaved.
             if self._load_level(map_data, None):
                 self._generated_level_marker = (self._undo_top(),)
-                self.show_toast("Generated map loaded – use Save As to keep it")
+                self.show_toast("Generated map loaded (not saved yet)", level='success')
         else:
             # User closed the generator – close the overlay
             self._close_current_overlay()
@@ -879,10 +919,7 @@ class MainWindow(QMainWindow):
             self.view_3d.logic_thread.world_runtime.terrain = None
 
         # Close the terrain editor panel if it is open in the Properties dock
-        if self.terrain_editor_window is not None:
-            if self._current_overlay is self.terrain_editor_window:
-                self._close_current_overlay()
-            self.terrain_editor_window = None
+        self.close_terrain_editor()
 
         # Force a UI refresh
         self.update_all_ui()
@@ -996,7 +1033,14 @@ class MainWindow(QMainWindow):
         # --- Arrow key nudging: works from any widget focus ---
         if event.type() == QEvent.KeyPress:
             key = event.key()
+            if self.is_fit_key(event) and not self._typing_focus():
+                if self.fit_textures():
+                    return True
             if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+                # A face selected in the Surface Inspector takes them first:
+                # arrows nudge its texture, Shift+arrows rotate it.
+                if self._arrow_face_texture(event):
+                    return True
                 # Selected terrain stamps take the arrows while the stamp
                 # brush is active, selected decals while the Decal tool is.
                 if self._nudge_terrain_stamps(event):
@@ -1056,6 +1100,70 @@ class MainWindow(QMainWindow):
         view_3d.update()
         return True
 
+    def _arrow_face_texture(self, event):
+        """The arrow keys on the Surface Inspector's selected face (see
+        :meth:`editor.surface_inspector.SurfaceInspector.arrow_key`). Not in
+        Play, and not while a text or number field has the keyboard, where
+        the arrows are that field's."""
+        if self.view_3d is None or self.view_3d.play_mode:
+            return False
+        if self.selected_face_target() is None or self._typing_focus():
+            return False
+        return self.surface_inspector.arrow_key(event)
+
+    @staticmethod
+    def _typing_focus():
+        """Whether a text or number field has the keyboard (its keys are its
+        own: arrows step it, Shift+5 types a '%')."""
+        from PyQt5.QtWidgets import (QAbstractSpinBox, QComboBox, QLineEdit,
+                                     QPlainTextEdit, QTextEdit)
+        return isinstance(QApplication.focusWidget(), (
+            QAbstractSpinBox, QComboBox, QLineEdit, QPlainTextEdit, QTextEdit))
+
+    @staticmethod
+    def is_fit_key(event):
+        """Shift+5: on most layouts Qt reports it as '%' (Key_Percent), on
+        others as 5 with Shift. No other modifier (macOS's keypad flag aside)."""
+        modifiers = event.modifiers() & ~Qt.KeypadModifier
+        if modifiers & ~Qt.ShiftModifier:
+            return False
+        return (event.key() == Qt.Key_Percent
+                or (event.key() == Qt.Key_5 and bool(modifiers & Qt.ShiftModifier)))
+
+    def fit_textures(self):
+        """Shift+5: Fit -- the texture spans the face (the Surface Inspector's
+        Fit, with its repeat counts) -- on the face selected in the Surface
+        Inspector, or, with none, on every face of every selected brush. The
+        textures themselves are left as they are. Returns whether anything
+        was fitted."""
+        if self.view_3d is None or self.view_3d.play_mode:
+            return False
+        inspector = getattr(self, 'surface_inspector', None)
+        if self.selected_face_target() is not None:
+            inspector._apply_fit()
+            faces = inspector.target_faces()
+            self.show_toast(f"Fit: {faces[0][1]}" if len(faces) == 1
+                            else f"Fit: {len(faces)} faces")
+            return True
+        brushes = [b for b in (self._selected_brushes() or [])
+                   if isinstance(b, dict)]
+        if not brushes:
+            return False
+        repeat = ((inspector.fit_w.value(), inspector.fit_h.value())
+                  if inspector is not None else (1.0, 1.0))
+        self.save_state()
+        for brush in brushes:
+            for face_key in face_texture.face_keys(brush):
+                face_texture.apply_fit(brush, face_key, repeat)
+        self.state.mark_lighting_dirty(brushes)
+        self.unsaved_changes = True
+        self.update_views()
+        if inspector is not None and inspector.isVisible():
+            inspector.refresh_from_face()
+        self.show_toast("Fit: all faces" if len(brushes) == 1
+                        else f"Fit: all faces of {len(brushes)} brushes")
+        return True
+
     def _nudge_decals(self, event):
         """Move the Decal tool's selection with the arrow keys (as stamps)."""
         view_3d = self.view_3d
@@ -1095,48 +1203,33 @@ class MainWindow(QMainWindow):
                 self.asset_browser_dock.raise_()
 
 
-    def show_toast(self, message, is_error=False, duration=None):
-        """Displays a notification"""
-        if self.config.getboolean('Display', 'disable_toasts', fallback=False):
-            return
-        
-        # Set the style based on the message type
-        if is_error:
-            bg = "#8B0000" # Dark Red
-            fg = "white"
-        else:
-            bg = "#2b2b2b"
-            fg = "white"
+    #: Levels a toast can have (editor.debug_console.TOAST_STYLES).
+    TOAST_LEVELS = ('success', 'info', 'warning', 'error')
 
-        self.ui.notification_label.setStyleSheet(f"""
-            background-color: {bg};
-            color: {fg};
-            font-weight: bold;
-            font-size: 14px;
-            padding: 2px 10px;
-            border-radius: 3px;
-        """)
-        
-        self.ui.notification_label.setTextFormat(Qt.PlainText)
-        self.ui.notification_label.setText(message.upper())
-        
-        # Auto-clear timer
-        final_duration = duration if duration is not None else (4000 if is_error else 2500)
-        self._schedule_notification_clear(final_duration)
+    def show_toast(self, message, is_error=False, duration=None, level=None):
+        """Show a toast -- for important things only.
+
+        A toast is shown when it is an error (``is_error``) or names its
+        *level*: ``'success'`` for loads and saves, ``'warning'``,
+        ``'error'`` or ``'info'``. Anything else -- tips, hints, routine
+        feedback ("Grid Size: 32", "Applied to north") -- is not toasted.
+        A toast is a card in the Debug Console only (no pop-up): its level's
+        tint and accent bar, no click-to-filter links, never hidden by a
+        filter. It turns faint after a few seconds and comes back to full
+        colour, with a tiny close button, when hovered or clicked.
+        *duration* is accepted for callers' sake and not used.
+        """
+        level = 'error' if is_error else level
+        if level not in self.TOAST_LEVELS:
+            return None
+        from editor.debug_console import debug_log_toast
+        debug_log_toast(str(message), level)
+        return None
 
     def show_tooltip(self, message, duration=4000, toast_id=None):
-        """Displays teal-styled tooltips in the same area."""
-        # Re-use the toast logic with teal styling
-        self.ui.notification_label.setStyleSheet("""
-            background-color: #2b2b2b;
-            color: white;
-            font-weight: bold;
-            font-size: 14px;
-            padding: 2px 10px;
-            border-radius: 3px;
-        """)
-        self.ui.notification_label.setText(message.upper())
-        self._schedule_notification_clear(duration)
+        """Tips are no longer shown as toasts (only loads, saves, warnings
+        and errors are). Kept so callers and plugins need no change."""
+        return None
 
     def _after(self, delay_ms, callback):
         """Run *callback* once after *delay_ms*, but never after this window.
@@ -1151,24 +1244,6 @@ class MainWindow(QMainWindow):
         timer.timeout.connect(timer.deleteLater)
         timer.start(int(delay_ms))
         return timer
-
-    def _schedule_notification_clear(self, duration_ms):
-        """Clear the notification area *duration_ms* from now (<= 0: never).
-
-        One window-owned timer, restarted by every toast: a timer per toast let
-        an earlier, shorter toast blank a later one early, and a bare lambda
-        could fire on the label after the window was destroyed.
-        """
-        timer = getattr(self, '_notification_clear_timer', None)
-        if timer is None:
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.timeout.connect(self.ui.notification_label.clear)
-            self._notification_clear_timer = timer
-        if duration_ms and duration_ms > 0:
-            timer.start(int(duration_ms))
-        else:
-            timer.stop()
 
     def _show_startup_tooltip(self):
         """Show the camera movement tooltip on startup if not yet learned."""
@@ -1220,6 +1295,11 @@ class MainWindow(QMainWindow):
     def open_terrain_editor(self):
         """Open the terrain editor floating window."""
         from PyQt5.QtCore import Qt
+
+        if self.terrain_locked():
+            self.show_toast("The terrain is locked. Unlock it to edit it.",
+                            is_error=True)
+            return
         
        # Create terrain if it doesn't exist
         if self.terrain is None:
@@ -1268,6 +1348,9 @@ class MainWindow(QMainWindow):
             # Store terrain data in state so the scene hierarchy can see it
             self.state.terrain_data = self.terrain.to_dict()
             self.scene_hierarchy.refresh_list()
+            # A new terrain is an edit: without this, closing the map dropped
+            # it with no prompt and autosave skipped it.
+            self.mark_as_modified()
         
         # Show the terrain editor as an overlay in the Properties dock (bottom
         # left pane), the same way as the procedural map generator — not a
@@ -1284,7 +1367,13 @@ class MainWindow(QMainWindow):
         if self.terrain is None:
             return
         # Already open → just make sure it's visible and on top.
-        if getattr(self, 'terrain_editor_window', None) is not None:
+        panel = getattr(self, 'terrain_editor_window', None)
+        if panel is not None:
+            if panel.isWindow():
+                panel.show()
+                panel.raise_()
+                panel.activateWindow()
+                return
             self.properties_dock.setVisible(True)
             self.properties_dock.raise_()
             return
@@ -1301,10 +1390,69 @@ class MainWindow(QMainWindow):
         """Clear the reference when the terrain editor overlay is closed."""
         self.terrain_editor_window = None
 
+    def terrain_editor_floating(self):
+        panel = self.terrain_editor_window
+        return panel is not None and panel.isWindow()
+
+    def set_terrain_editor_floating(self, floating):
+        """Move the Terrain Editor between the Properties dock and a window
+        of its own (the button at its top left). The same panel either way:
+        its settings, tab and brush stay as they are."""
+        from PyQt5.QtCore import Qt
+        panel = self.terrain_editor_window
+        floating = bool(floating)
+        if panel is None or floating == panel.isWindow():
+            return
+        view = self.view_3d
+        brush_on = bool(view is not None and view.terrain_sculpt_active)
+        if floating:
+            # Let go of the dock without closing the panel.
+            if self._current_overlay is panel:
+                self._current_overlay = None
+                self._overlay_close_callback = None
+            size = panel.size()
+            panel.setParent(self, Qt.Window)
+            if self._original_properties_widget is not None and \
+                    self._current_overlay is None:
+                self.properties_dock.setWidget(self._original_properties_widget)
+                self._original_properties_widget = None
+            panel.setWindowTitle("Terrain Editor")
+            panel.resize(max(size.width(), 520), max(size.height(), 720))
+            panel.show()
+            panel.raise_()
+        else:
+            self._show_overlay(panel, close_callback=self._on_terrain_editor_closed)
+            self.terrain_editor_window = panel
+            self.properties_dock.setVisible(True)
+            self.properties_dock.raise_()
+            panel.show()
+        # Leaving the dock (or a window) hides the panel for a moment, and a
+        # hidden panel puts its brush down: pick it up again.
+        if brush_on and view is not None:
+            view.set_terrain_sculpt_active(True)
+        panel.sync_float_button()
+
+    def close_terrain_editor(self):
+        """Close the Terrain Editor, docked or floating."""
+        panel = self.terrain_editor_window
+        if panel is None:
+            return
+        if self._current_overlay is panel:
+            self._close_current_overlay()
+        else:
+            panel.hide()
+            panel.setParent(None)
+            panel.deleteLater()
+        self.terrain_editor_window = None
+
     def on_terrain_changed(self):
         """Handle terrain changes."""
         if self.terrain:
             self.state.terrain_data = self.terrain.to_dict()
+            # The panel emits this for its edits only (appearance, grass,
+            # palette, generation); they are part of the map, so the map is
+            # now unsaved.
+            self.mark_as_modified()
         self.update_all_ui()
 
     def clone_selected_object(self):
@@ -1487,23 +1635,39 @@ class MainWindow(QMainWindow):
 
 
     def tint_selected_brush(self):
-        """Open colour picker dialog to tint the selected brush - unified with property editor."""
-        if not isinstance(self.primary_selection(), dict):
+        """The Asset Browser's Tint button: pick the selected brush's colour --
+        the one colour a brush has (:meth:`set_brush_colour`), the same as
+        Appearance > Brush Colour and, for a Glow brush, its Glow Color."""
+        brush = self.primary_selection()
+        if not isinstance(brush, dict):
             self.show_toast("Select a brush first", is_error=True)
             return
-        
-        self.save_state()
-        brush = self.primary_selection()
-        
-        # Get current colour (0.0-1.0 range) and convert to 0-255
-        current = brush.get('colour', [0.8, 0.8, 0.8])
-        current_qcolor = QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255))
-        
-        color = QColorDialog.getColor(current_qcolor, self, "Choose Brush Colour")
+        current = self.brush_colour(brush)
+        color = QColorDialog.getColor(
+            QColor(int(current[0] * 255), int(current[1] * 255), int(current[2] * 255)),
+            self, "Choose Brush Colour")
         if color.isValid():
-            # Store as 0.0-1.0 range
-            brush['colour'] = [color.redF(), color.greenF(), color.blueF()]
-            self.update_all_ui()
+            self.save_state()
+            self.set_brush_colour(brush, [color.redF(), color.greenF(), color.blueF()])
+
+    @staticmethod
+    def brush_colour(brush):
+        """The colour *brush* is drawn (and, a Glow brush, glows) in, 0-1:
+        its tint if one was set (the console's ``tint``), else its colour."""
+        from engine.constants import normalize_color
+        return list(normalize_color(brush.get('tint') or brush.get('colour'),
+                                    default=[0.8, 0.8, 0.8]))
+
+    def set_brush_colour(self, brush, rgb):
+        """Give *brush* colour *rgb* (0-1): the one colour setting a brush
+        has, whichever control sets it -- the Asset Browser's Tint,
+        Appearance > Brush Colour, a Glow brush's Glow Color. A tint left
+        from the console, which would hide it, goes."""
+        brush['colour'] = [float(c) for c in rgb]
+        brush.pop('tint', None)
+        self.state.mark_world_changed([brush])
+        self.mark_as_modified()
+        self.update_all_ui()
 
 
     def add_model_to_scene(self, filepath, rotation, scale):
@@ -1568,6 +1732,7 @@ class MainWindow(QMainWindow):
         # overlay stale, since the brushes it was drawing handles for changed.
         self.components.clear()
         self.components.invalidate()
+        self.terrain_selected = False       # objects are selected, or nothing is
         # Callers pass [None] for "nothing" (a click on empty space); None is
         # never a member, or a later Shift+click made a two-object "group"
         # with nothing in it (and its bounding box raised).
@@ -1582,13 +1747,60 @@ class MainWindow(QMainWindow):
         # operation (and its undo step), before anything shows the level.
         self.state.settle_player_starts()
         self.sync_sky_image_from_map()
-        self.property_editor.set_object(self.primary_selection())
+        self.property_editor.set_object(self._property_target())
         self.scene_hierarchy.refresh_list()
         self.sync_surface_inspector()
         window = getattr(self, 'visgroups_window', None)
         if window is not None and window.isVisible():
             window.refresh()
         self.update_views()
+
+    # -- the terrain, selected and locked as a brush is ----------------------
+
+    def _property_target(self):
+        """What the property editor shows: the terrain when it is selected
+        (and there still is one), else the primary selection."""
+        if self.terrain_selected:
+            if self.state.terrain_data is not None:
+                from editor.terrain_selection import TERRAIN
+                return TERRAIN
+            self.terrain_selected = False
+        return self.primary_selection()
+
+    def select_terrain(self):
+        """Select the map's terrain in place of any objects. False when the
+        map has none."""
+        if self.state.terrain_data is None:
+            return False
+        self.components.clear()
+        self.components.invalidate()
+        self.state.selected_objects = []
+        self.terrain_selected = True
+        self.update_all_ui()
+        self.selection_changed.emit()
+        return True
+
+    def terrain_locked(self):
+        """Whether the terrain is locked ("Prevent selection/editing")."""
+        data = self.state.terrain_data
+        return bool(isinstance(data, dict) and data.get('lock', False))
+
+    def set_terrain_locked(self, locked):
+        """Lock or unlock the terrain, as a brush's lock: locked, it is not
+        picked in the 3D view and its editor does not open."""
+        data = self.state.terrain_data
+        if not isinstance(data, dict) or bool(data.get('lock', False)) == bool(locked):
+            return
+        if locked:
+            data['lock'] = True
+            # An editor open on a terrain that may not be edited.
+            self.close_terrain_editor()
+        else:
+            data.pop('lock', None)
+        if self.terrain is not None:
+            self.terrain.locked = bool(locked)
+        self.mark_as_modified()
+        self.update_all_ui()
 
     def update_views(self):
         self.sync_bigworld_terrain(allow_create=True)
@@ -2168,7 +2380,8 @@ class MainWindow(QMainWindow):
             self.update_views()
 
     def load_config(self):
-        self.config.read(self.config_path)
+        from editor.settings_file import read_settings
+        read_settings(self.config, self.config_path)
         self.apply_window_colours()
 
     def save_config(self):
@@ -2229,6 +2442,10 @@ class MainWindow(QMainWindow):
             self.view_3d.show_glasses = self.config.getboolean(
                 'Display', 'show_glasses', fallback=True
             )
+            # So is whether a hidden light lights the editor.
+            self.view_3d.hide_hidden_lights = self.config.getboolean(
+                'Display', 'hide_hidden_lights', fallback=False)
+            self.update_views()
             # So is player 1's choice of glasses (Settings > Appearance).
             self.view_3d.player1_glasses = normalize_glasses(self.config.get(
                 'Appearance', 'glasses', fallback=DEFAULT_GLASSES
@@ -2411,7 +2628,7 @@ class MainWindow(QMainWindow):
             self.surface_inspector.sync_face_button(active)
         
         if active:
-            self.show_toast("FACE MODE: Select a face to texture (Purple) — Page Up/Down rotates it", duration=3000)
+            self.show_toast("FACE MODE: Select a face to texture (Orange) — Shift+arrows or Page Up/Down rotate it", duration=3000)
             self.set_selected_objects([]) # Deselect current object to clear gizmos and allow clean hover
             
             # Change cursor to indicate mode
@@ -2419,6 +2636,7 @@ class MainWindow(QMainWindow):
         else:
             self.show_toast("FACE MODE: OFF")
             self.view_3d.hovered_face_info = None # Clear highlight
+            self.view_3d._face_hover_key = None
             self.view_3d.setCursor(Qt.ArrowCursor)
             # The panel stays open: it owns the FACE toggle now, and hiding it
             # here would take the button away the moment it was switched off.
@@ -2432,7 +2650,10 @@ class MainWindow(QMainWindow):
             self.show_toast("Select a texture first", is_error=True)
             return
 
-        texture_name = os.path.basename(texture_path)
+        # Relative to assets/textures, so a texture in a subfolder
+        # (textures/decals, textures/Dev) keeps its folder and loads.
+        from editor.face_texture import texture_name as _texture_name
+        texture_name = _texture_name(texture_path)
         self.save_state()
 
         # The face's one material record: a box's per-tag dict, an angled
@@ -2470,10 +2691,31 @@ class MainWindow(QMainWindow):
         """
         delta = 90.0 if steps >= 0 else -90.0
 
+        # --- The Surface Inspector is open on a face: that face is what is
+        # being worked on, so it is what turns -- in Face Mode too, whatever
+        # the cursor happens to be over (and in "Whole brush" scope, every
+        # face it applies to). Before, Face Mode turned the hovered face.
+        inspector = getattr(self, 'surface_inspector', None)
+        target = self.selected_face_target()
+        if target is not None:
+            faces = inspector.target_faces()
+            self.save_state()
+            for brush, face_name in faces:
+                angle = self._bump_face_angle(brush, face_name, delta)
+            self.state.mark_lighting_dirty(
+                list({id(b): b for b, _ in faces}.values()))
+            self.face_texture_target = target
+            self.update_views()
+            inspector.refresh_from_face()
+            if len(faces) == 1:
+                self.show_toast(f"{faces[0][1]}: texture {int(angle)}°")
+            else:
+                self.show_toast(f"Brush textures rotated {int(delta):+d}°")
+            return
+
         # --- Face mode: rotate only the highlighted / last-textured face ---
         if self.view_3d.face_mode_active:
-            target = getattr(self.view_3d, 'hovered_face_info', None) \
-                or self.face_texture_target
+            target = self.view_3d.face_under_cursor() or self.face_texture_target
             if not target:
                 self.show_toast("Hover a face to rotate its texture", is_error=True)
                 return
@@ -2497,6 +2739,15 @@ class MainWindow(QMainWindow):
                 self._bump_face_angle(selected, face_name, delta)
             self.update_views()
             self.show_toast(f"Brush textures rotated {int(delta):+d}°")
+
+    def selected_face_target(self):
+        """``(brush, face key)`` the open Surface Inspector is bound to, or
+        None (closed, or bound to nothing). The selected face: what its
+        controls and Page Up/Down edit, and what the 3D view highlights."""
+        inspector = getattr(self, 'surface_inspector', None)
+        if inspector is None or not inspector.isVisible() or not inspector.target:
+            return None
+        return inspector.target
 
     def show_surface_inspector(self, brush=None, face_name=None,
                                raise_window=True):
@@ -2567,20 +2818,20 @@ class MainWindow(QMainWindow):
         """Point an open Surface Inspector at something worth editing.
 
         It can be opened with nothing selected, so it binds as soon as there
-        is a brush to bind to.  A panel already pointing into the selection
-        is left alone -- re-binding on every click would undo a face picked
-        from its dropdown -- and so is one whose brush has been deselected,
-        since dropping the target would blank the panel mid-edit.
+        is a brush to bind to. A face it is already bound to stays bound
+        whatever the selection does: it is changed by clicking another face
+        (Face Mode) or picking one from the panel's list, and released by
+        closing the panel -- so adjustments always go to the face that was
+        chosen, never to whatever was selected or hovered since.
         """
         inspector = getattr(self, 'surface_inspector', None)
         if inspector is None or not inspector.isVisible():
             return
+        if inspector.target is not None:
+            return
 
         brushes = self._selected_brushes()
         if not brushes:
-            return
-        target = inspector.target
-        if target is not None and target[0] in brushes:
             return
 
         keys = face_texture.face_keys(brushes[0])
@@ -2655,6 +2906,122 @@ class MainWindow(QMainWindow):
         self._refresh_visgroups_window()
         self.show_toast("Removed from visgroup '%s'" % group.name)
 
+    # -- brush groups (attached brushes) --------------------------------------
+
+    def with_group_mates(self, objects):
+        """*objects* plus the brushes and entities grouped with them: what a
+        move carries."""
+        from editor import brush_groups
+        return brush_groups.with_mates(brush_groups.scene_objects(self.state), objects)
+
+    def movable_with_mates(self, objects):
+        """:meth:`with_group_mates`, without the locked ones."""
+        return [o for o in self.with_group_mates(objects)
+                if not (o.get('lock', False) if isinstance(o, dict)
+                        else o.properties.get('lock', False))]
+
+    def set_brush_group(self, brushes, name):
+        """Put *brushes* (brushes and/or entities) in group *name* ('' ungroups
+        them): one undo step."""
+        from editor import brush_groups
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
+        if not brushes:
+            return False
+        name = str(name or '').strip()
+        if name and not self.brush_group_allowed(brushes, name):
+            return False
+        self.save_state()
+        brush_groups.set_group(brushes, name)
+        self._brush_groups_changed()
+        return True
+
+    def brush_group_allowed(self, brushes, name):
+        """Whether *brushes* may join group *name*: a group holds at most
+        one mover (or door). Says so when they may not."""
+        from editor import brush_groups
+        joined = brush_groups.members(
+            brush_groups.scene_objects(self.state), name) + list(brushes)
+        if brush_groups.too_many_movers(joined):
+            self.show_toast(brush_groups.MAX_MOVERS_MESSAGE, is_error=True)
+            return False
+        return True
+
+    def ungroup_brushes(self, brushes):
+        """Take *brushes* (only those) out of their groups: one undo step.
+        A group left with a single brush is no group, so that one goes too."""
+        from editor import brush_groups
+        brushes = [b for b in brushes if brush_groups.group_of(b)]
+        if not brushes:
+            return
+        self.save_state()
+        brush_groups.set_group(brushes, '')
+        for chosen in brush_groups.groups(
+                brush_groups.scene_objects(self.state)).values():
+            if len(chosen) == 1:
+                brush_groups.set_group(chosen, '')
+        self._brush_groups_changed()
+
+    def set_brushes_hidden(self, brushes, hidden):
+        """Hide or show *brushes* (a whole group, from its menu; entities
+        too): one undo step."""
+        from engine.change_journal import touch
+        from engine.spatial import set_live_flag
+        from editor import brush_groups
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
+        if not brushes:
+            return
+        self.save_state()
+        for brush in brushes:
+            if isinstance(brush, dict):
+                brush['hidden'] = bool(hidden)
+                touch(brush)
+            else:
+                set_live_flag(brush, 'hidden', bool(hidden))
+        self.mark_as_modified()
+        self.update_all_ui()
+
+    def rename_brush_group(self, old, new):
+        from editor import brush_groups
+        new = str(new or '').strip()
+        if not new or new == old:
+            return False
+        # A name already in use merges the two groups.
+        every = brush_groups.scene_objects(self.state)
+        if not self.brush_group_allowed(brush_groups.members(every, old), new):
+            return False
+        self.save_state()
+        brush_groups.rename(every, old, new)
+        self._brush_groups_changed()
+        return True
+
+    def _brush_groups_changed(self):
+        self.mark_as_modified()
+        self.update_all_ui()
+        self._refresh_visgroups_window()
+
+    def open_brush_group_dialog(self, brushes):
+        """Scene Hierarchy > Add to Group... / Edit Group..."""
+        from editor import brush_groups
+        from editor.brush_group_dialog import BrushGroupDialog
+        brushes = [b for b in brushes if brush_groups.is_groupable(b)]
+        if not brushes:
+            return None
+        all_brushes = brush_groups.scene_objects(self.state)
+        display_name = brush_groups.labeller(
+            self.state, getattr(self, 'scene_hierarchy', None))
+        dialog = BrushGroupDialog(self, all_brushes, brushes, display_name)
+        if self._run_brush_group_dialog(dialog):
+            if not dialog.allowed():
+                self.show_toast(brush_groups.MAX_MOVERS_MESSAGE, is_error=True)
+                return dialog
+            self.save_state()
+            if dialog.apply():
+                self._brush_groups_changed()
+        return dialog
+
+    def _run_brush_group_dialog(self, dialog):
+        return dialog.exec_() == dialog.Accepted
+
     def _refresh_visgroups_window(self):
         window = getattr(self, 'visgroups_window', None)
         if window is not None and window.isVisible():
@@ -2679,7 +3046,8 @@ class MainWindow(QMainWindow):
             inspector.hide()
             return
 
-        target = getattr(self.view_3d, 'hovered_face_info', None) \
+        hovered = getattr(self.view_3d, 'face_under_cursor', None)
+        target = (hovered() if hovered is not None else None) \
             or self.face_texture_target
         if target is None:
             brushes = self._selected_brushes()
@@ -2696,12 +3064,38 @@ class MainWindow(QMainWindow):
             self._exit_play_mode()
             return
 
-        self._start_play(self.state.resolve_player_start())
+        player_start = self.state.resolve_player_start()
+        if player_start and self._restores_world_on_stop():
+            # With "Restore the world when leaving Play" on, a Play the author
+            # starts is a new game: every LogicState begins at its authored
+            # values (as last edited), not at what a playtest left. With it
+            # off the stores are kept, exactly as the world is.
+            # (A level change during Play restarts through _start_play and
+            # keeps the stores: that carry is what they are for.)
+            self._reset_logic_state_stores()
+        self._start_play(player_start)
+
+    def _restores_world_on_stop(self):
+        return self.config.getboolean('Settings', 'restore_world_on_stop',
+                                      fallback=False)
+
+    def _reset_logic_state_stores(self):
+        from editor.things import LogicState
+        LogicState.reset_stores(self.state.things)
 
     def _start_play(self, player_start):
         """Enter play mode with the player at *player_start* (a PlayerStart)."""
         if not player_start:
             QMessageBox.warning(self, "No Player Start", "Add a Player Start object to the scene before entering play mode.")
+            return
+        if self.view_3d.logic_thread is None:
+            # The game's logic starts with the renderer. Without an OpenGL
+            # context there is neither, and Play "started" into a world that
+            # never ran, with nothing said.
+            message = ("Play cannot start: the 3D view has no OpenGL 3.3 "
+                       "context. Check the graphics driver.")
+            debug_log("Error", message)
+            self.show_toast(message, is_error=True)
             return
 
         # Only once Play is certain to start: a refused Play must leave the
@@ -2765,8 +3159,7 @@ class MainWindow(QMainWindow):
         dead monsters, killed or hidden objects -- as it always has.
         """
         self._pre_play_world = None
-        if not self.config.getboolean('Settings', 'restore_world_on_stop',
-                                      fallback=False):
+        if not self._restores_world_on_stop():
             return
         self._pre_play_world = (
             self.state.snapshot(),
@@ -2884,7 +3277,13 @@ class MainWindow(QMainWindow):
         if self.view_3d.play_mode:
             self.view_3d.toggle_play_mode()
             self.view_3d.play_mode = False  # Force state change before UI update
+            restoring = getattr(self, '_pre_play_world', None) is not None
             self._restore_pre_play_world()
+            if restoring:
+                # The restored world is the authored one; so are its stores.
+                # (A level change during Play takes the captured world away
+                # before it stops the session, so its stores carry over.)
+                self._reset_logic_state_stores()
             stream = self.state.editor_stream
             if stream is not None and stream.suspended:
                 # Back to the cells around the editor camera.
@@ -2974,7 +3373,14 @@ class MainWindow(QMainWindow):
         for view in [self.view_top, self.view_side, self.view_front, self.view_3d]:
             view.grid_size = snapped_size
         self.view_3d.update_grid()
-        self.update_views()
+        # Repaint without update_views(): it resets each 2D view's state,
+        # which ended a cut or a rotate in progress. The scissor and rotate
+        # tools re-snap to the new grid where they are.
+        for view in (self.view_top, self.view_side, self.view_front):
+            changed = getattr(view, 'grid_size_changed', None)
+            if changed is not None:
+                changed()
+        self.refresh_views()
 
     def set_world_size(self, size):
         snapped_size = self._snap_to_power_of_two(size)
@@ -3399,23 +3805,27 @@ class MainWindow(QMainWindow):
             dialog.dep_label.setText(f"Export successful!\nSaved to: {os.path.basename(output_path)}")
             dialog.export_btn.setText("Done")
             dialog.export_btn.setEnabled(False)
-            self.show_toast(f"Package exported: {os.path.basename(output_path)}")
+            self.show_toast(f"Package exported: {os.path.basename(output_path)}", level='success')
         else:
             dialog.dep_label.setStyleSheet("color: #f44336; font-size: 12px; padding: 4px;")
             dialog.dep_label.setText("Export failed:\n" + "\n".join(errors[:5]))
             # Error already shown in exporter
 
     def new_map(self):
+        if self._refuse_file_command_in_play("start a new map"):
+            return
         # Check for unsaved changes
         if not self.check_unsaved_changes():
             return
 
         self._clear_terrain()
         self.state.clear_scene()
+        self._reset_logic_state_stores()
         update_all_counters_from_entities([])
         self.reset_camera_mode()
 
         self.file_path = None
+        self.map_minified = False
         self._generated_level_marker = None
         self._close_package()
         self.unsaved_changes = False
@@ -4269,7 +4679,10 @@ class MainWindow(QMainWindow):
         # Editor mode key releases below
         if event.key() in self.keys_pressed:
             self.keys_pressed.remove(event.key())
-        self.update_views()
+        # Repaint only: update_views() resets every 2D view's state, so any
+        # key's release -- [ or ] to change the grid among them -- threw
+        # away a half-placed cut and ended a rotate in progress.
+        self.refresh_views()
         super().keyReleaseEvent(event)
 
     def snap_to_grid_enabled(self):
@@ -4644,7 +5057,7 @@ class MainWindow(QMainWindow):
         whole, so several brushes turn as one rigid body instead of each
         spinning on the spot.
         """
-        selected = self.selected_objects_list()
+        selected = self.with_group_mates(self.selected_objects_list())
         if not selected:
             return None
         lo = np.array([float('inf')] * 3)
@@ -4677,7 +5090,12 @@ class MainWindow(QMainWindow):
         checkpoint; the live drag passes ``False`` for the incremental steps
         and checkpoints once at the start.
         """
-        selected = self.selected_objects_list()
+        chosen = self.selected_objects_list()
+        # Brushes grouped with a turned one are attached: they turn with it,
+        # as one rigid body about the centre of the lot.
+        selected = self.with_group_mates(chosen)
+        if pivot is None and len(selected) != len(chosen):
+            pivot = self.selection_centre()
         brushes = [b for b in selected if isinstance(b, dict)]
         things = [t for t in selected if not isinstance(t, dict)]
         if not brushes and not (things and pivot is not None):
@@ -4763,14 +5181,62 @@ class MainWindow(QMainWindow):
             self.state.discard_last_checkpoint()
         return count
 
-    def save_level_as(self):
-        filePath, _ = QFileDialog.getSaveFileName(self, "Save Level As", "maps", "JSON Files (*.json)")
+    #: The Save As dialog's two ways to write a map: the same JSON, indented
+    #: to be read and diffed, or minified (one line, no spaces) to be small.
+    MAP_FILTER = "Map (*.json)"
+    MAP_FILTER_MINIFIED = "Map, minified JSON (*.json)"
+
+    @staticmethod
+    def _is_minified_json(text):
+        """Whether a map file's text is minified: all on one line."""
+        return "\n" not in text.strip()
+
+    def _ask_save_path(self, minified):
+        """The Save As dialog: ``(path, minified)``; an empty path cancels."""
+        first = self.MAP_FILTER_MINIFIED if minified else self.MAP_FILTER
+        path, chosen = QFileDialog.getSaveFileName(
+            self, "Save Level As", "maps",
+            ";;".join((self.MAP_FILTER, self.MAP_FILTER_MINIFIED)), first)
+        return path, chosen == self.MAP_FILTER_MINIFIED
+
+    def save_level_as(self, minified=None):
+        """Save the map under a new name. *minified* picks the dialog's
+        starting format (None: the map's current one); the format chosen in
+        the dialog is the one the map is saved in from then on."""
+        if self._refuse_file_command_in_play("save the map"):
+            return
+        if not isinstance(minified, bool):          # a menu action's "checked"
+            minified = getattr(self, 'map_minified', False)
+        filePath, minified = self._ask_save_path(minified)
         if filePath:
+            if not os.path.splitext(filePath)[1]:
+                # A bare name: without the extension the Open dialog's
+                # "*.json" filter hides the map that was just saved.
+                filePath += '.json'
             self.file_path = filePath
+            self.map_minified = bool(minified)
             self.stop_mover_preview()
             self.save_level()
 
+    def save_level_as_minified(self):
+        """File > Save As Minified...: Save As, with minified JSON chosen."""
+        self.save_level_as(minified=True)
+
+    def _write_map(self, path):
+        """Write the map to *path* -- indented, or minified when the map is
+        kept that way -- and its terrain paint and placed stamps beside it
+        in ``<map name>.paint`` (they are not kept in the map's JSON)."""
+        from engine import terrain_stamp
+        level, stamps = terrain_stamp.split_level(self.state.get_level_data())
+        if getattr(self, 'map_minified', False):
+            write_json_atomic(path, level, separators=(",", ":"))
+        else:
+            write_json_atomic(path, level, indent=4)
+        terrain_stamp.write_map_stamps(path, stamps)
+
     def save_level(self):
+        if self._refuse_file_command_in_play("save the map"):
+            return
         if not self.file_path:
             self.save_level_as()
             return
@@ -4778,12 +5244,13 @@ class MainWindow(QMainWindow):
         self.stop_mover_preview()
 
         try:
-            write_json_atomic(self.file_path, self.state.get_level_data(), indent=4)
+            self._write_map(self.file_path)
             print(f"Level saved to {self.file_path}")
             self.unsaved_changes = False
             self.update_title()
             self.add_recent_file(self.file_path)
-            self.show_toast("Saved!")
+            self.show_toast("Saved (minified)" if getattr(self, "map_minified", False) else "Saved",
+                            level='success')
         except Exception as e:
             self.show_toast(f"Error saving: {e}", is_error=True)
             print(f"Error saving level: {e}")
@@ -4889,7 +5356,8 @@ class MainWindow(QMainWindow):
         name = os.path.splitext(os.path.basename(str(map_path)))[0]
         with _loading_overlay(self).busy(f"Loading {name}", "Reading the map", 5):
             try:
-                level_data = self._package.load_json(map_path)
+                from editor.package_session import load_map
+                level_data = load_map(self._package, map_path)
             except Exception as e:
                 print(f"ERROR loading level {map_path}: {e}")
                 self.show_toast(f"Failed to load level: {e}", is_error=True)
@@ -4913,13 +5381,29 @@ class MainWindow(QMainWindow):
         name = os.path.splitext(os.path.basename(str(filePath)))[0]
         with _loading_overlay(self).busy(f"Loading {name}", "Reading the map", 5):
             try:
-                with open(filePath, 'r', encoding='utf-8') as f:
-                    level_data = json.load(f)
+                # utf-8-sig: a map saved by an editor that writes a
+                # byte-order mark is still a map (packages read theirs so).
+                with open(filePath, 'r', encoding='utf-8-sig') as f:
+                    text = f.read()
+                level_data = json.loads(text)
+                # A map saved minified is saved minified again.
+                minified = self._is_minified_json(text)
+                # Placed terrain stamps are kept beside the map.
+                from engine import terrain_stamp
+                missing_paint = terrain_stamp.missing_paint_file(level_data, filePath)
+                level_data = terrain_stamp.join_level(level_data, filePath)
             except Exception as e:
                 print(f"ERROR loading level {filePath}: {e}")
                 self.show_toast(f"Failed to load level: {e}", is_error=True)
                 return False
             loaded = self._load_level(level_data, filePath, destination_spawn, from_game)
+            if loaded:
+                self.map_minified = minified
+                if missing_paint:
+                    # The map was saved with paint, and its file is gone.
+                    message = terrain_stamp.missing_paint_message(missing_paint)
+                    print(f"[MainWindow] WARNING: {message}")
+                    self.show_toast(message, is_error=True)
             if loaded and not self.view_3d.play_mode:
                 # The first frame of a new map uploads it to the GPU, which
                 # is a long paint of its own: draw it under the loading bar.
@@ -5006,6 +5490,11 @@ class MainWindow(QMainWindow):
                 self._pre_play_world = None
                 self._exit_play_mode()
                 self._keep_unsaved_work_on_level_change(captured)
+            else:
+                # Opening a map in the editor: the previous map's (or a
+                # playtest's) store values are not this map's.
+                from editor.things import LogicState
+                LogicState.reset_stores()
 
             # From here the scene is being replaced.  Until it has been, it
             # belongs to no file: a failure part-way must never leave the
@@ -5055,6 +5544,9 @@ class MainWindow(QMainWindow):
 
             # Update file path and UI state
             self.file_path = file_path
+            # Indented unless the file it was read from says otherwise
+            # (load_level_file, once this returns).
+            self.map_minified = False
             self._generated_level_marker = None
             if file_path is not None:
                 # A map opened from disk ends the package session.
@@ -5086,9 +5578,9 @@ class MainWindow(QMainWindow):
             print(f"[MainWindow] Successfully loaded {name}")
             if play_stopped:
                 self.show_toast(f"Loaded {name}; Play stopped: it has no "
-                                f"Player Start", is_error=True)
+                                f"Player Start", level='warning')
             else:
-                self.show_toast(f"Loaded {name}")
+                self.show_toast(f"Loaded {name}", level='success')
 
             # Keep the Logic Graph in sync
             self._refresh_logic_graph()
@@ -5134,7 +5626,8 @@ class MainWindow(QMainWindow):
         path = self._write_autosave()
         if path:
             self.show_toast(
-                f"Unsaved changes kept in maps/{os.path.basename(path)}")
+                f"Unsaved changes kept in maps/{os.path.basename(path)}",
+                level='success')
         else:
             self.show_toast("Could not keep unsaved changes before the "
                             "level change", is_error=True)
@@ -5304,7 +5797,7 @@ class MainWindow(QMainWindow):
                 # Deferred: this runs from __init__, before the window is up,
                 # and a toast shown then is never seen.
                 self._after(0, lambda: self.show_toast(
-                    "Dock layout reset to the new default", duration=4000))
+                    "Dock layout reset to the new default", level='warning'))
             return
 
         if self.config.has_option('Layout', 'state'):
@@ -5402,9 +5895,9 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from editor.package_session import PackageSession
+            from editor.package_session import PackageSession, load_map
             session = PackageSession(file_path)
-            level_data = session.load_json(session.start_map)
+            level_data = load_map(session, session.start_map)
 
             # Never point file_path at the package: save_level() writes that
             # path, and writing a map over the .fiopak replaces the archive
@@ -5412,6 +5905,7 @@ class MainWindow(QMainWindow):
             # failure below can leave the previous map's path attached to
             # this scene.  The first save goes through Save As.
             self.file_path = None
+            self.map_minified = False
             self._apply_level_data(level_data)
 
             # One package at a time.
@@ -5427,7 +5921,7 @@ class MainWindow(QMainWindow):
 
             launch_in_editor = self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
             if launch_in_editor:
-                self.show_toast(f"Loaded package: {os.path.basename(file_path)}")
+                self.show_toast(f"Loaded package: {os.path.basename(file_path)}", level='success')
             else:
                 self.enter_kiosk_mode()
 
@@ -5812,9 +6306,12 @@ class MainWindow(QMainWindow):
                                 "The I/O system is unavailable in this build.")
             return
 
+        from editor.io_system import resolve_group_target
         validation = validate_all_scene_connections(
             self.state.brushes,
             self.state.things,
+            find_group=lambda name, group_id='': resolve_group_target(
+                self.state, name, group_id),
         )
 
         problems = validation['problems']
@@ -5868,6 +6365,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         try:
+            # Leave Play first, so the prompt's "Save" writes the authored
+            # map (the pre-play world is put back) and not the running game.
+            if self._in_play_mode():
+                try:
+                    self._exit_play_mode()
+                except Exception as e:
+                    print(f"Leaving Play on close failed: {e}")
             if (not getattr(self, '_quit_without_prompt', False)
                     and not self.check_unsaved_changes()):
                 event.ignore()

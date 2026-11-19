@@ -87,7 +87,7 @@ def probe_movers(out, ticks=300):
     from engine.constants import brush_aabb_bounds
     from engine.logic_collision import CollisionRows
     from engine.logic_thread import LogicThread
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     from engine.player import Player
     from engine.render_table import RenderTable
     from engine.threaded_game_state import ThreadedGameState
@@ -201,7 +201,7 @@ def probe_aabb(out, batches=200, per=2000):
 
 def probe_static(out, reps=15):
     from engine.logic_collision import CollisionRows
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     from engine.render_table import RenderTable
     from plugins.bigworld.manager import BigWorldManager
     for label, name in (('big', 'BigWorld_streaming_test.json'), ('show', '_SHOWCASE.json')):
@@ -234,7 +234,7 @@ def probe_static(out, reps=15):
 
 def probe_ai(out, batches=60):
     import numpy as np
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     for label, name in (('big', 'BigWorld_streaming_test.json'), ('show', '_SHOWCASE.json')):
         raw = _copy(_maps(name))
         try:
@@ -299,7 +299,7 @@ def probe_player(out, ticks=900):
     import bench_collision as bc
     import glm
     from engine import brush_geometry as bg
-    from engine.physics import SpatialGrid
+    from engine.spatial_grid import SpatialGrid
     from engine.player import Player
     source = _runtime_source()
     for kind in bc.SCENARIOS:

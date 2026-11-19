@@ -4,7 +4,8 @@ from collections import OrderedDict
 import io
 import time
 from PIL import Image
-from engine.animated_texture import cumulative, frame_at, _frame_seconds
+from engine.animated_texture import (TextureTooLarge, cumulative, frame_at,
+                                     frame_budget, _frame_seconds)
 
 
 class GifFrames:
@@ -18,7 +19,14 @@ class GifFrames:
         self.source = Image.open(io.BytesIO(raw))
         self.size = self.source.size
         self.seconds = []
-        for index in range(self.source.n_frames):
+        # The desktop's budget for an animation (engine.animated_texture): a
+        # tiny file can declare a huge canvas and hundreds of frames. Over
+        # it, the first frame alone is shown.
+        try:
+            allowed = frame_budget(self.source, 'animated texture')
+        except TextureTooLarge:
+            allowed = 1
+        for index in range(max(1, min(int(self.source.n_frames), int(allowed)))):
             self.source.seek(index)
             self.seconds.append(_frame_seconds(self.source))
         self.source.seek(0)

@@ -10,7 +10,8 @@ from editor.editor_state import EditorState                    # noqa: E402
 from editor.things import Light                                 # noqa: E402
 from editor.io_system import OutputConnection, add_connection  # noqa: E402
 from engine.logic_thread import LogicThread                     # noqa: E402
-from engine.physics import PhysicsWorld, SpatialGrid            # noqa: E402
+from engine.physics.soma import Soma            # noqa: E402
+from engine.spatial_grid import SpatialGrid              # noqa: E402
 from engine.player import Player                                 # noqa: E402
 from engine.prop_entity import Prop                              # noqa: E402
 from engine.prop_runtime import PropSession                      # noqa: E402
@@ -79,7 +80,7 @@ def test_core_prop_carry_drop_rest_without_plugins(real_logic):
         'drop_angular_velocity': [spin, 0.0, 0.0],
     })
     grid = _floor_grid()
-    physics = PhysicsWorld(grid)
+    physics = Soma(grid)
     # Origin at the prop's base; 32-unit box centred half a height above it.
     physics.rebuild([{
         'pos': [0.0, 56.0, 30.0],
@@ -267,7 +268,7 @@ def test_prop_exposes_mass_and_collision_shape_defaults():
     assert prop.properties['mass'] == 1.0
     assert prop.properties['no_collision'] is True
     assert prop.properties['physics_enabled'] is False
-    assert prop.properties['collision_shape'] == 'auto'
+    assert prop.properties['collision_shape'] == 'aabb'     # the default, and the cheap one
 
 
 def test_aabb_collision_shape_skips_mesh_collision(real_logic):
@@ -362,7 +363,7 @@ def test_play_start_builds_the_prop_registry_once(real_logic, monkeypatch):
 
 def _carry_world(real_logic, prop, size):
     grid = _floor_grid()
-    physics = PhysicsWorld(grid)
+    physics = Soma(grid)
     physics.rebuild([{'pos': list(prop.pos), 'size': [size] * 3,
                       '_physics_body': True, '_physics_entity': prop,
                       '_collision_mode': 'aabb'}])
@@ -386,7 +387,7 @@ def test_repeatable_on_rest_show_keeps_a_sleeping_prop_asleep(real_logic):
         "hidden": False,
     })
     grid = _floor_grid()
-    physics = PhysicsWorld(grid)
+    physics = Soma(grid)
     physics.rebuild([{
         "pos": [0.0, 56.0, 30.0],
         "size": [32.0, 32.0, 32.0],
@@ -453,7 +454,7 @@ def test_on_carried_show_preserves_a_kinematic_props_carry(real_logic):
     assert prop.pos == pytest.approx(carried_position)
 
 
-@pytest.mark.parametrize('mass', [PhysicsWorld.HEAVY_MASS, 1000.0])
+@pytest.mark.parametrize('mass', [Soma.HEAVY_MASS, 1000.0])
 def test_a_prop_at_the_heaviest_mass_cannot_be_picked_up(real_logic, mass):
     prop = Prop(pos=[0.0, 40.0, 60.0], properties={
         'carry_enabled': True, 'physics_enabled': True, 'no_collision': False,

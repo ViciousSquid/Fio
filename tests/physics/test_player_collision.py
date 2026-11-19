@@ -20,7 +20,7 @@ import pytest
 pytest.importorskip("glm", reason="the player is built on PyGLM vectors")
 
 from engine.player import Player, _blocks_player      # noqa: E402
-from engine.physics import SpatialGrid                # noqa: E402
+from engine.spatial_grid import SpatialGrid                # noqa: E402
 from tests.helpers.worlds import box_brush            # noqa: E402
 
 

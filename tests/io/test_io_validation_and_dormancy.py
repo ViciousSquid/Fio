@@ -387,7 +387,7 @@ def test_the_source_is_unwound_after_dispatch(streamed):
 def test_generic_show_requests_a_wake_only_on_hidden_to_visible_transition(monkeypatch):
     """Generic Show requests physics wake once, when visibility actually changes.
 
-    The physics-world/body contract is covered with a real PhysicsWorld in
+    The physics-world/body contract is covered with a real Soma in
     tests/test_prop_runtime.py; this test pins the generic input's transition
     gate without substituting a fake LogicThread owner.
     """

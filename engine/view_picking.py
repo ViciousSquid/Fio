@@ -74,6 +74,29 @@ GL_TEXTURE_FREE_MEMORY_ATI = 0x87FC
 GL_RENDERBUFFER_FREE_MEMORY_ATI = 0x87FD
 
 
+#: Padding (world units) on a convex brush's box in the face pick's broad
+#: phase, well above the exact test's tolerance.
+_BOX_PAD = 1e-3
+
+
+def _entry_order(candidate):
+    """Face pick candidates nearest box first, ties in scene order."""
+    return candidate[0], candidate[1]
+
+
+def _box_face(o, d, t, box):
+    """The face of a plain box brush a ray (in the brush's shape frame)
+    enters at distance *t*."""
+    local = [o[i] + d[i] * t - box[i] for i in range(3)]
+    rel = [abs(local[i]) / (2.0 * box[i + 3]) if box[i + 3] else 0.0
+           for i in range(3)]
+    if rel[0] > rel[1] and rel[0] > rel[2]:
+        return 'east' if local[0] > 0 else 'west'
+    if rel[1] > rel[0] and rel[1] > rel[2]:
+        return 'top' if local[1] > 0 else 'down'
+    return 'north' if local[2] > 0 else 'south'
+
+
 class ViewPicking:
     #: The world-pause owner key an armed pick holds.
     ACTOR_PICK_PAUSE = "actor_pick"
@@ -108,6 +131,7 @@ class ViewPicking:
         """
         ray_o, ray_d = self.get_ray_from_mouse(mx, my)
         best_obj, best_t = None, float('inf')
+        self.last_pick_distance = None
         hits = []
         filters = self.view.editor.state.view_filters
         for brush in self.view.editor.state.brushes:
@@ -157,7 +181,23 @@ class ViewPicking:
             candidates = [obj for _, obj in hits]
             return component_edit.cycle_pick(candidates,
                                              self.view.editor.primary_selection())
+        if best_obj is not None:
+            #: How far along the ray the picked object is, in world units.
+            self.last_pick_distance = float(best_t) * float(glm.length(ray_d))
         return best_obj
+
+    def terrain_pick_distance(self, mx, my):
+        """How far along the cursor's ray the terrain is, in world units, or
+        None: no terrain there, or one that is locked or hidden -- a locked
+        terrain is skipped as a locked brush is."""
+        editor = self.view.editor
+        if editor.state.terrain_data is None or editor.terrain_locked():
+            return None
+        hit = self.view.terrain_edit.raycast_terrain(mx, my)
+        if hit is None:
+            return None
+        ray_o, _ = self.get_ray_from_mouse(mx, my)
+        return float(glm.length(glm.vec3(*hit) - ray_o))
 
     def intersect_ray_with_axis(self, ray_o, ray_d, obj_pos, axis_vec):
         perp = glm.cross(ray_d, axis_vec)
@@ -171,45 +211,71 @@ class ViewPicking:
         return closest, dist
 
     def get_brush_face_at_coords(self, mx, my):
+        """``(brush, face key)`` of the surface under the cursor, or None.
+
+        The surface the ray first *enters*: a brush the camera is inside --
+        a trigger, fog or water volume, a room-sized brush -- is looked
+        through, not picked. It used to win every pick at distance 0 (and an
+        angled one answered with the far face the ray leaves through), so a
+        face-mode click on a wall retextured the volume around the camera
+        instead, on a face chosen from where the camera stood.
+        """
         ray_o, ray_d = self.get_ray_from_mouse(mx, my)
-        best_t = float('inf')
-        best_hit = None
         ray_o_t = (float(ray_o.x), float(ray_o.y), float(ray_o.z))
         ray_d_t = (float(ray_d.x), float(ray_d.y), float(ray_d.z))
         filters = self.view.editor.state.view_filters
-        for brush in self.view.editor.state.brushes:
+        # Broad phase: every brush's box (a convex brush's is its solid's
+        # bounds, padded) in the frame its shape is authored in (see
+        # brush_placement: a moved or spinning brush is picked where it is
+        # drawn). A ray that misses the box misses the brush, and none of
+        # its faces is nearer than where the ray enters the box, so the
+        # exact tests run nearest box first and stop at the first box
+        # entered beyond the best hit. The answer is the one an exhaustive
+        # search gives: the nearest hit, a tie going to the earlier brush.
+        candidates = []
+        ray_box = brush_placement.ray_box
+        ray_box_entry = brush_placement.ray_box_entry
+        ray_to_shape_parts = brush_placement.ray_to_shape_parts
+        for index, brush in enumerate(self.view.editor.state.brushes):
             if brush.get('hidden', False) or filters.hides_brush(brush):
                 continue
-            # Angled (clipped) brushes: pick against their real convex faces so
-            # the sloped cut face is selectable, not just the six sides of the
-            # bounding box.  Plain box brushes stay on the fast AABB path below.
-            # Tested in the frame the brush's shape is authored in
-            # (brush_placement), so a moved or spinning brush is picked where
-            # it is drawn.
-            o, d = brush_placement.ray_to_shape(brush, ray_o_t, ray_d_t)
-            convex = brush_placement.shape_convex(brush)
+            o, d, convex, box = ray_to_shape_parts(brush, ray_o_t, ray_d_t)
             if convex is not None:
-                hit = brush_geometry.ray_convex_face(convex, o, d)
-                if hit is not None and hit[0] < best_t:
-                    best_t = hit[0]
-                    best_hit = (brush, brush_geometry.face_key(hit[1]))
+                cx, cy, cz, hx, hy, hz = convex.shape_box
+                pad = _BOX_PAD
+                t_box = ray_box((cx, cy, cz, hx + pad, hy + pad, hz + pad), o, d)
+                if t_box is None:
+                    continue
+                candidates.append((t_box, index, brush, o, d, convex, None))
                 continue
-            box = brush_placement.authored_box(brush)
-            t_box = brush_placement.ray_box(box, o, d)
-            if t_box is None or t_box >= best_t:
+            t_box = ray_box_entry(box, o, d)
+            if t_box is None:
                 continue
-            local = [o[i] + d[i] * t_box - box[i] for i in range(3)]
-            rel = [abs(local[i]) / (2.0 * box[i + 3]) if box[i + 3] else 0.0
-                   for i in range(3)]
-            face = 'north'
-            if rel[0] > rel[1] and rel[0] > rel[2]:
-                face = 'east' if local[0] > 0 else 'west'
-            elif rel[1] > rel[0] and rel[1] > rel[2]:
-                face = 'top' if local[1] > 0 else 'down'
+            candidates.append((t_box, index, brush, o, d, None, box))
+        candidates.sort(key=_entry_order)
+        best_t = float('inf')
+        best_index = -1
+        best_hit = None
+        for t_box, index, brush, o, d, convex, box in candidates:
+            if t_box > best_t:
+                break
+            if convex is not None:
+                # Angled (clipped) brushes: pick against their real convex
+                # faces so the sloped cut face is selectable, not just the
+                # six sides of the bounding box.
+                hit = brush_geometry.ray_convex_face(convex, o, d, entering=True)
+                if hit is None:
+                    continue
+                t, face_key = hit[0], None
             else:
-                face = 'north' if local[2] > 0 else 'south'
-            best_t = t_box
-            best_hit = (brush, face)
+                t, face_key = t_box, None
+            if t > best_t or (t == best_t and index > best_index):
+                continue
+            if convex is not None:
+                face_key = brush_geometry.face_key(hit[1])
+            else:
+                face_key = _box_face(o, d, t, box)
+            best_t, best_index, best_hit = t, index, (brush, face_key)
         return best_hit
 
     def get_face_at(self, mouse_pos):

@@ -2,6 +2,8 @@ import os
 import posixpath
 import json
 import zipfile
+
+from engine import terrain_stamp
 from typing import Dict, List, Optional, Set
 
 from engine.fileio import atomic_output
@@ -149,9 +151,33 @@ class PackageExporter:
                 with zipfile.ZipFile(handle, 'w', zipfile.ZIP_DEFLATED) as zf:
                     zf.writestr('metadata.json', json.dumps(manifest, indent=2))
                     for map_file, archive_path in map_archive_paths.items():
+                        # The map's terrain paint and placed stamps go in
+                        # beside it, as their own file: the engine lays it
+                        # over the map as a delta when it loads it. A map
+                        # that still carries its paint (an unsaved copy, one
+                        # saved by an earlier build) has it taken out here.
+                        paint = self._stamp_file(map_file)
                         player_copy = self._player_layout(map_file)
+                        if paint is None:
+                            source = player_copy or self._read_map(map_file) or {}
+                            without, inline = terrain_stamp.split_level(source)
+                            if inline is not None and (inline.get("stamps")
+                                                       or inline.get("paint")):
+                                paint, player_copy = inline, without
+                            elif (source.get(terrain_stamp.TERRAIN_KEY) or {}).get(
+                                    terrain_stamp.MARKER_KEY):
+                                self.errors.append(terrain_stamp.missing_paint_message(
+                                    os.path.basename(
+                                        terrain_stamp.default_stamp_path(map_file))))
+                        if paint is not None:
+                            zf.writestr(terrain_stamp.stamp_member(archive_path),
+                                        terrain_stamp.stamp_file_text(paint))
                         if player_copy is None:
                             zf.write(map_file, archive_path)
+                        elif self._is_minified(map_file):
+                            # A map kept minified is packaged minified.
+                            zf.writestr(archive_path, json.dumps(
+                                player_copy, separators=(",", ":")))
                         else:
                             zf.writestr(archive_path, json.dumps(player_copy, indent=2))
                     for arcname, src_path in sorted(cutscene_entries.items()):
@@ -214,6 +240,27 @@ class PackageExporter:
             self.errors.append(f"Not a map document: {map_file}")
             return None
         return data
+
+    @staticmethod
+    def _is_minified(map_file) -> bool:
+        """Whether a map file is minified JSON: all on one line."""
+        try:
+            with open(map_file, 'rb') as f:
+                return b"\n" not in f.read().strip()
+        except OSError:
+            return False
+
+    def _stamp_file(self, map_file) -> Optional[dict]:
+        """The paint file kept beside *map_file*, parsed; None when the map
+        has none (or it cannot be read, which is reported)."""
+        path = terrain_stamp.paint_path(map_file)
+        if path is None:
+            return None
+        try:
+            return terrain_stamp.load_stamp_file(path)
+        except terrain_stamp.StampError as exc:
+            self.errors.append(f"{os.path.basename(path)}: {exc}")
+            return None
 
     def _asset_references(self, data: dict) -> Set[str]:
         """Every asset name a map's brushes and things refer to."""

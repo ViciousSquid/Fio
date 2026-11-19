@@ -235,7 +235,10 @@ class VisibilityMixin:
         if table is None or not hasattr(table, 'light_color'):
             raise RuntimeError("dense EntityTable is required for light rendering")
         hidden = config.get('thing_hidden')
-        if not config.get('play_mode', False):
+        if not (config.get('play_mode', False)
+                or config.get('hide_hidden_lights', False)):
+            # Editing: a light hidden with H still lights, unless the
+            # editor's "Hidden lights give no light" setting is on.
             hidden = None
         elif hidden is not None:
             hidden = np.asarray(hidden)
@@ -246,7 +249,15 @@ class VisibilityMixin:
                 # A hidden light is out of the running world -- Big World
                 # parks out-of-range lights exactly this way, and they must
                 # not keep lighting (or take light and shadow slots).
-                keep = keep & ~hidden[slots]
+                if len(slots) and int(np.max(slots)) >= len(hidden):
+                    # Rows past the entities are lights no entity owns (an
+                    # emissive brush): they have no entry here, and their own
+                    # on/off is light_enabled.
+                    entity = np.asarray(slots) < len(hidden)
+                    keep = keep.copy()
+                    keep[entity] &= ~hidden[np.asarray(slots)[entity]]
+                else:
+                    keep = keep & ~hidden[slots]
             return keep
 
         focus = config.get('light_focus')

@@ -1,8 +1,8 @@
-"""Placed terrain stamps and .stamp files.
+"""Placed terrain stamps and .paint files.
 
 A stamp is a record (texture, X/Z position, radius...) that is also baked
 into the terrain paint. The editor can select, move and nudge stamps; a
-.stamp file carries only the records, never terrain height.
+.paint file carries only the records, never terrain height.
 """
 
 import json
@@ -106,24 +106,27 @@ def test_old_paint_stays_under_moved_stamps(texture):
     assert _texel(reloaded, 60.0, 10.0)[3] == 0
 
 
-def test_stamp_file_holds_positions_only(texture, tmp_path):
+def test_a_paint_file_holds_the_paint_and_the_stamps_but_no_height(texture, tmp_path):
     terrain = Terrain(seed=1)
     terrain.apply_sculpt_at(10.0, 10.0, 32.0, 5.0)
     terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.0)
-    path = tmp_path / "level.stamp"
+    path = tmp_path / "level.paint"
     terrain_stamp.save_stamp_file(terrain, str(path))
     data = json.loads(path.read_text())
-    assert data["format"] == terrain_stamp.STAMP_FORMAT
-    assert set(data) == {"format", "version", "stamps"}
-    assert set(data["stamps"][0]) == {
-        "id", "texture", "x", "z", "radius", "angle", "feather", "opacity"}
+    assert data["format"] == terrain_stamp.PAINT_FORMAT
+    assert set(data) == {"format", "version", "stamps", "paint"}
+    assert {"id", "texture", "x", "z", "radius", "angle", "feather",
+            "opacity"} <= set(data["stamps"][0])
+    assert set(data["paint"]) <= set(terrain_stamp.PAINT_KEYS)
+    assert data["paint"]["texture_paint"]
+    assert "sculpt" not in json.dumps(data), "a paint file holds no terrain height"
 
 
 def test_importing_onto_changed_terrain_bakes_the_stamps(texture, tmp_path):
     terrain = Terrain(seed=1)
     terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.0)
     terrain.add_paint_stamp(300.0, -40.0, 12.0, texture, feather=0.0)
-    path = tmp_path / "level.stamp"
+    path = tmp_path / "level.paint"
     terrain_stamp.save_stamp_file(terrain, str(path))
 
     changed = Terrain(seed=99)             # a different, re-generated map
@@ -138,7 +141,7 @@ def test_importing_onto_changed_terrain_bakes_the_stamps(texture, tmp_path):
 def test_applying_the_same_stamp_file_twice_does_not_duplicate(texture, tmp_path):
     terrain = Terrain(seed=1)
     terrain.add_paint_stamp(10.0, 10.0, 8.0, texture, feather=0.5, opacity=0.5)
-    path = tmp_path / "level.stamp"
+    path = tmp_path / "level.paint"
     terrain_stamp.save_stamp_file(terrain, str(path))
     paint = {k: v.copy() for k, v in terrain.texture_paint_maps.items()}
 
@@ -157,7 +160,7 @@ def test_applying_the_same_stamp_file_twice_does_not_duplicate(texture, tmp_path
 
 
 def test_rejects_non_stamp_files(tmp_path):
-    path = tmp_path / "bad.stamp"
+    path = tmp_path / "bad.paint"
     path.write_text('{"format": "something_else"}')
     with pytest.raises(terrain_stamp.StampError):
         terrain_stamp.load_stamp_file(str(path))
@@ -169,9 +172,9 @@ def test_rejects_non_stamp_files(tmp_path):
 def test_default_stamp_path_follows_map_name(tmp_path):
     map_path = tmp_path / "maps" / "forest.json"
     assert terrain_stamp.default_stamp_path(str(map_path)) == str(
-        tmp_path / "maps" / "forest.stamp")
+        tmp_path / "maps" / "forest.paint")
     assert terrain_stamp.default_stamp_path(None, str(tmp_path)).endswith(
-        "untitled.stamp")
+        "untitled.paint")
 
 
 def test_vector_and_scalar_stamp_lookups_agree(texture):
@@ -239,3 +242,202 @@ def test_cached_terrain_data_follows_every_change(texture):
     assert _texel(reloaded, 310.0, 10.0) == (200, 100, 50, 255)
     assert reloaded.sculpt_offsets == terrain.sculpt_offsets
     assert float(reloaded.heightmap_data.max()) == 1.0
+
+
+# -- a saved map keeps its stamps beside it, not in its JSON -----------------
+
+def _stamped_level(texture):
+    terrain = Terrain(seed=5)
+    terrain.add_paint_stamp(100.0, 40.0, 64.0, texture)
+    terrain.add_paint_stamp(-50.0, 10.0, 32.0, texture, feather=0.5)
+    return terrain, {"version": 5, "brushes": [], "things": [],
+                     "terrain_data": terrain.to_dict()}
+
+
+def test_a_saved_map_keeps_its_stamps_in_a_file_beside_it(tmp_path, texture):
+    import json
+    terrain, level = _stamped_level(texture)
+    map_path = str(tmp_path / "forest.json")
+
+    for_map, stamps = terrain_stamp.split_level(level)
+    written = terrain_stamp.write_map_stamps(map_path, stamps)
+
+    for key in ("paint_stamps", "texture_paint", "texture_paint_base",
+                "texture_paint_resolution"):
+        assert key not in for_map["terrain_data"], key
+    assert "paint_stamps" in level["terrain_data"], "the live level was changed"
+    assert level["terrain_data"]["texture_paint"], "the live level was changed"
+    assert stamps["paint"]["texture_paint"] == level["terrain_data"]["texture_paint"]
+    assert written == str(tmp_path / "forest.paint")
+    text = open(written, encoding="utf-8").read()
+    assert "\n" not in text and ", " not in text and ": " not in text, "not minified"
+    assert [s["id"] for s in json.loads(text)["stamps"]] == [
+        s["id"] for s in terrain.paint_stamps]
+
+
+def test_opening_the_map_gives_the_terrain_its_stamps_back(tmp_path, texture):
+    import json
+    terrain, level = _stamped_level(texture)
+    map_path = str(tmp_path / "forest.json")
+    for_map, stamps = terrain_stamp.split_level(level)
+    terrain_stamp.write_map_stamps(map_path, stamps)
+    read = json.loads(json.dumps(for_map))
+
+    joined = terrain_stamp.join_level(read, map_path)
+
+    assert joined["terrain_data"] == json.loads(json.dumps(level["terrain_data"])), (
+        "the map and its stamp file together are not what was saved")
+    again = Terrain(seed=5)
+    again.from_dict(joined["terrain_data"])
+    assert [s["id"] for s in again.paint_stamps] == [s["id"] for s in terrain.paint_stamps]
+    for key in ("paint_stamps", "texture_paint", "texture_paint_base"):
+        assert again.to_dict().get(key) == terrain.to_dict().get(key), key
+
+
+def test_a_map_without_its_paint_file_has_unpainted_ground(tmp_path, texture):
+    import json
+    terrain, level = _stamped_level(texture)
+    for_map, _stamps = terrain_stamp.split_level(level)
+    read = terrain_stamp.join_level(json.loads(json.dumps(for_map)),
+                                    str(tmp_path / "forest.json"))
+
+    alone = Terrain(seed=5)
+    alone.from_dict(read["terrain_data"])
+    assert not alone.paint_stamps and not alone.texture_paint_maps
+
+
+def test_a_stamp_file_from_an_earlier_build_is_still_read(tmp_path, texture):
+    """<map>.terrainstamps (stamps only) beside a map that kept its paint."""
+    import json
+    terrain, level = _stamped_level(texture)
+    map_path = tmp_path / "forest.json"
+    old_map = json.loads(json.dumps(level))
+    records = old_map["terrain_data"].pop("paint_stamps")
+    (tmp_path / "forest.terrainstamps").write_text(json.dumps(
+        {"format": "terrain_stamp", "version": 1, "stamps": records}))
+
+    # Such a map carries its paint, so it is left as it is ...
+    assert terrain_stamp.join_level(old_map, str(map_path)) is old_map
+    # ... and a map with no paint of its own takes the file's stamps.
+    bare, _ = terrain_stamp.split_level(level)
+    joined = terrain_stamp.join_level(json.loads(json.dumps(bare)), str(map_path))
+    assert [s["id"] for s in joined["terrain_data"]["paint_stamps"]] == [
+        s["id"] for s in terrain.paint_stamps]
+
+
+def test_a_map_that_still_carries_its_stamps_keeps_them(tmp_path, texture):
+    _terrain, level = _stamped_level(texture)
+    other, other_level = _stamped_level(texture)
+    map_path = str(tmp_path / "forest.json")
+    terrain_stamp.write_map_stamps(map_path, terrain_stamp.split_level(other_level)[1])
+    before = [s["id"] for s in level["terrain_data"]["paint_stamps"]]
+
+    joined = terrain_stamp.join_level(level, map_path)
+
+    assert [s["id"] for s in joined["terrain_data"]["paint_stamps"]] == before
+
+
+def test_removing_every_stamp_empties_the_file(tmp_path, texture):
+    import json
+    terrain, level = _stamped_level(texture)
+    map_path = str(tmp_path / "forest.json")
+    terrain_stamp.write_map_stamps(map_path, terrain_stamp.split_level(level)[1])
+    terrain.clear_texture_paint()
+    level["terrain_data"] = terrain.to_dict()
+
+    terrain_stamp.write_map_stamps(map_path, terrain_stamp.split_level(level)[1])
+
+    path = tmp_path / "forest.paint"
+    assert json.loads(path.read_text())["stamps"] == []
+
+
+def test_a_map_with_no_stamps_gets_no_stamp_file(tmp_path):
+    level = {"version": 5, "brushes": [], "things": [],
+             "terrain_data": Terrain(seed=5).to_dict()}
+    map_path = str(tmp_path / "plain.json")
+    assert terrain_stamp.write_map_stamps(map_path, terrain_stamp.split_level(level)[1]) is None
+    assert terrain_stamp.write_map_stamps(
+        map_path, terrain_stamp.split_level({"brushes": []})[1]) is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_editor_saves_and_opens_a_map_with_its_stamp_file(
+        main_window, tmp_path, texture):
+    window = main_window
+    terrain = Terrain(seed=5)
+    terrain.add_paint_stamp(100.0, 40.0, 64.0, texture)
+    window.terrain = terrain
+    window.state.terrain_data = terrain.to_dict()
+    window.file_path = str(tmp_path / "forest.json")
+
+    window.save_level()
+
+    saved = json.loads((tmp_path / "forest.json").read_text())
+    assert "paint_stamps" not in saved["terrain_data"]
+    assert (tmp_path / "forest.paint").exists()
+
+    assert window.load_level_file(str(tmp_path / "forest.json"))
+    assert [s["id"] for s in window.terrain.paint_stamps] == [
+        s["id"] for s in terrain.paint_stamps]
+    assert window.state.terrain_data["paint_stamps"]
+    window.unsaved_changes = False
+
+
+# -- a map whose paint file has gone missing says so --------------------------
+
+def test_a_saved_map_says_it_has_a_paint_file(tmp_path, texture):
+    _terrain, level = _stamped_level(texture)
+    for_map, _paint = terrain_stamp.split_level(level)
+    assert for_map["terrain_data"]["paint_file"] is True
+    plain, nothing = terrain_stamp.split_level(
+        {"terrain_data": Terrain(seed=5).to_dict()})
+    assert "paint_file" not in plain["terrain_data"]
+    # Saved again once the paint is cleared, the map stops saying so.
+    cleared = dict(for_map, terrain_data=dict(for_map["terrain_data"]))
+    assert "paint_file" not in terrain_stamp.split_level(cleared)[0]["terrain_data"]
+
+
+def test_the_missing_paint_file_is_named(tmp_path, texture):
+    _terrain, level = _stamped_level(texture)
+    for_map, paint = terrain_stamp.split_level(level)
+    map_path = str(tmp_path / "forest.json")
+
+    assert terrain_stamp.missing_paint_file(for_map, map_path) == "forest.paint"
+    assert terrain_stamp.missing_paint_message("forest.paint") == (
+        "forest.paint was not found so this map will not display paint/stamps")
+    terrain_stamp.write_map_stamps(map_path, paint)
+    assert terrain_stamp.missing_paint_file(for_map, map_path) is None
+    assert terrain_stamp.missing_paint_file(
+        {"terrain_data": Terrain(seed=5).to_dict()}, map_path) is None
+
+
+def test_the_editor_warns_when_a_map_s_paint_file_is_missing(
+        main_window, tmp_path, texture):
+    window = main_window
+    shown = []
+    real = window.show_toast
+    window.show_toast = lambda message, *a, **k: shown.append(str(message)) or real(
+        message, *a, **k)
+    terrain = Terrain(seed=5)
+    terrain.add_paint_stamp(100.0, 40.0, 64.0, texture)
+    window.terrain = terrain
+    window.state.terrain_data = terrain.to_dict()
+    window.file_path = str(tmp_path / "forest.json")
+    window.save_level()
+    (tmp_path / "forest.paint").unlink()
+    shown.clear()
+
+    assert window.load_level_file(str(tmp_path / "forest.json"))
+
+    assert ("forest.paint was not found so this map will not display "
+            "paint/stamps") in shown
+    assert not window.terrain.paint_stamps and not window.terrain.texture_paint_maps
+
+    # A map that never had paint loads without the warning.
+    window.terrain.clear_texture_paint()
+    window.state.terrain_data = window.terrain.to_dict()
+    window.save_level()
+    shown.clear()
+    assert window.load_level_file(str(tmp_path / "forest.json"))
+    assert not [m for m in shown if "was not found" in m]
+    window.unsaved_changes = False

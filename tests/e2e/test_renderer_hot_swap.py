@@ -34,6 +34,7 @@ def renderers():
     FlatRenderer.cleaned.clear()
     registry.register_renderer("Flat", FlatRenderer)
     registry.register_renderer("Broken", _broken)
+    registry.register_renderer("NotARenderer", lambda config: object())
     yield
     registry._factories.clear()
     registry._factories.update(saved)
@@ -143,6 +144,8 @@ def test_a_renderer_that_fails_to_start_leaves_the_current_one(fio_session, rend
     current = view.renderer
     assert view.switch_renderer("Broken") is False
     assert view.switch_renderer("NoSuchRenderer") is False
+    # Not a renderer at all: refused when made, never painted with.
+    assert view.switch_renderer("NotARenderer") is False
     assert view.renderer is current and view.renderer_mode == "Forward"
     session.publish()
     assert session.paint().std() > 4.0

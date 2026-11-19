@@ -359,7 +359,19 @@ class OverlaysMixin:
     def draw_face_highlight(self, projection, view, triangles):
         """Highlight a face: *triangles* is ``(n, 3)`` float32, world space
         (``engine.overlay_geometry.face_highlight_triangles``, built by the
-        host from the hovered brush -- the renderer sees no brush)."""
+        host from the brush -- the renderer sees no brush). The selected
+        face: the Surface Inspector's, or the hovered one in Face Mode."""
+        # Fio's accent orange (#F08000), as every other selection is.
+        self._face_overlay(projection, view, triangles, (0.94, 0.5, 0.0), 0.4)
+
+    def draw_face_hover(self, projection, view, triangles):
+        """A faint highlight for the face under the cursor while another is
+        selected (the Surface Inspector's): what a click would pick, drawn
+        so it cannot be mistaken for the face being edited. Optional for a
+        renderer; the host looks it up with ``getattr``."""
+        self._face_overlay(projection, view, triangles, (1.0, 1.0, 1.0), 0.15)
+
+    def _face_overlay(self, projection, view, triangles, colour, alpha):
         if triangles is None or not len(triangles) or 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
@@ -369,8 +381,8 @@ class OverlaysMixin:
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glUniform3f(uniforms['color'], 0.8, 0.2, 0.9)
-        gl.glUniform1f(uniforms['alpha'], 0.4)
+        gl.glUniform3f(uniforms['color'], *colour)
+        gl.glUniform1f(uniforms['alpha'], alpha)
         self._draw_face_highlight_verts(
             np.ascontiguousarray(triangles, dtype=np.float32).ravel(), uniforms)
         gl.glDisable(gl.GL_BLEND)
@@ -399,6 +411,23 @@ class OverlaysMixin:
         gl.glDrawArrays(gl.GL_TRIANGLES, 0, n)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(0)
+
+    def draw_lens_water(self, drops, viewport) -> int:
+        """Water on the camera's lens (engine.lens_water): *drops*
+        ``[(x, y, radius, wetness, stretch)]`` (screen fractions, y down) over
+        the finished frame in *viewport* ``(x, y, w, h)``; how many were drawn.
+
+        An optional extra, not part of the locked renderer contract: the host
+        calls it when a renderer has it (every renderer built on RendererCore
+        does). The pass is made on first use; with no drops nothing is done
+        (core.lens_water_gl)."""
+        lens = getattr(self, '_lens_water_pass', None)
+        if not drops:
+            return 0
+        if lens is None:
+            from .lens_water_gl import LensWaterPass
+            lens = self._lens_water_pass = LensWaterPass()
+        return lens.draw(drops, viewport)
 
     def draw_component_overlay(self, projection, view, overlay, version=None):
         """Draw vertex/edge/face handles for the brushes being component-edited.

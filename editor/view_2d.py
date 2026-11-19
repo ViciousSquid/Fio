@@ -6,9 +6,9 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import (Thing, Light, PlayerStart, Speaker, ReflectionProbe, Prop, Monster, Decal,
+from editor.things import (Thing, Light, PlayerStart, Speaker, ReflectionProbe, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
-                          LogicCamera, LogicSpawner, Portal, LogicState, Effect)
+                          LogicCamera, LogicSpawner, Portal, LogicState, Effect, Shake)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
 from engine import brush_placement
 from engine.constants import brush_aabb_bounds, PLAYER_HULL_SIZE
@@ -31,6 +31,53 @@ try:
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
+
+#: The 2D views' right-click menu: Fio's orange strip along the top of the
+#: menu, and green -- Fio's other colour -- along the top of every submenu
+#: opened from it (a submenu is a child widget of its menu, so ``QMenu QMenu``
+#: matches it and not the menu itself).
+CONTEXT_MENU_STYLE = """
+    QMenu {
+        background-color: #2c2c2c;
+        color: #ffffff;
+        border: 1px solid #3d3d3d;
+        border-top: 3px solid #FF8C00; /* orange strip */
+        padding-bottom: 2px;
+    }
+    QMenu QMenu {
+        border-top: 3px solid #4CAF50; /* submenus: green strip */
+    }
+    QMenu::item {
+        padding: 6px 28px 6px 12px;
+        background-color: transparent;
+    }
+    QMenu::item:selected {
+        background-color: #3e3e3e;
+    }
+    /* A large margin leaves a gap between groups. */
+    QMenu::separator {
+        height: 1px;
+        background: #555;
+        margin: 12px 0px;
+    }
+"""
+
+
+#: The rotate tool's angle step for each grid size: a finer grid, a finer
+#: step, and every step divides 360 (the default grid, 16, keeps 15 degrees).
+#: [ and ] change the grid -- and with it the step -- mid-rotate.
+ROTATE_STEP_FOR_GRID = {2: 1.0, 4: 5.0, 8: 10.0, 16: 15.0, 32: 30.0,
+                        64: 45.0, 128: 90.0}
+
+
+def rotate_step_for_grid(grid):
+    """The rotate step, in degrees, for a grid size (nearest listed size)."""
+    grid = int(grid or 16)
+    if grid in ROTATE_STEP_FOR_GRID:
+        return ROTATE_STEP_FOR_GRID[grid]
+    nearest = min(ROTATE_STEP_FOR_GRID, key=lambda size: abs(size - grid))
+    return ROTATE_STEP_FOR_GRID[nearest]
+
 
 class View2D(QWidget):
     def __init__(self, editor, main_window, view_type):
@@ -143,6 +190,7 @@ class View2D(QWidget):
         # be previewed live and frozen on Enter.
         self.clip_points = []          # list[QPointF] in this view's 2D world coords
         self.clip_hover = None         # QPointF current cursor in 2D world coords
+        self._clip_hover_raw = None    # the cursor before snapping (re-snapped on [ ])
         self.clip_keep_positive = False  # which half-space to keep
 
         # --- Free-rotate tool state (toggled globally by the rotate button) ---
@@ -155,7 +203,13 @@ class View2D(QWidget):
         self.rotate_pivot3 = None      # the same pivot in world space, held fixed
         self.rotate_start_ang = 0.0    # cursor angle (radians) at drag start
         self.rotate_applied = 0.0      # net snapped degrees applied so far
-        self.rotate_snap_deg = 15.0    # step size while grid snap is enabled
+        #: A rotate step set by hand (tests); None: the grid size's step
+        #: (ROTATE_STEP_FOR_GRID), so [ and ] change it mid-drag.
+        self._rotate_snap_override = None
+        self._rotate_last_world = None # the cursor in the last rotate update
+        #: A selected decal's edge being dragged (decal_handles): the decal,
+        #: which edge, and whether its undo step is saved yet.
+        self._decal_resize = None
 
         # --- Component editing (face / edge / vertex / side stretch) ---
         # The mode, hover and selection live on the main window's shared
@@ -715,6 +769,32 @@ class View2D(QWidget):
         self.group_resize_handle = -1
         self._group_start = None
 
+    @property
+    def rotate_snap_deg(self):
+        """The rotate step: the grid size's (ROTATE_STEP_FOR_GRID)."""
+        if self._rotate_snap_override is not None:
+            return self._rotate_snap_override
+        return rotate_step_for_grid(self.grid_size)
+
+    @rotate_snap_deg.setter
+    def rotate_snap_deg(self, value):
+        self._rotate_snap_override = None if value is None else float(value)
+
+    def grid_size_changed(self):
+        """The grid size moved ([ or ]): the scissor's preview point and an
+        in-progress rotation snap to the new grid at once, without leaving
+        the tool or waiting for the mouse to move."""
+        if self._clip_active() and self._clip_hover_raw is not None:
+            self.clip_hover = self.snap_to_grid(self._clip_hover_raw)
+            self._update_clip_keep_side()
+        last = self._rotate_last_world
+        if last is not None:
+            if self.rotate_dragging:
+                self.update_rotate(last)
+            elif self.is_group_rotating:
+                self._update_group_rotate(last)
+        self.update()
+
     def _begin_group_rotate(self, world_pos):
         """Start a rotate-mode drag spinning the whole selection about the group
         centre."""
@@ -735,6 +815,7 @@ class View2D(QWidget):
         the group pivot to follow the cursor."""
         if not self.is_group_rotating or self.group_rotate_pivot is None:
             return
+        self._rotate_last_world = QPointF(world_pos)
         axis = self._rotate_axis_vec()
         idx = self._axis_indices()
         if axis is None or idx is None:
@@ -754,7 +835,7 @@ class View2D(QWidget):
         # Depth of the pivot is irrelevant for a rotation about the view axis.
         rad = math.radians(delta)
         cos_a, sin_a = math.cos(rad), math.sin(rad)
-        for o in self._selected_list():
+        for o in self.editor.with_group_mates(self._selected_list()):
             if isinstance(o, dict):
                 bg.rotate_brush(o, delta, axis, pivot=pivot3)
             else:
@@ -806,6 +887,7 @@ class View2D(QWidget):
         """Apply the incremental rotation to reach the cursor's current angle."""
         if not self.rotate_dragging or self.rotate_pivot is None:
             return
+        self._rotate_last_world = QPointF(world_pos)
         axis = self._rotate_axis_vec()
         if axis is None:
             return
@@ -1020,7 +1102,8 @@ class View2D(QWidget):
         font.setPointSize(10)
         font.setBold(True)
         painter.setFont(font)
-        mode = "stepped" if self.snap_to_grid_enabled else "free"
+        mode = (f"{self.rotate_snap_deg:g}° steps, grid {self.grid_size} - [ ] to change"
+                if self.snap_to_grid_enabled else "free")
         painter.drawText(10, 20, f"ROTATE MODE ({mode}) — drag to spin the "
                                  f"selection  (Esc to exit)")
 
@@ -1163,6 +1246,7 @@ class View2D(QWidget):
                                      else o.properties.get('lock', False))]
                     if not group:
                         return
+                    group = self.editor.movable_with_mates(group)
                     primary = selected if selected in group else group[0]
                     p_ref = primary['pos'] if isinstance(primary, dict) else primary.pos
 
@@ -1246,11 +1330,9 @@ class View2D(QWidget):
         return self.editor.state.view_filters.hides(obj)
 
     def _hidden(self, obj):
-        """Hidden by the map, or filtered out of the editor's views. Decals
-        are never in the 2D views: the Decal tool edits them in the 3D view,
-        where what they paint is what is shown (as terrain stamps)."""
-        if isinstance(obj, Decal):
-            return True
+        """Hidden by the map, or filtered out of the editor's views. A decal
+        is shown like any entity, marked with the DECAL button's icon
+        (:meth:`editor.things.Decal.get_icon_pixmap`)."""
         props = obj if isinstance(obj, dict) else obj.properties
         return bool(props.get('hidden', False)) or self._filtered(obj)
 
@@ -1342,6 +1424,7 @@ class View2D(QWidget):
         self.draw_terrain(painter, visible_bounds)
         self.draw_brushes(painter, visible_bounds)
         self.draw_things(painter, visible_bounds)
+        self.draw_decal_handles(painter)
         self.draw_camera(painter)
         if self._clip_active():
             self.draw_clip_overlay(painter)
@@ -2160,6 +2243,31 @@ class View2D(QWidget):
             
         return pts_x, pts_y
 
+    #: An explosion's blast radius: dark orange.
+    BLAST_RADIUS_COLOUR = (204, 85, 0)
+
+    def _draw_blast_radius(self, painter, thing, s_pos):
+        """The circle a blast reaches (an Effect's, or an Explosive Prop's),
+        with its size."""
+        from engine.explosions import EXPLOSIVE_DEFAULTS
+        try:
+            radius = float(thing.properties.get(
+                'explosion_radius', EXPLOSIVE_DEFAULTS['explosion_radius']))
+        except (TypeError, ValueError):
+            radius = float(EXPLOSIVE_DEFAULTS['explosion_radius'])
+        r, g, b = self.BLAST_RADIUS_COLOUR
+        px = radius * self.zoom_factor
+        painter.save()
+        painter.setBrush(QBrush(QColor(r, g, b, 40)))
+        painter.setPen(QPen(QColor(r, g, b, 220), 1, Qt.DashLine))
+        painter.drawEllipse(s_pos, px, px)
+        painter.setPen(QPen(QColor(r, g, b)))
+        font = QFont()
+        font.setPointSize(8)
+        painter.setFont(font)
+        painter.drawText(QPointF(s_pos.x() + px + 4, s_pos.y() + 4), f"{int(radius)} u")
+        painter.restore()
+
     def _draw_model_wireframe(self, painter, model_thing, ax_map, ax1, ax2):
         """Draws the projected wireframe of a 3D model in the 2D view."""
         model_path = entity_model_path(model_thing)
@@ -2322,6 +2430,14 @@ class View2D(QWidget):
             s_pos = self.world_to_screen(w_pos)
             
             draw_rect = None
+
+            # A blast radius (dark orange) -- an Effect's, or that of the Effect
+            # an Explosive Prop spawns -- while its panel's eye is on, as a
+            # monster's sight is.
+            if (getattr(self.editor, '_explosion_preview_thing', None) is thing
+                    and (thing.properties.get('explosive', False)
+                         or thing.properties.get('type') == 'effect')):
+                self._draw_blast_radius(painter, thing, s_pos)
 
             # --- MODEL RENDERING ---
             # A Prop may retain its model_path while being represented as a
@@ -2981,6 +3097,115 @@ class View2D(QWidget):
         painter.setBrush(QColor(0, 0, 0, 150))
         painter.drawEllipse(screen_pos, 8, 8)
 
+    # -- a selected decal's handles (editor.decal_handles) ---------------------
+
+    def _handle_decal(self):
+        """The decal whose edges have handles: the selected one (or the
+        Decal tool's one selected decal); not a locked one."""
+        from editor.things import Decal
+        decal = self.editor.primary_selection()
+        if not isinstance(decal, Decal):
+            decal = None
+            tool = getattr(getattr(self.main_window, 'view_3d', None), 'decal_tool', None)
+            if tool is not None and getattr(tool, 'active', False):
+                chosen = tool.selected()
+                if len(chosen) == 1:
+                    decal = chosen[0]
+        if decal is None or decal.properties.get('lock', False):
+            return None
+        return decal
+
+    def _decal_keep_aspect(self):
+        tool = getattr(getattr(self.main_window, 'view_3d', None), 'decal_tool', None)
+        return bool(getattr(tool, 'keep_aspect', True))
+
+    def draw_decal_handles(self, painter):
+        """The selected decal's face outlined, with a handle on each edge
+        this view can drag."""
+        from editor import decal_handles
+        decal = self._handle_decal()
+        idx = self._axis_indices()
+        if decal is None or idx is None:
+            return
+        i1, i2, _ = idx
+        corners = decal_handles.outline(decal, i1, i2)
+        if corners is None:
+            return
+        polygon = QPolygonF([self.world_to_screen(QPointF(u, v)) for u, v in corners])
+        painter.setPen(QPen(QColor(0xF0, 0x80, 0x00), 1.5))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPolygon(polygon)
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        painter.setBrush(QBrush(QColor(255, 255, 255)))
+        size = 8
+        for _key, _sign, (u, v) in decal_handles.handles(decal, i1, i2):
+            at = self.world_to_screen(QPointF(u, v))
+            painter.drawRect(QRectF(at.x() - size / 2, at.y() - size / 2, size, size))
+
+    def _begin_decal_resize(self, screen_pos):
+        """A press on a selected decal's handle starts dragging that edge."""
+        from editor import decal_handles
+        decal = self._handle_decal()
+        idx = self._axis_indices()
+        if decal is None or idx is None:
+            return False
+        i1, i2, _ = idx
+        world = self.screen_to_world(QPointF(screen_pos))
+        hit = decal_handles.handle_at(decal, i1, i2, (world.x(), world.y()),
+                                      10.0 / max(self.zoom_factor, 1e-9))
+        if hit is None:
+            return False
+        self._decal_resize = {'decal': decal, 'key': hit[0], 'sign': hit[1],
+                              'saved': False}
+        return True
+
+    def _update_decal_resize(self, world_pos):
+        """Move the dragged edge to the cursor: snapped to the grid while
+        grid snap is on, the other side following with Keep aspect ratio."""
+        from editor import decal_handles
+        from engine.change_journal import touch
+        drag = self._decal_resize
+        idx = self._axis_indices()
+        if drag is None or idx is None:
+            return
+        i1, i2, _ = idx
+        decal = drag['decal']
+        result = decal_handles.resize(
+            decal, drag['key'], drag['sign'], (world_pos.x(), world_pos.y()), i1, i2,
+            grid=self.grid_size if self.snap_to_grid_enabled else None,
+            keep_aspect=self._decal_keep_aspect())
+        if result is None:
+            return
+        pos, width, height = result
+        props = decal.properties
+        if (all(abs(a - b) < 1e-6 for a, b in zip(pos, decal.pos))
+                and abs(width - float(props.get('width', 0.0))) < 1e-6
+                and abs(height - float(props.get('height', 0.0))) < 1e-6):
+            return
+        if not drag['saved']:
+            self.main_window.save_state()            # the whole drag: one undo step
+            drag['saved'] = True
+        decal.pos = list(pos)
+        props['width'], props['height'] = width, height
+        touch(decal)
+        self.main_window.refresh_views()
+
+    def _end_decal_resize(self):
+        """The drag is over: the panels show the decal's new size."""
+        drag, self._decal_resize = self._decal_resize, None
+        if drag is None or not drag['saved']:
+            return
+        decal = drag['decal']
+        self.editor.state.mark_world_changed([decal])
+        self.main_window.mark_as_modified()
+        editor = getattr(self.main_window, 'property_editor', None)
+        if editor is not None and editor.current_object is decal:
+            editor.set_object(decal)
+        tool = getattr(getattr(self.main_window, 'view_3d', None), 'decal_tool', None)
+        panel = getattr(tool, '_panel', None)
+        if panel is not None and decal in tool.selected():
+            panel.show_values(decal.properties)
+
     def draw_resize_handles(self, painter, rect):
         painter.setPen(QPen(QColor(255, 255, 255), 1))
         painter.setBrush(QBrush(QColor(255, 255, 255)))
@@ -3246,9 +3471,21 @@ class View2D(QWidget):
                 QPointF(rect.center().x(), rect.top()), QPointF(rect.center().x(), rect.bottom()),
                 QPointF(rect.left(), rect.center().y()), QPointF(rect.right(), rect.center().y())]
 
+    def _middle_click_pan_enabled(self):
+        """Settings > "Middle Click to Drag in 2D Views".
+
+        The Settings window saves ``middle_click_drag``; this view read
+        ``MiddleClickDrag``, and option names are case-sensitive, so the
+        checkbox did nothing. The old name is still honoured when it is the
+        only one present.
+        """
+        config = self.main_window.config
+        legacy = config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
+        return config.getboolean('Controls', 'middle_click_drag', fallback=legacy)
+
     def mousePressEvent(self, event):
         world_pos = self.screen_to_world(event.pos())
-        middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
+        middle_click_pan_enabled = self._middle_click_pan_enabled()
 
         if event.button() == Qt.RightButton:
             self.is_panning = False 
@@ -3346,6 +3583,11 @@ class View2D(QWidget):
                     self.update()
                     return
             
+            # --- A selected decal's edges: drag one to size it ---
+            if self._begin_decal_resize(event.pos()):
+                self.update()
+                return
+
             # --- Group bounding-box handles (multi-selection) take priority ---
             g_handle = self._group_handle_at(event.pos())
             if g_handle != -1:
@@ -3459,11 +3701,8 @@ class View2D(QWidget):
                     group = self.editor.state.selected_objects
                     if clicked_object not in group:
                         group = [clicked_object]
-                    self.drag_group = [
-                        o for o in group
-                        if not (o.get('lock', False) if isinstance(o, dict)
-                                else o.properties.get('lock', False))
-                    ]
+                    # Brushes grouped with a dragged one are attached to it.
+                    self.drag_group = self.editor.movable_with_mates(group)
                     self.drag_primary = clicked_object
 
                     self.is_dragging_object = True
@@ -3488,7 +3727,7 @@ class View2D(QWidget):
 
     def mouseMoveEvent(self, event):
         world_pos = self.screen_to_world(event.pos())
-        middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
+        middle_click_pan_enabled = self._middle_click_pan_enabled()
 
         # Component drag in progress: it owns the mouse until the button is up.
         if self._components().drag is not None:
@@ -3496,6 +3735,13 @@ class View2D(QWidget):
                 self.update_component_drag(world_pos)
                 return
             self.end_component_drag()   # button released elsewhere
+
+        # A decal's edge being dragged owns the mouse until the button is up.
+        if self._decal_resize is not None:
+            if event.buttons() & Qt.LeftButton:
+                self._update_decal_resize(world_pos)
+                return
+            self._end_decal_resize()
 
         # Clone-and-place: the copies ride the cursor until a click drops them.
         if self.main_window.clone_placement_active():
@@ -3512,7 +3758,10 @@ class View2D(QWidget):
 
         # Clip tool: track the cursor so the preview line and kept side follow it.
         if self._clip_active():
-            self.clip_hover = world_pos
+            # The preview point snaps as the clicked points do (to the grid
+            # [ and ] set), so the line drawn is the cut that will be made.
+            self._clip_hover_raw = QPointF(world_pos)
+            self.clip_hover = self.snap_to_grid(world_pos)
             self._update_clip_keep_side()
             if self.clip_points:
                 self.update()
@@ -3636,6 +3885,10 @@ class View2D(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._decal_resize is not None:
+            self._end_decal_resize()
+            self.update()
+            return
         action_taken = self.is_dragging_object or self.is_resizing_brush
 
         # A component drag commits on button-up — one drag, one undo step.
@@ -3780,30 +4033,7 @@ class View2D(QWidget):
         click_pos = event.pos()
         
         menu = QMenu(self)
-        
-        # --- Styling ---
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2c2c2c;
-                color: #ffffff;
-                border: 1px solid #3d3d3d;
-                border-top: 3px solid #FF8C00; /* Orange Strip */
-                padding-bottom: 2px;
-            }
-            QMenu::item {
-                padding: 6px 28px 6px 12px;
-                background-color: transparent;
-            }
-            QMenu::item:selected {
-                background-color: #3e3e3e;
-            }
-            /* REVISED: Large margin creates the "Gap" you wanted */
-            QMenu::separator {
-                height: 1px;
-                background: #555;
-                margin: 12px 0px; 
-            }
-        """)
+        menu.setStyleSheet(CONTEXT_MENU_STYLE)
 
         # Check if we clicked on a brush for brush-specific options using click_pos
         clicked_brush = self.get_brush_at(click_pos)
@@ -3823,6 +4053,8 @@ class View2D(QWidget):
         add_logic_spawner_action = menu.addAction("Spawner")
         add_levelchanger_action = menu.addAction("LevelChanger")
         add_probe_action = menu.addAction("Reflection Probe")
+        add_shake_action = menu.addAction("Shaker")
+        add_shake_action.setToolTip("Shakes the screen when its Shake input fires")
         
         menu.addSeparator()
         
@@ -3926,6 +4158,8 @@ class View2D(QWidget):
             new_thing = Speaker(pos=pos_3d)
         elif action == add_probe_action:
             new_thing = ReflectionProbe(pos=pos_3d)
+        elif action == add_shake_action:
+            new_thing = Shake(pos=pos_3d)
         elif action == add_levelchanger_action:
             new_thing = LevelChanger(pos=pos_3d)
             new_thing.properties['target_map'] = ""

@@ -27,7 +27,9 @@ changes is that comparison and arithmetic *understand* those strings, so a map
 authored against the old store behaves the same or better, never worse.
 """
 
+import math
 import re
+import sys
 
 #: Every state type. ``uuid`` is stored as its canonical string.
 STATE_TYPES = ("string", "int", "float", "bool", "null", "uuid")
@@ -45,6 +47,20 @@ _UUID_RE = re.compile(
 
 _INT_RE = re.compile(r"\A[+-]?\d+\Z")
 _FLOAT_RE = re.compile(r"\A[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?\Z")
+
+#: The integers a store holds: the signed 64-bit range.  Python's integers are
+#: unbounded, and an unbounded counter is a way to make a map unsaveable --
+#: past 4300 digits ``json.dumps`` (and ``str``) refuse the number outright,
+#: and long before that no other reader of the file can hold it.  An operation
+#: whose result would leave this range is refused (see :func:`storable`).
+INT_MIN = -(2 ** 63)
+INT_MAX = 2 ** 63 - 1
+
+#: Longest integer literal worth handing to ``int``: 19 digits reach
+#: :data:`INT_MAX`, and the slack is for a sign and leading zeros that a
+#: zero-padded number may carry.  Anything longer is out of range (or is not
+#: read as a number at all) without being converted first.
+_INT_LITERAL_DIGITS = 64
 
 _TRUE_WORDS = frozenset(("true", "yes", "on"))
 _FALSE_WORDS = frozenset(("false", "no", "off"))
@@ -72,6 +88,78 @@ def type_of(value) -> str:
     if isinstance(value, str) and _UUID_RE.match(value):
         return "uuid"
     return "string"
+
+
+def storable(value) -> bool:
+    """Whether *value* is something a store may hold.
+
+    Two kinds of number are not: a float that is not finite (``inf``, ``nan``),
+    and an integer outside :data:`INT_MIN`..:data:`INT_MAX`.  Neither survives
+    being saved -- ``NaN`` and ``Infinity`` are not JSON, and an integer of a
+    few thousand digits cannot be written at all -- and ``nan`` has a second
+    vice: it is not equal to itself, so a store holding one reports a change
+    on every write for ever.  Everything else (strings, bools, ``None``,
+    in-range numbers) is storable.
+    """
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, int):
+        return INT_MIN <= value <= INT_MAX
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return True
+
+
+def _literal(text):
+    """The number a numeric literal denotes, or ``None`` if *text* is not one.
+
+    Never raises and never builds a huge integer: an integer literal too long
+    to be in range is reported as a float (``inf`` if need be), which
+    :func:`storable` then refuses like any other out-of-range number.
+    """
+    token = text.strip()
+    if _INT_RE.match(token):
+        if len(token) <= _INT_LITERAL_DIGITS:
+            return int(token)
+        digits = token.lstrip("+-").lstrip("0")
+        if len(digits) <= 19:
+            return int(token)
+        return float("-inf") if token.startswith("-") else float("inf")
+    if _FLOAT_RE.match(token):
+        try:
+            return float(token)
+        except (ValueError, OverflowError):   # pragma: no cover
+            return None
+    return None
+
+
+def out_of_range(raw) -> bool:
+    """Whether *raw* denotes a number no store can hold.
+
+    True for a non-finite float, an over-range integer, and for text that is a
+    numeric literal with such a value (``"1e999"`` is infinity; fifty digits
+    is beyond 64 bits).  This is the question a write asks before it happens:
+    such a value is *refused*, through the same path as any other refused
+    write, rather than stored in a form that cannot be saved.
+    """
+    if isinstance(raw, str):
+        number = _literal(raw)
+        return number is not None and not storable(number)
+    return not storable(raw)
+
+
+def _saturated(value):
+    """*value* pulled back into the storable range (``nan`` becomes ``0``)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return max(INT_MIN, min(INT_MAX, value))
+    if isinstance(value, float):
+        if value != value:
+            return 0
+        if value in (float("inf"), float("-inf")):
+            return math.copysign(sys.float_info.max, value)
+    return value
 
 
 def is_uuid(value) -> bool:
@@ -107,9 +195,21 @@ def parse(raw):
     A string of digits therefore becomes a number.  When that is not wanted —
     a door code of ``007``, a version of ``1.10`` — name the type explicitly
     (``coerce(raw, "string")``, or the ``key:string=007`` I/O form).
+
+    The result is always :func:`storable`.  A literal whose value is not --
+    ``1e999`` (infinity), an integer beyond 64 bits -- is not a number Fio can
+    hold, so it stays the text it was written as; an already-typed number that
+    is not storable comes back as text too (``inf``, ``nan``) or, for an
+    over-range integer, as the nearest integer in range.  Callers that want
+    such a write *refused* rather than reinterpreted ask :func:`out_of_range`
+    first, which is what the I/O handlers do.
     """
     if not isinstance(raw, str):
-        return raw
+        if storable(raw):
+            return raw
+        if isinstance(raw, float):
+            return format_value(raw)
+        return _saturated(raw)
     token = raw.strip()
     if not token:
         return raw
@@ -120,13 +220,9 @@ def parse(raw):
         return False
     if lowered in _NULL_WORDS:
         return None
-    if _INT_RE.match(token):
-        return int(token)
-    if _FLOAT_RE.match(token):
-        try:
-            return float(token)
-        except ValueError:      # pragma: no cover - the regex already decided
-            return raw
+    number = _literal(token)
+    if number is not None and storable(number):
+        return number
     return raw
 
 
@@ -138,8 +234,9 @@ def coerce(raw, type_name):
     carrying a type Fio no longer has still loads with sensible values.
 
     Returns a ``(value, ok)`` pair: ``ok`` is False when the text does not
-    denote a value of that type at all, which the caller reports rather than
-    guessing at.
+    denote a value of that type at all -- or denotes a number no store can
+    hold (see :func:`storable`) -- which the caller reports rather than
+    guessing at.  Never raises.
     """
     name = str(type_name or "").strip().lower()
     if name not in STATE_TYPES:
@@ -166,15 +263,27 @@ def coerce(raw, type_name):
             if isinstance(text, bool):
                 return int(text), True
             if isinstance(text, float):
-                return int(text), True
-            return int(str(text).strip()), True
-        except (TypeError, ValueError):
+                value = int(text)
+            elif isinstance(text, int):
+                value = text
+            else:
+                token = str(text).strip()
+                if len(token) > _INT_LITERAL_DIGITS:
+                    return None, False
+                value = int(token)
+        except (TypeError, ValueError, OverflowError):
             return None, False
+        if not storable(value):
+            return None, False
+        return value, True
     if name == "float":
         try:
-            return float(text), True
-        except (TypeError, ValueError):
+            value = float(text)
+        except (TypeError, ValueError, OverflowError):
             return None, False
+        if not storable(value):
+            return None, False
+        return value, True
     # uuid
     if is_uuid(text):
         return str(text), True
@@ -195,7 +304,9 @@ def format_value(value) -> str:
     if isinstance(value, float):
         return repr(value)
     if isinstance(value, int):
-        return str(value)
+        # str() of an integer past a few thousand digits raises; nothing in a
+        # store is ever that large, and nothing else should stop a format.
+        return str(value if storable(value) else _saturated(value))
     if isinstance(value, str):
         return value
     return str(value)
@@ -249,14 +360,9 @@ def to_number(value, default=0):
     if isinstance(value, (int, float)):
         return value
     if isinstance(value, str):
-        token = value.strip()
-        if _INT_RE.match(token):
-            return int(token)
-        if _FLOAT_RE.match(token):
-            try:
-                return float(token)
-            except ValueError:      # pragma: no cover
-                return default
+        number = _literal(value)
+        if number is not None:
+            return number
     return default
 
 
@@ -324,30 +430,43 @@ def arithmetic(current, operation, operand):
     """Apply one arithmetic *operation* to *current*, returning ``(value, ok)``.
 
     ``ok`` is False only when the operation cannot be defined — division by
-    zero, an unknown operation — in which case the caller leaves the stored
-    value untouched and fires nothing.  Integer inputs give integer results for
-    everything except ``divide``, which is always a float so that ``7 / 2`` is
-    ``3.5`` and not silently ``3``.
+    zero, an unknown operation, or a result (or operand) that is not a number
+    a store can hold: infinity, ``nan``, an integer beyond 64 bits (see
+    :func:`storable`) — in which case the caller leaves the stored value
+    untouched and reports the write as refused.  So a counter multiplied in a
+    loop stops at the edge of the range instead of growing until the map can
+    no longer be saved.  Integer inputs give integer results for everything
+    except ``divide``, which is always a float so that ``7 / 2`` is ``3.5``
+    and not silently ``3``.  Never raises.
     """
     op = str(operation).strip().lower()
     a = to_number(current, 0)
     b = to_number(operand, 0)
+    if not storable(a) or not storable(b):
+        return current, False
 
-    if op == "add":
-        return a + b, True
-    if op == "subtract":
-        return a - b, True
-    if op == "multiply":
-        return a * b, True
-    if op == "divide":
-        if b == 0:
+    try:
+        if op == "add":
+            result = a + b
+        elif op == "subtract":
+            result = a - b
+        elif op == "multiply":
+            result = a * b
+        elif op == "divide":
+            if b == 0:
+                return current, False
+            result = float(a) / float(b)
+        elif op == "min":
+            result = min(a, b)
+        elif op == "max":
+            result = max(a, b)
+        else:
             return current, False
-        return float(a) / float(b), True
-    if op == "min":
-        return min(a, b), True
-    if op == "max":
-        return max(a, b), True
-    return current, False
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return current, False
+    if not storable(result):
+        return current, False
+    return result, True
 
 
 def clamp(current, low, high):
@@ -355,11 +474,14 @@ def clamp(current, low, high):
 
     A reversed range is not an error: the bounds are swapped, because a
     designer who types the limits the wrong way round means the interval
-    between them either way.
+    between them either way.  A bound that is not a storable number
+    (``1e999``) is read as the furthest storable number in its direction, so
+    "no upper limit" written that way means what it says and the result is
+    always storable.
     """
-    value = to_number(current, 0)
-    lo = to_number(low, 0)
-    hi = to_number(high, 0)
+    value = _saturated(to_number(current, 0))
+    lo = _saturated(to_number(low, 0))
+    hi = _saturated(to_number(high, 0))
     if lo > hi:
         lo, hi = hi, lo
     if value < lo:
@@ -412,10 +534,25 @@ def save_store(data: dict) -> dict:
     for key in sorted(data, key=str):
         value = data[key]
         if value is None or isinstance(value, _JSON_TYPES):
-            out[str(key)] = value
+            out[str(key)] = _json_safe(value)
         else:
             out[str(key)] = format_value(value)
     return out
+
+
+def _json_safe(value):
+    """*value* in a form strict JSON can carry: see :func:`storable`.
+
+    The write paths refuse an unstorable number, so this only ever changes
+    data that reached a store some other way (a hand-edited file, a plugin
+    writing the dict directly): a non-finite float becomes its text
+    (``"inf"``, ``"nan"``) and an over-range integer the nearest one in range.
+    """
+    if storable(value):
+        return value
+    if isinstance(value, float):
+        return format_value(value)
+    return _saturated(value)
 
 
 def load_store(data) -> dict:
@@ -433,7 +570,9 @@ def load_store(data) -> dict:
     out = {}
     for key, value in data.items():
         if value is None or isinstance(value, _JSON_TYPES):
-            out[str(key)] = value
+            # Unchanged for everything a store can hold; only a number that
+            # could never be saved again is replaced.
+            out[str(key)] = _json_safe(value)
         else:
             out[str(key)] = format_value(value)
     return out
