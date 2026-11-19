@@ -1675,7 +1675,23 @@ class MainWindow(QMainWindow):
         self.update_all_ui()
 
 
-    def add_model_to_scene(self, filepath, rotation, scale):
+    def placement_position(self):
+        """Where a newly added object goes: on the floor just ahead of the
+        editor camera, short of any wall in the way (editor/placement.py)."""
+        from editor.placement import placement_ahead
+        camera = self.view_3d.camera
+        grid = self.view_3d.grid_size if self.snap_to_grid_enabled() else 0
+        return placement_ahead(camera.pos, camera.yaw, self.state.brushes,
+                               terrain=self.terrain, grid=grid)
+
+    def add_model_to_scene(self, filepath, rotation, scale, pos=None):
+        """Add *filepath* as a model Prop at *pos* -- by default where the user
+        is, ahead of the editor camera, not the world origin."""
+        if pos is None:
+            try:
+                pos = self.placement_position()
+            except Exception:
+                pos = [0.0, 0.0, 0.0]
         self.save_state()
         
         # Optional: Try to make path relative to project root for portability
@@ -1691,7 +1707,7 @@ class MainWindow(QMainWindow):
 
         # Every model is a Prop, with a Prop's defaults: not solid and not
         # carryable until the author turns either on.
-        new_model = Prop.for_model(filepath, pos=[0, 0, 0],
+        new_model = Prop.for_model(filepath, pos=list(pos),
                                    properties={'rotation': rotation})
 
         # Downloaded OBJs are commonly authored in real-world units and can be
