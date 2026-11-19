@@ -1,5 +1,6 @@
 from engine.asset_qt import load_icon
 import copy
+import re
 import json
 from types import SimpleNamespace
 import os
@@ -315,6 +316,61 @@ class _Style:
                 f"QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 8px; "
                 f"padding: 0 4px; background-color: {title_bg}; }}")
 
+    # -- one shared style sheet --------------------------------------------
+    #
+    # A style sheet of its own on a control makes Qt build and match a
+    # separate sheet for it as it is polished: about a quarter of building a
+    # page. The panel's recurring looks are instead rules in ONE sheet, set
+    # once on the PropertyEditor, each scoped to a dynamic property
+    # (``fio="key"``) that :meth:`apply` sets on the control. Rules for the
+    # control itself match it alone; rules for other kinds of widget (a tab
+    # widget's tab bar) match its descendants, as its own sheet did.
+
+    #: ``sheet text -> (key, Qt class name)`` for every shared look.
+    _shared = {}
+
+    @classmethod
+    def register(cls, key, class_name, sheet):
+        cls._shared[sheet] = (key, class_name)
+
+    @classmethod
+    def apply(cls, widget, sheet):
+        """Give *widget* the look *sheet*: through the shared sheet when it is
+        registered for this kind of widget, otherwise its own style sheet."""
+        entry = cls._shared.get(sheet)
+        if entry is not None and widget.inherits(entry[1]):
+            widget.setProperty('fio', entry[0])
+            if widget.testAttribute(Qt.WA_WState_Polished):
+                # Already styled (a scroll area's own scroll bar): a property
+                # set now is read only when the widget is polished again.
+                style = widget.style()
+                style.unpolish(widget)
+                style.polish(widget)
+            return
+        widget.setStyleSheet(sheet)
+
+    @classmethod
+    def panel_sheet(cls):
+        """The shared sheet: every registered look, scoped to its key."""
+        rules = []
+        for sheet, (key, class_name) in cls._shared.items():
+            scope = f'{class_name}[fio="{key}"]'
+            body = sheet.strip()
+            if '{' not in body:                 # bare declarations: the widget itself
+                rules.append(f'{scope} {{ {body} }}')
+                continue
+            for selectors, declarations in re.findall(r'([^{}]+)\{([^{}]*)\}', body):
+                scoped = []
+                for selector in selectors.split(','):
+                    selector = selector.strip()
+                    head = re.match(r'[A-Za-z_][A-Za-z0-9_]*', selector)
+                    if head and head.group(0) == class_name:
+                        scoped.append(scope + selector[head.end():])
+                    else:
+                        scoped.append(f'{scope} {selector}')
+                rules.append(f'{", ".join(scoped)} {{{declarations}}}')
+        return '\n'.join(rules)
+
 
 # ────────────────────────────
 # Widget factories
@@ -355,7 +411,7 @@ def _make_checkbox(label: str, checked: bool, callback, style=None) -> QCheckBox
     cb = QCheckBox(label)
     cb.setChecked(checked)
     if style:
-        cb.setStyleSheet(style)
+        _Style.apply(cb, style)
     if callback is not None:
         cb.toggled.connect(callback)
     return cb
@@ -498,7 +554,7 @@ class CollapsibleSection(QWidget):
         self.toggle.setText(label)
         self.toggle.setCheckable(True)
         self.toggle.setChecked(expanded)
-        self.toggle.setStyleSheet(self.HEADER)
+        _Style.apply(self.toggle, self.HEADER)
         self.toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self.toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -522,9 +578,35 @@ class CollapsibleSection(QWidget):
         self.content_layout.addWidget(w)
 
 
+
+# The panel's recurring looks, shared through one sheet (_Style.apply).
+for _key, _cls, _sheet in (
+        ('check', 'QCheckBox', _Style.CHECKBOX),
+        ('name_lbl', 'QLabel', _Style.NAME_LBL),
+        ('name_inp', 'QLineEdit', _Style.NAME_INP),
+        ('id_btn', 'QPushButton', _Style.ID_BTN),
+        ('id_field', 'QLineEdit', _Style.ID_FIELD),
+        ('targeted', 'QLabel', _Style.TARGETED),
+        ('section', 'QLabel', _Style.SECTION),
+        ('tabs', 'QTabWidget', _Style.TAB_BAR),
+        ('scroll', 'QScrollBar', _Style.SCROLL_V),
+        ('header', 'QToolButton', CollapsibleSection.HEADER)):
+    _Style.register(_key, _cls, _sheet)
+for _colour, _title in (
+        ('#00BFFF', '#2b3d3b'), ('#00CED1', '#2b3d3b'), ('#26A69A', '#1a2f2d'),
+        ('#42A5F5', '#1a2a3d'), ('#48D1CC', '#2b3d3b'), ('#87CEEB', '#2b3d3b'),
+        ('#98FB98', '#2b3d3b'), ('#AB47BC', '#2a1a3d'), ('#B0C4DE', '#2b3d3b'),
+        ('#F08000', '#2b3d3b'), ('#FFD700', '#2b3d3b')):
+    _Style.register('group_%s_%s' % (_colour[1:], _title[1:]), 'QGroupBox',
+                    _Style.group_box(_colour, _title))
+del _key, _cls, _sheet, _colour, _title
+
 class PropertyEditor(QWidget):
     def __init__(self, editor):
         super().__init__()
+        # The panel's recurring control looks, once (_Style.apply), rather
+        # than a style sheet on each control of every page built.
+        self.setStyleSheet(_Style.panel_sheet())
         self.editor = editor
         self.current_object = None
         self._populating = False
@@ -1044,7 +1126,7 @@ class PropertyEditor(QWidget):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
+        _Style.apply(scroll.verticalScrollBar(), _Style.SCROLL_V)
 
         content = QWidget(scroll)
         layout = QVBoxLayout(content)
@@ -1055,14 +1137,14 @@ class PropertyEditor(QWidget):
         form = QFormLayout()
         form.setSpacing(4)
         name_lbl = QLabel("Name:")
-        name_lbl.setStyleSheet(_Style.NAME_LBL)
+        _Style.apply(name_lbl, _Style.NAME_LBL)
         name_inp = QLineEdit(brush.get('name', ''))
-        name_inp.setStyleSheet(_Style.NAME_INP)
+        _Style.apply(name_inp, _Style.NAME_INP)
         name_inp.setPlaceholderText("Enter name...")
         name_inp.editingFinished.connect(lambda: self.update_object_prop('name', name_inp.text()))
 
         id_btn = QPushButton("ID")
-        id_btn.setStyleSheet(_Style.ID_BTN)
+        _Style.apply(id_btn, _Style.ID_BTN)
         id_btn.setFixedWidth(32)
         id_btn.setToolTip("Show/hide UUID")
 
@@ -1075,7 +1157,7 @@ class PropertyEditor(QWidget):
         self._widgets['name_input'] = name_inp
 
         uuid_field = QLineEdit(brush.get('id', ''))
-        uuid_field.setStyleSheet(_Style.ID_FIELD)
+        _Style.apply(uuid_field, _Style.ID_FIELD)
         uuid_field.setReadOnly(True)
         uuid_field.setVisible(False)
         form.addRow("", uuid_field)
@@ -1089,7 +1171,7 @@ class PropertyEditor(QWidget):
             if sources:
                 txt = ", ".join(f"{n} ({t})" for n, t in sources)
                 lbl = QLabel(txt)
-                lbl.setStyleSheet(_Style.TARGETED)
+                _Style.apply(lbl, _Style.TARGETED)
                 lbl.setWordWrap(True)
                 form.addRow("Targeted by:", lbl)
 
@@ -1097,7 +1179,7 @@ class PropertyEditor(QWidget):
 
         # Tabs
         self.tab_widget = QTabWidget(content)
-        self.tab_widget.setStyleSheet(_Style.TAB_BAR)
+        _Style.apply(self.tab_widget, _Style.TAB_BAR)
 
         is_trigger = brush.get('is_trigger', False)
         is_mover = brush.get('is_mover', False)
@@ -1354,7 +1436,7 @@ class PropertyEditor(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
 
         type_group = QGroupBox("Brush Type")
-        type_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(type_group, _Style.group_box("#F08000"))
         type_layout = QVBoxLayout(type_group)
 
         # Shader + Lock row
@@ -1396,7 +1478,7 @@ class PropertyEditor(QWidget):
 
     def _section(self, text):
         lbl = QLabel(text)
-        lbl.setStyleSheet(_Style.SECTION)
+        _Style.apply(lbl, _Style.SECTION)
         return lbl
 
     def _create_trigger_tab(self, brush):
@@ -1501,7 +1583,7 @@ class PropertyEditor(QWidget):
         # Detection filters are independent of the trigger action. Any selected
         # category can activate the trigger when its object enters the volume.
         filter_group = QGroupBox("Detection Filters")
-        filter_group.setStyleSheet(_Style.group_box("#42A5F5", "#1a2a3d"))
+        _Style.apply(filter_group, _Style.group_box("#42A5F5", "#1a2a3d"))
         filter_layout = QVBoxLayout(filter_group)
         filter_layout.setSpacing(4)
         filter_layout.setContentsMargins(8, 8, 8, 8)
@@ -1697,7 +1779,7 @@ class PropertyEditor(QWidget):
 
         # PathNode waypoint
         path_group = QGroupBox("PathNode Waypoint")
-        path_group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
+        _Style.apply(path_group, _Style.group_box("#26A69A", "#1a2f2d"))
         path_form = QFormLayout(path_group)
         path_target = self._pathnode_combo(brush.get('path_target', ''))
         path_target.currentTextChanged.connect(
@@ -1708,7 +1790,7 @@ class PropertyEditor(QWidget):
 
         # Options
         opt_group = QGroupBox("Options")
-        opt_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(opt_group, _Style.group_box("#F08000"))
         opt_layout = QVBoxLayout(opt_group)
 
         start_cb = _make_checkbox("Start moving immediately", brush.get('start_on', False),
@@ -1783,7 +1865,7 @@ class PropertyEditor(QWidget):
         layout.addLayout(form)
 
         opt_group = QGroupBox("Door Options")
-        opt_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(opt_group, _Style.group_box("#F08000"))
         opt_layout = QVBoxLayout(opt_group)
 
         for key, label in (('door_auto_open', "Auto-open when player is near"),
@@ -1851,7 +1933,7 @@ class PropertyEditor(QWidget):
 
     def _create_glass_properties(self, brush):
         group = QGroupBox("Glass Properties")
-        group.setStyleSheet(_Style.group_box("#00BFFF"))
+        _Style.apply(group, _Style.group_box("#00BFFF"))
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
         form = QFormLayout()
@@ -1870,7 +1952,7 @@ class PropertyEditor(QWidget):
 
         # Distortion
         dist_group = QGroupBox("Distortion Effects")
-        dist_group.setStyleSheet(_Style.group_box("#87CEEB", "#2b3d3b"))
+        _Style.apply(dist_group, _Style.group_box("#87CEEB", "#2b3d3b"))
         dist_form = QFormLayout(dist_group)
         for key, label_txt, default, tip in (
             ('glass_distortion', "Warp Strength:", 0.5, "How much the view through glass is warped"),
@@ -1906,7 +1988,7 @@ class PropertyEditor(QWidget):
 
         # Fresnel
         fres_group = QGroupBox("Fresnel Effect")
-        fres_group.setStyleSheet(_Style.group_box("#98FB98", "#2b3d3b"))
+        _Style.apply(fres_group, _Style.group_box("#98FB98", "#2b3d3b"))
         fres_form = QFormLayout(fres_group)
         slider, label = _make_slider(self, brush.get('glass_fresnel', 0.5), 0, 100,
                                      callback=lambda v: self.update_object_prop('glass_fresnel', v),
@@ -1919,7 +2001,7 @@ class PropertyEditor(QWidget):
 
     def _create_glow_properties(self, brush):
         group = QGroupBox("Glow Properties")
-        group.setStyleSheet(_Style.group_box("#FFD700"))
+        _Style.apply(group, _Style.group_box("#FFD700"))
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
         form = QFormLayout()
@@ -1996,7 +2078,7 @@ class PropertyEditor(QWidget):
 
     def _create_water_properties(self, brush):
         group = QGroupBox("Water Properties")
-        group.setStyleSheet(_Style.group_box("#00CED1"))
+        _Style.apply(group, _Style.group_box("#00CED1"))
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
 
@@ -2047,7 +2129,7 @@ class PropertyEditor(QWidget):
         layout.addLayout(form)
 
         dist_group = QGroupBox("Distortion Effects")
-        dist_group.setStyleSheet(_Style.group_box("#87CEEB", "#2b3d3b"))
+        _Style.apply(dist_group, _Style.group_box("#87CEEB", "#2b3d3b"))
         dist_form = QFormLayout(dist_group)
         dist_form.setSpacing(6)
         for key, label_txt, default, tip in (
@@ -2084,7 +2166,7 @@ class PropertyEditor(QWidget):
         layout.addWidget(dist_group)
 
         wave_group = QGroupBox("Surface")
-        wave_group.setStyleSheet(_Style.group_box("#48D1CC", "#2b3d3b"))
+        _Style.apply(wave_group, _Style.group_box("#48D1CC", "#2b3d3b"))
         wave_layout = QFormLayout(wave_group)
         wave_layout.setSpacing(6)
 
@@ -2201,7 +2283,7 @@ class PropertyEditor(QWidget):
 
     def _create_fog_properties(self, brush):
         group = QGroupBox("Fog Properties")
-        group.setStyleSheet(_Style.group_box("#B0C4DE"))
+        _Style.apply(group, _Style.group_box("#B0C4DE"))
         layout = QFormLayout(group)
         layout.setSpacing(8)
 
@@ -2245,7 +2327,7 @@ class PropertyEditor(QWidget):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
+        _Style.apply(scroll.verticalScrollBar(), _Style.SCROLL_V)
 
         content = QWidget(scroll)
         layout = QVBoxLayout(content)
@@ -2256,14 +2338,14 @@ class PropertyEditor(QWidget):
         name_layout = QFormLayout()
         name_layout.setSpacing(4)
         name_lbl = QLabel("Name:")
-        name_lbl.setStyleSheet(_Style.NAME_LBL)
+        _Style.apply(name_lbl, _Style.NAME_LBL)
         name_inp = QLineEdit(str(thing.properties.get('name', '')))
-        name_inp.setStyleSheet(_Style.NAME_INP)
+        _Style.apply(name_inp, _Style.NAME_INP)
         name_inp.setPlaceholderText("Enter name...")
         name_inp.editingFinished.connect(lambda: self.update_object_prop('name', name_inp.text()))
 
         id_btn = QPushButton("ID")
-        id_btn.setStyleSheet(_Style.ID_BTN)
+        _Style.apply(id_btn, _Style.ID_BTN)
         id_btn.setFixedWidth(32)
         id_btn.setToolTip("Show/hide UUID")
 
@@ -2275,7 +2357,7 @@ class PropertyEditor(QWidget):
         name_layout.addRow(name_lbl, name_row)
 
         uuid_field = QLineEdit(thing.properties.get('id', ''))
-        uuid_field.setStyleSheet(_Style.ID_FIELD)
+        _Style.apply(uuid_field, _Style.ID_FIELD)
         uuid_field.setReadOnly(True)
         uuid_field.setVisible(False)
         name_layout.addRow("", uuid_field)
@@ -2289,14 +2371,14 @@ class PropertyEditor(QWidget):
         if sources:
             txt = ", ".join(f"{n} ({t})" for n, t in sources)
             lbl = QLabel(txt)
-            lbl.setStyleSheet(_Style.TARGETED)
+            _Style.apply(lbl, _Style.TARGETED)
             lbl.setWordWrap(True)
             name_layout.addRow("Targeted by:", lbl)
 
         layout.addLayout(name_layout)
 
         self.tab_widget = QTabWidget(content)
-        self.tab_widget.setStyleSheet(_Style.TAB_BAR)
+        _Style.apply(self.tab_widget, _Style.TAB_BAR)
         self.tab_widget.setUsesScrollButtons(True)
 
         props_tab = self._create_thing_properties_tab(thing)
@@ -4867,7 +4949,7 @@ class PropertyEditor(QWidget):
             thing.properties.setdefault(k, v)
 
         group = QGroupBox("Path Node")
-        group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
+        _Style.apply(group, _Style.group_box("#26A69A", "#1a2f2d"))
         form = QFormLayout(group)
         form.setSpacing(6)
         form.setContentsMargins(8, 8, 8, 8)
@@ -4948,7 +5030,7 @@ class PropertyEditor(QWidget):
 
     def _build_logic_camera_group(self, tab_layout, thing):
         group = QGroupBox("Cinematic Camera")
-        group.setStyleSheet(_Style.group_box("#42A5F5", "#1a2a3d"))
+        _Style.apply(group, _Style.group_box("#42A5F5", "#1a2a3d"))
         form = QFormLayout(group)
         form.setSpacing(6)
         form.setContentsMargins(8, 8, 8, 8)
@@ -5053,7 +5135,7 @@ class PropertyEditor(QWidget):
         from engine.shake import SHAKE_DURATION_RANGE, shake_settings
         intensity, duration = shake_settings(thing.properties)
         group = QGroupBox("Shake")
-        group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(group, _Style.group_box("#F08000"))
         form = QFormLayout(group)
         form.setSpacing(6)
         form.setContentsMargins(8, 8, 8, 8)
@@ -5105,7 +5187,7 @@ class PropertyEditor(QWidget):
     def _build_spawner_group(self, tab_layout, thing):
         from editor.things import ENTITY_TYPES
         group = QGroupBox("Spawner")
-        group.setStyleSheet(_Style.group_box("#AB47BC", "#2a1a3d"))
+        _Style.apply(group, _Style.group_box("#AB47BC", "#2a1a3d"))
         form = QFormLayout(group)
         form.setSpacing(6)
         form.setContentsMargins(8, 8, 8, 8)
@@ -5186,7 +5268,7 @@ class PropertyEditor(QWidget):
 
         # Monster spawn settings (conditional)
         monster_group = QGroupBox("Monster Spawn Settings")
-        monster_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(monster_group, _Style.group_box("#F08000"))
         mform = QFormLayout(monster_group)
         mform.setSpacing(6)
         mform.setContentsMargins(8, 8, 8, 8)
@@ -5337,7 +5419,7 @@ class PropertyEditor(QWidget):
         # Type / Value / State columns say what it is. Two more labels saying
         # the same thing cost a row of height each and add nothing.
         group = QGroupBox()
-        group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
+        _Style.apply(group, _Style.group_box("#26A69A", "#1a2f2d"))
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -5584,7 +5666,7 @@ class PropertyEditor(QWidget):
 
         # AI group
         ai_group = QGroupBox("AI")
-        ai_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(ai_group, _Style.group_box("#F08000"))
         aform = QFormLayout(ai_group)
         aform.setSpacing(6)
         aform.setContentsMargins(8, 8, 8, 8)
@@ -5762,7 +5844,7 @@ class PropertyEditor(QWidget):
 
         # Flags
         flags_group = QGroupBox("Behaviour Flags")
-        flags_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(flags_group, _Style.group_box("#F08000"))
         flay = QVBoxLayout(flags_group)
         flay.setSpacing(6)
         for prop_key, label_text, tooltip in (
