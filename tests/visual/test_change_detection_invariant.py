@@ -79,3 +79,43 @@ def test_a_still_frame_examines_no_rows_whatever_the_world_size(context):
     large, _, _ = _frames(context, 1600)
     assert small == [0, 0, 0, 0]
     assert large == [0, 0, 0, 0]
+
+
+@pytest.mark.parametrize("mode", ["Solid", "Textured"])
+def test_a_still_play_frame_examines_no_rows(context, mode):
+    """Play adds the distance cull, which kept one result per view: the two
+    render buffers' tables took turns, so every still frame in Play handed
+    the passes a new array and they compared every row (132 rows a frame on
+    _SHOWCASE). Kept per view and table now."""
+    from engine import change_detection
+    from engine.logic_render import LogicRender
+    from engine.render_table import RenderTable
+    brushes = _world(400)
+    tables = [RenderTable(), RenderTable()]
+    culler = LogicRender.__new__(LogicRender)
+    renderer = glh.make_renderer()
+    renderer.shadows_enabled = False
+    eye = glm.vec3(-200.0, 300.0, -200.0)
+    projection = glm.perspective(glm.radians(70.0), 1.0, 1.0, 20000.0)
+    view = glm.lookAt(eye, glm.vec3(300.0, 0.0, 300.0), glm.vec3(0.0, 1.0, 0.0))
+    planes = culler.extract_frustum_planes(projection * view)
+    examined = []
+    try:
+        for frame in range(8):
+            table = tables[frame % 2]
+            change_detection.DETECT.reset()
+            table.begin_frame(brushes, 1)
+            keep, shown = table.shown()
+            visible = culler.cull_brushes(table, planes, keep)
+            config = glh.render_config(all_brushes=list(brushes), render_table=table,
+                                       all_brush_slots=shown, shadows_enabled=False,
+                                       brush_display_mode=mode, play_mode=True,
+                                       camera_distance_cull=True)
+            context.bind()
+            renderer.render_scene(projection, view, eye, None, config,
+                                  brush_slots=visible)
+            if frame >= 4:
+                examined.append(change_detection.DETECT.rows)
+    finally:
+        renderer.cleanup()
+    assert examined == [0, 0, 0, 0]

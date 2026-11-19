@@ -7,6 +7,7 @@ composited is technique-specific and lives with each renderer.
 """
 
 import math
+import weakref
 from dataclasses import dataclass
 
 import glm
@@ -538,6 +539,43 @@ class VisibilityMixin:
         new_fwd=glm.normalize(glm.vec3(*nf)); new_up=glm.normalize(glm.vec3(*nu))
         return glm.lookAt(virtual_cam,virtual_cam+new_fwd,new_up),virtual_cam
 
+    def _kept_portal_cull(self, table, all_slots, planes):
+        """The world rows a portal camera's frustum (*planes*) keeps, as a
+        read-only array kept per portal view and table: the same array while
+        the published rows, the camera and the table's transforms stand, and
+        the last array again when a recomputed result is equal to it."""
+        kept = self.__dict__.setdefault('_portal_culls', {})
+        key = (getattr(self, '_instance_view', None), id(table))
+        inputs = (planes.tobytes(), table.generation, table.transform_version,
+                  getattr(table, 'extent_version', 0))
+        held = kept.get(key)
+        if held is not None and held[1]() is not table:
+            held = None
+        if (held is not None and held[0] is all_slots and held[2] == inputs
+                and isinstance(all_slots, np.ndarray) and not all_slots.flags.writeable):
+            return held[3]
+        if all_slots is None:
+            slots = np.empty(0, dtype=np.int32)
+        else:
+            slots = np.asarray(all_slots, dtype=np.int32)
+        if len(slots):
+            centres = table.center[slots]
+            radii = np.linalg.norm(table.half[slots], axis=1)
+            distances = centres @ planes[:, :3].T + planes[:, 3]
+            slots = slots[np.all(distances >= -radii[:, None], axis=1)]
+        if held is not None and np.array_equal(held[3], slots):
+            slots = held[3]
+        else:
+            slots = np.array(slots, dtype=np.int32, copy=True)
+            slots.flags.writeable = False
+        if held is None:
+            for dead in [k for k, e in kept.items() if e[1]() is None]:
+                del kept[dead]
+            while len(kept) >= 32:
+                del kept[next(iter(kept))]
+        kept[key] = (all_slots, weakref.ref(table), inputs, slots)
+        return slots
+
     def _portal_numeric_scene_inputs(self, projection, view, config):
         """Resolve a portal virtual scene entirely from the dense projections.
 
@@ -554,23 +592,18 @@ class VisibilityMixin:
         if table is None:
             raise RuntimeError("Portal virtual view requires RenderTable")
 
-        slots = config.get('all_brush_slots')
-        if slots is None:
-            slots = np.empty(0, dtype=np.int32)
-        else:
-            slots = np.asarray(slots, dtype=np.int32)
-
         planes = np.asarray(
             self._frustum_planes(projection * view),
             dtype=np.float64,
         )
-        if len(slots):
-            centres = table.center[slots]
-            radii = np.linalg.norm(table.half[slots], axis=1)
-            distances = centres @ planes[:, :3].T + planes[:, 3]
-            slots = slots[np.all(distances >= -radii[:, None], axis=1)]
-
-        groups = self._classify_brush_slots(table, slots, config)
+        slots = self._kept_portal_cull(table, config.get('all_brush_slots'), planes)
+        # Classified as the main view's rows are: kept while the culled rows
+        # stand, so a still portal view hands its passes the same immutable
+        # arrays frame after frame (M4) instead of classifying afresh.
+        groups = dict(self._pass_memo(
+            ('classify', getattr(self, '_instance_view', None)), table, slots,
+            (bool(config.get('play_mode', False)),), (),
+            lambda: self._classify_brush_slots(table, slots, config)))
 
         etable = config.get('entity_table')
         thing_hidden = config.get('thing_hidden')

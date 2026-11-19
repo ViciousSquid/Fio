@@ -129,6 +129,14 @@ class TablesMixin:
                                             change_detection.now() - started)
             if same:
                 self.pass_memo_hits += 1
+                if (entry[3] is not slots and isinstance(slots, np.ndarray)
+                        and not slots.flags.writeable):
+                    # The same rows in another immutable array (the value
+                    # was shared from the other buffer's table, or the
+                    # visible set was rebuilt equal): keep that array, so the
+                    # next still frame knows it by identity instead of
+                    # comparing every row again, frame after frame.
+                    tables[tid] = entry[:3] + (slots,) + entry[4:]
                 return entry[4]
         self.pass_memo_misses += 1
         value = build()
