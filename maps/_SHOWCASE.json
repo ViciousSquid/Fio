@@ -5435,7 +5435,8 @@
                 "down": 0.0,
                 "north": 0.0,
                 "south": 0.0
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -5634,7 +5635,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -5666,7 +5670,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -5698,7 +5705,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -5730,7 +5740,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -5762,7 +5775,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -5794,7 +5810,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -5826,7 +5845,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -5898,7 +5920,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -5930,7 +5955,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -5962,7 +5990,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -5994,7 +6025,10 @@
                     0
                 ],
                 "io_enabled": true,
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -6246,7 +6280,15 @@
                 ],
                 "effect_seed": 2620696981,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "emitter": "NONE",
+                "emitter_rate": 1.0,
+                "emitter_scale": 1.0,
+                "emitter_tint": [
+                    255,
+                    255,
+                    255
+                ]
             },
             "io_connections": []
         },
@@ -6288,7 +6330,15 @@
                 ],
                 "effect_seed": 413659506,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "emitter": "NONE",
+                "emitter_rate": 1.0,
+                "emitter_scale": 1.0,
+                "emitter_tint": [
+                    255,
+                    255,
+                    255
+                ]
             },
             "io_connections": []
         },
@@ -6330,7 +6380,15 @@
                 ],
                 "effect_seed": 906286290,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "emitter": "NONE",
+                "emitter_rate": 1.0,
+                "emitter_scale": 1.0,
+                "emitter_tint": [
+                    255,
+                    255,
+                    255
+                ]
             },
             "io_connections": []
         },
@@ -6362,7 +6420,10 @@
                     0,
                     0
                 ],
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -6394,7 +6455,10 @@
                     0,
                     0
                 ],
-                "hidden": false
+                "hidden": false,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -6652,7 +6716,15 @@
                 ],
                 "effect_seed": 1313590320,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "emitter": "NONE",
+                "emitter_rate": 1.0,
+                "emitter_scale": 1.0,
+                "emitter_tint": [
+                    255,
+                    255,
+                    255
+                ]
             },
             "io_connections": []
         },
@@ -6917,7 +6989,15 @@
                 ],
                 "effect_seed": 1946512464,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "emitter": "NONE",
+                "emitter_rate": 1.0,
+                "emitter_scale": 1.0,
+                "emitter_tint": [
+                    255,
+                    255,
+                    255
+                ]
             },
             "io_connections": []
         },
@@ -7303,7 +7383,10 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -7479,7 +7562,10 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -7662,7 +7748,10 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15
             },
             "io_connections": []
         },
@@ -7734,6 +7823,219 @@
                 "friction": 0.55,
                 "linear_damping": 0.08,
                 "angular_damping": 0.12,
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -864.0,
+                240.0,
+                104.0
+            ],
+            "properties": {
+                "render_mode": "model",
+                "rotation": [
+                    0,
+                    90.0,
+                    0.0
+                ],
+                "model_path": "assets/models/Retro_Dining_Chair_Cream.obj",
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Retro_Dining_Chair_Cream",
+                "id": "0cd20de6-9b4c-4af8-8577-fc005eb4f8dc",
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "aabb",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -872.0,
+                240.0,
+                168.0
+            ],
+            "properties": {
+                "render_mode": "model",
+                "rotation": [
+                    0,
+                    90.0,
+                    0.0
+                ],
+                "model_path": "assets/models/Retro_Dining_Chair_Cream.obj",
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Retro_Dining_Chair_Cream (copy)",
+                "id": "9f946290-128d-410c-9fcc-f64b3b0f0feb",
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "aabb",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -896.0,
+                240.0,
+                232.0
+            ],
+            "properties": {
+                "render_mode": "model",
+                "rotation": [
+                    0.0,
+                    80.0,
+                    0
+                ],
+                "model_path": "assets/models/Retro_Dining_Chair_Orange.obj",
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Retro_Dining_Chair_Orange",
+                "id": "b41c5b6b-25c6-418c-8b0c-0c0713b40752",
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "aabb",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
                 "topples": false
             },
             "io_connections": []
