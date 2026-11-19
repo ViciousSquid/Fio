@@ -71,6 +71,9 @@ CROSSOVERS = {
         "tests/engine/test_explosion.py::test_explosion_row_paths_agree",
     ("engine/entity_table.py", "EXPLOSION_LIGHT_VECTOR_FROM"):
         "tests/engine/test_explosion.py::test_explosion_light_paths_agree",
+    ("engine/logic_interaction.py", "LEVELCHANGER_VECTOR_FROM"):
+        "tests/performance/test_levelchanger_crossover_benchmark.py"
+        "::test_the_loop_and_numpy_find_the_same_level_changer",
 }
 
 #: Base-class defaults that subclasses override (0: the base plans always).
