@@ -1373,12 +1373,13 @@ class View2D(QWidget):
         b = brush_placement.world_bounds(brush)
         min_x, max_x = b[axis1_idx], b[axis1_idx + 3]
         min_y, max_y = b[axis2_idx], b[axis2_idx + 3]
-        
-        # Create brush bounds rect
-        brush_bounds = QRectF(min_x, min_y, max_x - min_x, max_y - min_y)
-        
-        # Check for intersection with visible bounds
-        return visible_bounds.intersects(brush_bounds)
+        # QRectF.intersects, without building a QRectF per brush per paint
+        # (this runs for every brush in the map on each repaint): an empty
+        # box intersects nothing, and touching edges do not intersect.
+        if max_x <= min_x or max_y <= min_y:
+            return False
+        return (min_x < visible_bounds.right() and visible_bounds.left() < max_x
+                and min_y < visible_bounds.bottom() and visible_bounds.top() < max_y)
 
     def is_thing_visible(self, thing, visible_bounds, axis1_idx, axis2_idx):
         """Check if a thing's position (plus its radius) is within the visible area."""
