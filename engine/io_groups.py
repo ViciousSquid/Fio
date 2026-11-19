@@ -96,10 +96,13 @@ def group_members(state, name):
         if group.name == name:
             found = True
             ids.update(group.ids)
-    for brush in getattr(state, 'brushes', ()) or ():
-        if str(brush.get(GROUP_KEY) or '').strip() == name:
-            found = True
-            break
+    if not found:
+        found = any(str(brush.get(GROUP_KEY) or '').strip() == name
+                    for brush in getattr(state, 'brushes', ()) or ())
+    if not found:
+        found = any(isinstance(getattr(thing, 'properties', None), dict)
+                    and str(thing.properties.get(GROUP_KEY) or '').strip() == name
+                    for thing in getattr(state, 'things', ()) or ())
     return _members(state, ids, name) if found else None
 
 
@@ -114,16 +117,21 @@ def resolve_group(state, name='', group_id=''):
 
 def _members(state, ids, brush_group):
     """Brushes then entities in scene order: those whose id is in *ids*, and
-    brushes whose ``brush_group`` is *brush_group*."""
+    those whose ``brush_group`` is *brush_group* -- a group may hold entities
+    (models, lights, props) as well as brushes, and they are members too."""
     members = []
     for brush in getattr(state, 'brushes', ()) or ():
         if brush_group and str(brush.get(GROUP_KEY) or '').strip() == brush_group:
             members.append(brush)
         elif ids and str(brush.get('id') or '') in ids:
             members.append(brush)
-    if ids:
+    if ids or brush_group:
         for thing in getattr(state, 'things', ()) or ():
             props = getattr(thing, 'properties', None)
-            if isinstance(props, dict) and str(props.get('id') or '') in ids:
+            if not isinstance(props, dict):
+                continue
+            if brush_group and str(props.get(GROUP_KEY) or '').strip() == brush_group:
+                members.append(thing)
+            elif ids and str(props.get('id') or '') in ids:
                 members.append(thing)
     return members

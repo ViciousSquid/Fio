@@ -22,8 +22,9 @@ def reference_refresh_list(self):
     header_font = QFont()
     header_font.setBold(True)
 
-    # Header background colour
-    header_brush = QBrush(QColor("#425F5D"))
+    # Header background colour (section titles became white on black in
+    # 3.5.1; the rest of this reference is the pre-optimisation refresh).
+    header_brush = QBrush(QColor("#000000"))
 
     # =====================================================================
     # TERRAIN SECTION

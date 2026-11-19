@@ -1,4 +1,5 @@
 from engine.asset_qt import load_icon
+import copy
 import json
 from types import SimpleNamespace
 import os
@@ -5828,7 +5829,8 @@ class PropertyEditor(QWidget):
         color = QColorDialog.getColor(qc, self, f"Choose {prop_name.replace('_', ' ').title()}")
         if color.isValid():
             new_color = [color.redF(), color.greenF(), color.blueF()]
-            self.current_object[prop_name] = new_color
+            # Through the shared path, so a multi-selection takes it too.
+            self.update_object_prop(prop_name, new_color)
             self._update_color_button(button, new_color)
             self.editor.update_all_ui()
 
@@ -5846,6 +5848,13 @@ class PropertyEditor(QWidget):
             rgb = [color.redF(), color.greenF(), color.blueF()]
             self.editor.save_state()
             self._update_color_button(button, rgb)
+            # Every selected brush takes it (a group recoloured at once).
+            selected = getattr(self.editor.state, 'selected_objects', None) or ()
+            for other in selected:
+                if other is not brush and isinstance(other, dict):
+                    other['colour'] = [float(c) for c in rgb]
+                    other.pop('tint', None)
+                    self.editor.state.mark_world_changed([other])
             self.editor.set_brush_colour(brush, rgb)
 
     def _reset_brush_colour(self, button):
@@ -6638,6 +6647,61 @@ class PropertyEditor(QWidget):
             if hasattr(self.editor, name):
                 getattr(self.editor, name).update()
 
+    #: Properties a multi-selection edit never copies to the other selected
+    #: objects: what identifies or places each one (names must stay unique;
+    #: there is one primary PlayerStart), its own I/O wiring, and the brush
+    #: toggles that change what a brush *is* (a group may hold one mover).
+    _PER_OBJECT_KEYS = frozenset({
+        'name', 'id', 'pos', 'type', 'brush_group', '_io_connections',
+        'io_connections', 'primary', 'creation_index', 'targetname',
+    })
+
+    def _shared_edit_targets(self, key):
+        """The other selected objects an edit of *key* also applies to.
+
+        A multi-selection (a whole group, say) is edited together: the panel
+        shows the primary object, and a change made in it goes to every other
+        selected object that has the same property -- brushes to brushes,
+        entities to entities. Keys in :data:`_PER_OBJECT_KEYS`, a brush's
+        ``is_*`` toggles and internal ``_`` keys stay per object.
+        """
+        primary = self.current_object
+        selected = getattr(self.editor.state, 'selected_objects', None) or ()
+        if len(selected) < 2 or primary is None or key in self._PER_OBJECT_KEYS \
+                or str(key).startswith('_'):
+            return []
+        targets = []
+        if isinstance(primary, dict):
+            if str(key).startswith('is_'):
+                return []
+            for obj in selected:
+                if obj is not primary and isinstance(obj, dict) and key in obj:
+                    targets.append(obj)
+        elif isinstance(primary, Thing):
+            for obj in selected:
+                if obj is not primary and isinstance(obj, Thing) \
+                        and key in obj.properties:
+                    targets.append(obj)
+        return targets
+
+    @staticmethod
+    def _set_prop(obj, key, value):
+        """Store one property on a brush dict or a Thing (a float property
+        stays a float)."""
+        if isinstance(obj, dict):
+            obj[key] = value
+            return
+        if key in obj.properties and type(obj.properties.get(key)) == float:
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                value = 0.0
+        obj.properties[key] = value
+        if isinstance(obj, Portal) and key == 'angle':
+            rot = obj.properties.get('rotation', [0.0, 0.0, 0.0])
+            if isinstance(rot, list) and len(rot) > 0:
+                rot[0] = float(value)
+
     def update_object_prop(self, key, value):
         if self.current_object is None:
             return
@@ -6653,10 +6717,17 @@ class PropertyEditor(QWidget):
                         value = 0.0
             self.current_object.properties[key] = value
 
+        # The rest of a multi-selection gets the same value -- each its own
+        # copy, so no two objects ever share one list or dict.
+        shared = self._shared_edit_targets(key)
+        for obj in shared:
+            self._set_prop(obj, key, copy.deepcopy(value)
+                           if isinstance(value, (list, dict)) else value)
+
         # Property edits are live scene mutations, not merely UI state.  The
         # dense render/entity projections cache their cold columns behind the
         # editor's world epoch, so journal this exact object immediately.
-        self.editor.state.mark_world_changed([self.current_object])
+        self.editor.state.mark_world_changed([self.current_object] + shared)
         if isinstance(self.current_object, PlayerStart) and key == 'sky_image':
             # This is an explicit authoring action, so the selected value
             # (including an empty value) replaces any legacy copies.
