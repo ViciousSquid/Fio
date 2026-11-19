@@ -141,6 +141,7 @@ def _glb(primitives):
     return struct.pack('<III', 0x46546C67, 2, 12 + len(body)) + body
 
 
+@pytest.mark.qt          # engine.glb_loader imports PyOpenGL: the Qt tier has it
 def test_glb_primitives_sharing_an_accessor_are_charged_against_one_budget(monkeypatch):
     from engine import glb_loader
 
