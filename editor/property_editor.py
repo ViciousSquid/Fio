@@ -6476,11 +6476,16 @@ class PropertyEditor(QWidget):
 
             def update_vec(text, idx=i):
                 try:
-                    vec = thing.properties.get(key, [0, 0, 0])
-                    vec[idx] = float(text)
-                    self.update_object_prop(key, vec)
+                    number = float(text)
                 except ValueError:
-                    pass
+                    return
+                vec = thing.properties.get(key, [0, 0, 0])
+                vec = list(vec) if isinstance(vec, list) and len(vec) == 3 else [0, 0, 0]
+                vec[idx] = number
+                # Only this component changes on the rest of a multi-selection:
+                # three props at different yaws keep their own yaw when one
+                # axis is typed.
+                self.update_object_prop(key, vec, component=idx)
 
             le.editingFinished.connect(lambda l=le, idx=i: update_vec(l.text(), idx))
             h.addWidget(le)
@@ -6740,9 +6745,20 @@ class PropertyEditor(QWidget):
             if isinstance(rot, list) and len(rot) > 0:
                 rot[0] = float(value)
 
-    def update_object_prop(self, key, value):
+    def update_object_prop(self, key, value, component=None):
+        """Set *key* to *value* on the object on the panel, and on every other
+        selected object sharing the property (:meth:`_shared_edit_targets`).
+
+        *component*: *value* is a list of which only that index was edited;
+        the other selected objects get just that element, keeping the rest of
+        their own list.
+        """
         if self.current_object is None:
             return
+        shared = self._shared_edit_targets(key)
+        if shared:
+            # One undo step puts every object the edit reaches back.
+            self.editor.save_state()
         if isinstance(self.current_object, dict):
             self.current_object[key] = value
         elif isinstance(self.current_object, Thing):
@@ -6757,8 +6773,16 @@ class PropertyEditor(QWidget):
 
         # The rest of a multi-selection gets the same value -- each its own
         # copy, so no two objects ever share one list or dict.
-        shared = self._shared_edit_targets(key)
         for obj in shared:
+            if component is not None:
+                own = obj.get(key) if isinstance(obj, dict) else obj.properties.get(key)
+                if not (isinstance(own, list) and isinstance(value, list)
+                        and 0 <= component < min(len(own), len(value))):
+                    continue
+                own = list(own)
+                own[component] = value[component]
+                self._set_prop(obj, key, own)
+                continue
             self._set_prop(obj, key, copy.deepcopy(value)
                            if isinstance(value, (list, dict)) else value)
 

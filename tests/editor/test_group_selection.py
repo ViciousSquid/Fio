@@ -75,6 +75,47 @@ def test_an_edit_reaches_every_selected_object_with_that_property(main_window):
     assert 'scale' not in lamp.properties or lamp.properties['scale'] != [2.0, 2.0, 2.0]
 
 
+def _typed_component(panel, thing, key, index, text):
+    """Type *text* into component *index* of *thing*'s vector field *key*, as
+    the panel's own three-box widget does on editingFinished."""
+    from PyQt5.QtWidgets import QFormLayout, QLineEdit, QWidget
+    host = QWidget()
+    form = QFormLayout(host)
+    panel.add_vector3_widget(form, thing, key)
+    boxes = host.findChildren(QLineEdit)
+    boxes[index].setText(text)
+    boxes[index].editingFinished.emit()
+
+
+def test_typing_one_axis_changes_only_that_axis_on_the_others(main_window):
+    chairs = _chairs()
+    for chair, yaw in zip(chairs, (0.0, 90.0, 180.0)):
+        chair.properties['rotation'] = [0.0, yaw, 0.0]
+    main_window.state.things.extend(chairs)
+    main_window.set_selected_objects(chairs)
+    panel = main_window.property_editor
+    assert panel.current_object is chairs[0]
+
+    _typed_component(panel, chairs[0], 'rotation', 0, '10')
+    # Each chair keeps its own yaw; only the typed axis is shared.
+    assert [c.properties['rotation'] for c in chairs] == [
+        [10.0, 0.0, 0.0], [10.0, 90.0, 0.0], [10.0, 180.0, 0.0]]
+    assert chairs[1].properties['rotation'] is not chairs[2].properties['rotation']
+
+
+def test_one_undo_restores_every_object_a_shared_edit_reached(main_window):
+    chairs = _chairs()
+    for chair, yaw in zip(chairs, (0.0, 90.0, 180.0)):
+        chair.properties['rotation'] = [0.0, yaw, 0.0]
+    main_window.state.things.extend(chairs)
+    main_window.set_selected_objects(chairs)
+    # No checkpoint of its own: the shared edit takes the one undo uses.
+    _typed_component(main_window.property_editor, chairs[0], 'rotation', 0, '10')
+    main_window.undo()
+    assert [t.properties['rotation'] for t in main_window.state.things[-3:]] == [
+        [0.0, 0.0, 0.0], [0.0, 90.0, 0.0], [0.0, 180.0, 0.0]]
+
+
 def test_names_and_ids_stay_per_object(main_window):
     chairs = _chairs()
     main_window.state.things.extend(chairs)
