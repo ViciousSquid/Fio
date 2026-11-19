@@ -480,6 +480,28 @@ def _editor_pick(session):
         return np.array((p.x / p.w, p.y / p.w, p.z / p.w))
     near, far = unproject(-1.0), unproject(1.0)
     expected = near + (far - near) * (near[1] / (near[1] - far[1]))
+    # How far apart along the ray two neighbouring depth values are at the
+    # floor, from the widget framebuffer's own depth bits: a pick is exact
+    # to the depth buffer's resolution, not better (macOS's software
+    # renderer gives the widget 16 bits, where Mesa gives 24).
+    from OpenGL import GL
+    view.makeCurrent()
+    try:
+        GL.glBindFramebuffer(GL.GL_READ_FRAMEBUFFER, view.defaultFramebufferObject())
+        depth_bits = int(GL.glGetFramebufferAttachmentParameteriv(
+            GL.GL_READ_FRAMEBUFFER, GL.GL_DEPTH_ATTACHMENT,
+            GL.GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE)) or 24
+    except Exception:
+        depth_bits = 16                      # the coarsest a widget is given
+    finally:
+        view.doneCurrent()
+    clip = view.projection_matrix * view.view_matrix * glm.vec4(*expected, 1.0)
+    z = clip.z / clip.w
+    step = 2.0 / (2 ** depth_bits - 1)       # one depth value, in NDC
+    quantum = float(np.linalg.norm(unproject(min(1.0, z + step)) - unproject(z)))
+    # Rounding to the nearest depth value is off by half a step at most.
+    _editor_pick.tolerance = max(0.5, quantum)
+    _editor_pick.depth_bits = depth_bits
     if hit is None:
         # What the pick saw, for a platform where it found nothing.
         from OpenGL import GL
@@ -515,7 +537,9 @@ def test_the_editor_carries_on_after_native_kiosk(session):
     before, expected = _editor_pick(session)
     assert before is not None, \
         "no surface under the editor camera before kiosk mode: %r" % getattr(_editor_pick, 'seen', None)
-    assert np.allclose(before[0], expected, atol=0.5), (before[0], expected)
+    tolerance = _editor_pick.tolerance
+    assert np.allclose(before[0], expected, atol=tolerance), \
+        (before[0], expected, tolerance, _editor_pick.depth_bits)
 
     session.start_play()
     session.step(5)
@@ -538,8 +562,10 @@ def test_the_editor_carries_on_after_native_kiosk(session):
     point, normal = np.asarray(after[0]), np.asarray(after[1])
     # The floor's top is y = 0 (tests.helpers.worlds.room), facing up: the
     # depth read back from the widget puts the pick where the ray meets it.
-    assert np.allclose(point, expected, atol=0.5), (point, expected)
-    assert abs(point[1]) < 0.5 and normal[1] > 0.99, (point, normal)
+    tolerance = _editor_pick.tolerance
+    assert np.allclose(point, expected, atol=tolerance), \
+        (point, expected, tolerance, _editor_pick.depth_bits)
+    assert abs(point[1]) < tolerance and normal[1] > 0.99, (point, normal)
 
     # Play again, on the widget, then native kiosk again, then back.
     session.start_play()
@@ -553,7 +579,8 @@ def test_the_editor_carries_on_after_native_kiosk(session):
     assert view.renderer is renderer and window.state is world
     session.publish()
     assert session.paint().std() > 1.0
-    _report("editor resumed: selection, navigation, decal depth pick, Play and kiosk again")
+    _report("editor resumed: selection, navigation, decal depth pick (%d-bit depth, "
+            "within %.2f), Play and kiosk again" % (_editor_pick.depth_bits, _editor_pick.tolerance))
 
 
 def test_the_console_switches_native_presentation_live(session):
