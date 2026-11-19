@@ -1823,6 +1823,14 @@ class MainWindow(QMainWindow):
         self.mark_as_modified()
         self.update_all_ui()
 
+    def notify_camera_moved(self):
+        """The 3D view's camera may have moved: each 2D view on screen
+        repaints if it did (View2D._check_camera_changed)."""
+        for view in (getattr(self, 'view_top', None), getattr(self, 'view_front', None),
+                     getattr(self, 'view_side', None)):
+            if view is not None:
+                view._check_camera_changed()
+
     def update_views(self):
         self.sync_bigworld_terrain(allow_create=True)
         self.view_3d.update()

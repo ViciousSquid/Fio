@@ -1001,6 +1001,12 @@ class QtGameView(QOpenGLWidget):
             self.camera.yaw = render_state.editor_camera_yaw
             self.camera.pitch = render_state.editor_camera_pitch
             self.camera.fov = render_state.editor_camera_fov
+            # The 2D views draw this camera: they repaint on the frame it moves
+            # (a view that is hidden, or a camera that has not moved, costs a
+            # comparison) instead of polling it on 60 Hz timers of their own.
+            notify = getattr(self.editor, 'notify_camera_moved', None)
+            if notify is not None:
+                notify()
         else:
             self.camera.pos = glm.vec3(render_state.player_pos)
             self.camera.yaw = 90.0 - math.degrees(render_state.player_angle)

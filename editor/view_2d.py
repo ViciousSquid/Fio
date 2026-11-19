@@ -154,8 +154,14 @@ class View2D(QWidget):
         self.animation_timer = QTimer(self)
         self.animation_timer.setInterval(16)
         self.animation_timer.timeout.connect(self._update_connection_animations)
-        # Started when the view is shown, stopped when it is hidden (only one
-        # of the three 2D views is on screen at a time): see showEvent.
+        # Runs only while animated links are drawn in this view, which must be
+        # on screen: started by draw_logic_connections, stopped by the tick
+        # that finds nothing left to animate, and by hideEvent.
+        # The scene below the links, kept while links animate (paintEvent).
+        self._base_layer = None
+        self._base_key = None
+        self._base_layer_valid = False
+        self._arrow_frame = False
 
         # ---- Arrow-key nudge undo coalescing ----
         # A rapid burst of nudges (tapping or holding an arrow key) should be a
@@ -169,10 +175,10 @@ class View2D(QWidget):
         self._nudge_idle_timer.timeout.connect(self._end_nudge_burst)
 
         # ---- Camera tracking for smooth viewcone updates ----
-        # Watches camera position/yaw/pitch and repaints 2D views only when changed
-        self._camera_tracking_timer = QTimer(self)
-        self._camera_tracking_timer.setInterval(16)  # ~60 FPS check
-        self._camera_tracking_timer.timeout.connect(self._check_camera_changed)
+        # No timer: each frame the 3D view takes its camera from (editor mode)
+        # it calls _check_camera_changed on the 2D views, which repaint only
+        # when the camera actually moved -- on the same frame, not on the next
+        # tick of a 60 Hz poll (MainWindow.notify_camera_moved).
         # Cached camera state for change detection
         self._last_camera_pos = None
         self._last_camera_yaw = None
@@ -241,20 +247,18 @@ class View2D(QWidget):
                 self.color_pixmaps[color_name] = pixmap.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation) 
 
     def showEvent(self, event):
-        """Wake this view's 60 Hz timers: only the 2D view on screen runs
-        them. A hidden view is never painted (Qt drops update() for it) and
-        its timers have nothing to do; the first paint after it is shown
-        draws the scene as it is then."""
+        """Only the 2D view on screen does any work: a hidden one is never
+        painted (Qt drops update() for it) and its animation timer sleeps.
+        The first paint after it is shown draws the scene as it is then."""
         super().showEvent(event)
         self._last_camera_pos = None        # re-read the camera at once
-        self.animation_timer.start()
-        self._camera_tracking_timer.start()
+        self._base_layer_valid = False
 
     def hideEvent(self, event):
-        """Let this view's timers sleep while another 2D view is shown."""
+        """Let this view sleep while another 2D view is shown."""
         super().hideEvent(event)
         self.animation_timer.stop()
-        self._camera_tracking_timer.stop()
+        self._base_layer = None             # not kept while out of sight
 
     def reset_state(self):
         # A drag in flight owns the views: update_views() reaches every 2D view
@@ -1428,15 +1432,85 @@ class View2D(QWidget):
         grid = self.grid_size
         return QPointF(round(pos.x() / grid) * grid, round(pos.y() / grid) * grid)
 
+    # -- the link layer ----------------------------------------------------
+    #
+    # With animated I/O links on, the arrows travelling along them asked for
+    # a repaint of the whole view 60 times a second, for as long as a link
+    # was in view: every brush, model and sprite drawn again to move a few
+    # arrowheads. While links animate, everything painted *below* them is
+    # kept as one image; a frame that only moves the arrows draws that image
+    # and the layers from the links up. Any other repaint -- every update()
+    # from the editor, a resize, a pan, a camera move, an edit, a selection
+    # change -- paints the scene in full, as before.
+
+    def update(self, *args):
+        """Repaint, with the scene below the links painted afresh."""
+        self._base_layer_valid = False
+        self._arrow_frame = False
+        super().update(*args)
+
+    def _request_arrow_frame(self):
+        """Repaint only to move the link arrows: the image of the scene below
+        the links is reused if nothing else has asked for a repaint."""
+        self._arrow_frame = True
+        QWidget.update(self)
+
+    def _base_layer_key(self):
+        """What the cached scene below the links depends on beyond the
+        editor's update() calls (a safety net for any change made without
+        one)."""
+        state = self.editor.state
+        camera = self.editor.view_3d.camera if self.editor.view_3d else None
+        cam = ((round(float(camera.pos.x), 2), round(float(camera.pos.y), 2),
+                round(float(camera.pos.z), 2), round(float(camera.yaw), 2),
+                round(float(camera.pitch), 2)) if camera is not None else None)
+        return (self.width(), self.height(), self.devicePixelRatioF(),
+                self.zoom_factor, self.pan_offset.x(), self.pan_offset.y(),
+                getattr(state, 'world_epoch', None),
+                tuple(id(o) for o in state.selected_objects), cam)
+
+    def _animating_links(self):
+        return bool(self.editor.show_logic_links and self.main_window.config.getboolean(
+            'Display', 'animate_connections', fallback=False))
+
     def paintEvent(self, event):
         painter = QPainter(self)
+        arrow_frame, self._arrow_frame = self._arrow_frame, False
+        if not self._animating_links():
+            self._base_layer = None
+            visible_bounds = self._paint_base_layer(painter)
+        else:
+            key = self._base_layer_key()
+            if (arrow_frame and self._base_layer_valid and self._base_layer is not None
+                    and self._base_key == key):
+                painter.drawPixmap(0, 0, self._base_layer)
+                visible_bounds = self.get_visible_world_bounds()
+                if visible_bounds.width() <= 0 or visible_bounds.height() <= 0:
+                    visible_bounds = None
+            else:
+                ratio = self.devicePixelRatioF()
+                layer = QPixmap(max(1, int(round(self.width() * ratio))),
+                                max(1, int(round(self.height() * ratio))))
+                layer.setDevicePixelRatio(ratio)
+                base_painter = QPainter(layer)
+                visible_bounds = self._paint_base_layer(base_painter)
+                base_painter.end()
+                painter.drawPixmap(0, 0, layer)
+                self._base_layer, self._base_key = layer, key
+                self._base_layer_valid = True
+        if visible_bounds is not None:
+            self._paint_link_layers(painter, visible_bounds)
+
+    def _paint_base_layer(self, painter):
+        """Everything below the I/O links. Returns the visible world bounds,
+        or None when the view shows nothing (only the background)."""
         # Use the custom grid background colour (or fallback to dark grey)
         bg_hex = self.main_window.config.get('GridColours', 'background', fallback='#2b2b2b')
         painter.fillRect(self.rect(), QColor(bg_hex))
         
         visible_bounds = self.get_visible_world_bounds()
         if visible_bounds.width() <= 0 or visible_bounds.height() <= 0:
-            return
+            return None
         
         self.draw_grid(painter)
         self.draw_terrain(painter, visible_bounds)
@@ -1448,7 +1522,10 @@ class View2D(QWidget):
             self.draw_clip_overlay(painter)
         if self._rotate_active():
             self.draw_rotate_overlay(painter)
+        return visible_bounds
 
+    def _paint_link_layers(self, painter, visible_bounds):
+        """The I/O links and everything drawn over them."""
         # --- REVISED: Logic/Trigger Connections ---
         # Only draw if the global toggle is ON (F1)
         show_f1_key = self.editor.show_logic_links
@@ -1725,6 +1802,8 @@ class View2D(QWidget):
             
             # Draw Arrows based on setting
             if should_animate:
+                if not self.animation_timer.isActive() and not self._paced_by_play():
+                    self.animation_timer.start()
                 # Initialize animation state if needed
                 if conn_key not in self.connection_animations:
                     self.connection_animations[conn_key] = {'progress': 1.0, 'growing': True}
@@ -2980,8 +3059,9 @@ class View2D(QWidget):
         """
         Check if the 3D camera has moved/rotated since last frame.
         If so, schedule a repaint of this 2D view (only the camera indicator).
-        This runs at ~60 FPS but only repaints when the camera actually changes,
-        keeping CPU usage minimal while providing smooth viewcone updates.
+        Called by the 3D view on each frame it draws in editor mode
+        (MainWindow.notify_camera_moved), and repaints only when the camera
+        actually changed.
         """
         if not self.isVisible() or self._paced_by_play():
             return
@@ -3358,8 +3438,11 @@ class View2D(QWidget):
         return bool(self.editor.view_3d.play_mode)
 
     def _update_connection_animations(self):
-        if (not self.isVisible() or not self.editor.show_logic_links
-                or self._paced_by_play()):
+        if (not self.isVisible() or self._paced_by_play()
+                or not self._animating_links() or not self.connection_animations):
+            # Nothing to animate here: sleep until links are drawn animated
+            # again (draw_logic_connections restarts the timer).
+            self.animation_timer.stop()
             return
         animation_speed = 0.05
         arrow_speed = 0.015  # Speed of traveling arrows
@@ -3402,8 +3485,9 @@ class View2D(QWidget):
             self.arrow_travel_progress[conn_key] = new_arrows
             needs_update = True
         
-        if needs_update: 
-            self.update()
+        if needs_update:
+            # Only the arrows moved: the scene below the links is reused.
+            self._request_arrow_frame()
 
     def draw_connection_drag(self, painter):
         ax1, ax2 = self.get_axes()
