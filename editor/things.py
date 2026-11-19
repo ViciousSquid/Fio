@@ -689,7 +689,9 @@ def make_water_probe(brush):
     WATER_PROBE_HEIGHT above its top surface, its radius reaching the brush's
     centre (which is what decides which water a probe serves) and at least the
     brush's half-width. The brush is given an id if it has none."""
-    brush_id = brush.setdefault('id', str(uuid.uuid4()))
+    brush_id = brush.get('id')
+    if brush_id is None:
+        brush_id = brush['id'] = str(uuid.uuid4())
     pos = [float(v) for v in brush.get('pos', (0.0, 0.0, 0.0))]
     size = [abs(float(v)) for v in brush.get('size', (64.0, 64.0, 64.0))]
     top = pos[1] + size[1] / 2.0

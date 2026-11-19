@@ -69,6 +69,8 @@ from engine.glasses import (
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.debug_console import CommandInput, DebugConsole, debug_log
+from engine.kiosk_surface import (NativeKioskSurface, NativePresentationError,
+                                  PresentationStats)
 from .sysmon import SysMon
 from .view_audio import ViewAudio
 from .view_hud import ViewHud
@@ -105,11 +107,17 @@ def perspective_projection(fov, aspect, near, far):
 
 class QtGameView(QOpenGLWidget):
     _logic_tick_fault_signal = pyqtSignal(str)
+    #: Emitted by whichever thread publishes a frame while frames are
+    #: painted on publication (kiosk mode: :meth:`set_paint_on_publish`).
+    _frame_published_signal = pyqtSignal()
     #: Weapon slot keys in Play: slot n holds item ITEM_IDS[n - 1].
     _SLOT_KEYS = {Qt.Key_1: 1, Qt.Key_2: 2, Qt.Key_3: 3, Qt.Key_4: 4}
     #: macOS: frames to wait for the capture re-centre to land before the
     #: cursor is detached anyway (about half a second).
     _MAC_CENTRE_MAX_TRIES = 30
+    #: Consecutive failed paints in Play after which Play is stopped (half a
+    #: second at 60 Hz): a one-off failure is survivable, a permanent one is not.
+    MAX_PAINT_FAILURES_IN_PLAY = 30
 
     def __init__(self, editor):
         super().__init__(editor)
@@ -124,12 +132,8 @@ class QtGameView(QOpenGLWidget):
         self.debug_draw = ViewDebugDraw(self)
         self._logic_tick_fault_signal.connect(self._handle_logic_tick_fault)
 
-        fmt = QSurfaceFormat()
-        fmt.setVersion(3, 3)
-        fmt.setProfile(QSurfaceFormat.CoreProfile)
-        fmt.setDepthBufferSize(24)
-        fmt.setStencilBufferSize(8)
-        self.setFormat(fmt)
+        from engine.gl_format import fio_surface_format
+        self.setFormat(fio_surface_format())
 
         self.editor = editor
         #: Frames left whose GL errors are reported (see _report_gl_errors).
@@ -268,13 +272,12 @@ class QtGameView(QOpenGLWidget):
         # Qt owns native events; SDL supplies controllers and audio only.
         init_sdl_input()
         
-        # Initialize pygame mixer BEFORE any sound loading
-        try:
-            if not pygame.mixer.get_init():
-                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        # Initialize pygame mixer BEFORE any sound loading. Through the audio
+        # helper, so a machine with no device is probed once (~100 ms) and the
+        # failure remembered, not probed again by the sound system straight
+        # after.
+        if self.audio._ensure_pygame_mixer():
             print(f"[Audio] pygame.mixer initialized: {pygame.mixer.get_init()}")
-        except pygame.error as e:
-            print(f"[Audio] pygame.mixer init failed: {e}")
 
         self.gamepad = None
         if pygame.joystick.get_count() > 0:
@@ -301,6 +304,15 @@ class QtGameView(QOpenGLWidget):
 
         self.fps = 0.0
         self._qt_paint_event_active = False
+        #: The native kiosk window frames are presented on (engine/
+        #: kiosk_surface.py), or None: the widget presents, as always.
+        self._native_surface = None
+        self._native_mouse_grab = False
+        #: Frame timings of whichever path presents (widget or native), for
+        #: comparing the two under the same conditions.
+        self.presentation_stats = PresentationStats()
+        self._widget_paint_ended = None
+        self.frameSwapped.connect(self._widget_frame_swapped)
         self.start_time = time.perf_counter()
 
         self._render_config = {
@@ -417,6 +429,14 @@ class QtGameView(QOpenGLWidget):
         self.setAttribute(Qt.WA_NoSystemBackground)
 
         self._play_views_due = 0.0
+        self._paint_on_publish = False
+        #: One publish notification at a time: while one is queued, later
+        #: publications only make the frame it will take newer.
+        self._publish_notify_pending = False
+        #: Publications that found a notification already queued (Debug /
+        #: r_presentation): what coalescing saved.
+        self.publish_notifications_coalesced = 0
+        self._frame_published_signal.connect(self._paint_published_frame, Qt.QueuedConnection)
         timer = QTimer(self)
         timer.setInterval(16)
         timer.timeout.connect(self.update_loop)
@@ -660,6 +680,12 @@ class QtGameView(QOpenGLWidget):
                       + " while drawing; run with FIO_GL_DEBUG=1 to find the call.")
 
 
+    def _stop_play_after_paint_failures(self):
+        """Leave Play after the frame has failed to draw repeatedly."""
+        if self.play_mode:
+            self.editor._exit_play_mode()
+            self._play_mode_hint = "Drawing failed repeatedly; Play Mode stopped"
+
     def _handle_logic_tick_fault(self, message):
         """Run fatal-tick play teardown on QtGameView's GUI thread.
 
@@ -772,8 +798,268 @@ class QtGameView(QOpenGLWidget):
     def update_grid(self):
         self.grid_dirty = True
 
+    # =========================================================================
+    # PRESENTATION TARGET
+    # =========================================================================
+    #
+    # Frames are presented by this widget (the editor, and kiosk mode by
+    # default) or -- kiosk mode with [Kiosk] native_surface -- by a native
+    # window this view's own GL context is made current on
+    # (engine/kiosk_surface.py): one renderer, one context, either target.
+    # While the native window presents, the view's geometry, focus, mouse
+    # capture and repaint requests are the window's, so the paint path, the
+    # HUD, picking and mouse look -- which read them from here -- follow the
+    # target without knowing which it is. These overrides change only what
+    # Python code reads; Qt's own C++ never calls them, so the widget itself
+    # is untouched.
+
+    def width(self):
+        surface = self._native_surface
+        return surface.width() if surface is not None else super().width()
+
+    def height(self):
+        surface = self._native_surface
+        return surface.height() if surface is not None else super().height()
+
+    def rect(self):
+        surface = self._native_surface
+        if surface is None:
+            return super().rect()
+        return QRect(0, 0, surface.width(), surface.height())
+
+    def devicePixelRatioF(self):
+        surface = self._native_surface
+        return surface.devicePixelRatio() if surface is not None else super().devicePixelRatioF()
+
+    def mapToGlobal(self, point):
+        surface = self._native_surface
+        return surface.mapToGlobal(point) if surface is not None else super().mapToGlobal(point)
+
+    def mapFromGlobal(self, point):
+        surface = self._native_surface
+        return surface.mapFromGlobal(point) if surface is not None else super().mapFromGlobal(point)
+
+    def update(self, *args):
+        surface = self._native_surface
+        if surface is not None:
+            surface.schedule_update()
+            return
+        super().update(*args)
+
+    def repaint(self, *args):
+        surface = self._native_surface
+        if surface is not None:
+            surface.schedule_update()
+            return
+        super().repaint(*args)
+
+    def _paint_device(self):
+        """What the frame's QPainter (HUD, overlays) paints on."""
+        surface = self._native_surface
+        return surface.paint_device() if surface is not None else self
+
+    def _presentation_active(self):
+        """Whether the presenting window is the active one."""
+        surface = self._native_surface
+        return surface.isActive() if surface is not None else self.window().isActiveWindow()
+
+    def _presentation_has_focus(self):
+        """Whether the presenting target has the keyboard (the console line
+        takes it while it is open)."""
+        surface = self._native_surface
+        if surface is None:
+            return self.hasFocus()
+        return surface.isActive() and not self.console_overlay_active
+
+    def _presentation_visible(self):
+        surface = self._native_surface
+        return surface.isVisible() if surface is not None else self.isVisible()
+
+    def _holds_play_mouse_grab(self):
+        if self._native_surface is not None:
+            return self._native_mouse_grab
+        return self.mouseGrabber() is self
+
+    def _set_play_mouse_grab(self, held):
+        surface = self._native_surface
+        if surface is not None:
+            granted = surface.setMouseGrabEnabled(bool(held))
+            self._native_mouse_grab = bool(held and granted)
+            return
+        if held:
+            self.grabMouse()
+        else:
+            self.releaseMouse()
+
+    def _native_focus_changed(self, focused):
+        """The native window gained or lost the keyboard: the look's grab is
+        let go at once; the next poll takes it again, as for the widget."""
+        if not focused and self._native_mouse_grab:
+            self._set_play_mouse_grab(False)
+
+    def begin_native_presentation(self):
+        """Present frames on a native window from now on (kiosk mode).
+
+        Returns the window, not yet shown: the caller shows it in the kiosk
+        window mode, then calls :meth:`verify_native_presentation`. Raises
+        NativePresentationError -- having changed nothing -- when the
+        renderer is not ready or this context cannot draw to such a window.
+        """
+        if self._native_surface is not None:
+            return self._native_surface
+        if not self.renderer or not getattr(self.renderer, 'ready', False):
+            raise NativePresentationError("the renderer is not ready")
+        if not self._context_survives_window_show():
+            raise NativePresentationError(
+                "the 3D view's GL context does not share with its window's, so Qt "
+                "would rebuild it (and the renderer) when the editor window is "
+                "shown again (engine/gl_format.py)")
+        surface = NativeKioskSurface(self)
+        # A widget grab must not outlive the widget presenting.
+        self._release_play_mouse_grab()
+        self._native_surface = surface
+        self._native_mouse_grab = False
+        self._native_presented_at = None
+        self._apply_viewport_size(surface.width(), surface.height())
+        return surface
+
+    def _context_survives_window_show(self):
+        """Whether showing the editor window again keeps this context.
+
+        A QOpenGLWidget shares its context with one its top-level window
+        makes from the window's format. When the platform refused that
+        sharing (macOS, a core-profile view in a window whose default format
+        is legacy: "falling back to unshared context"), Qt resets the widget
+        -- a new context, initializeGL, a new renderer -- the next time it is
+        shown. Native kiosk mode hides the editor window and shows it again
+        on leaving, so there it would replace the renderer. With Fio's format
+        as the application default (main.py) the two share."""
+        from PyQt5.QtCore import QCoreApplication
+        if QCoreApplication.testAttribute(Qt.AA_ShareOpenGLContexts):
+            return True
+        context = self.context()
+        return context is not None and context.shareContext() is not None
+
+    def verify_native_presentation(self):
+        """Make the context current on the shown native window once, then
+        hand it back to the widget. When makeCurrent fails, native
+        presentation is ended and NativePresentationError raised."""
+        surface = self._native_surface
+        if surface is None:
+            raise NativePresentationError("no native surface")
+        if not surface.context.makeCurrent(surface):
+            self.end_native_presentation()
+            raise NativePresentationError("makeCurrent on the native surface failed")
+        self._restore_widget_framebuffer()
+        surface.schedule_update()
+
+    def end_native_presentation(self):
+        """Present on the widget again. The context is made current on the
+        widget (its framebuffer bound) before the window goes, so nothing is
+        left current on a destroyed surface and the editor's next paint
+        finds its own framebuffer."""
+        surface = self._native_surface
+        if surface is None:
+            return
+        if self._native_mouse_grab:
+            surface.setMouseGrabEnabled(False)
+        self._native_mouse_grab = False
+        if self._console_input.parent() is not self:
+            self._console_input.hide()
+            self._console_input.setParent(self)
+            self._console_input.setWindowFlags(Qt.Widget)
+            self._console_input.hide()
+        self._native_surface = None
+        self._restore_widget_framebuffer()
+        surface.hide()
+        surface.destroy()
+        surface.deleteLater()
+        self._apply_viewport_size(super().width(), super().height())
+        super().update()
+
+    def _restore_widget_framebuffer(self):
+        """Make the context current on the widget again and leave the state
+        the widget's own frames leave: its framebuffer bound (makeCurrent
+        binds it), the viewport its size, no scissor. A native frame left
+        framebuffer 0, the window's viewport and a scissor box behind, in
+        the one context both share."""
+        if self.context() is None:
+            return
+        self.makeCurrent()
+        try:
+            ratio = super().devicePixelRatioF()
+            width = max(1, int(round(super().width() * ratio)))
+            height = max(1, int(round(super().height() * ratio)))
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.defaultFramebufferObject())
+            gl.glViewport(0, 0, width, height)
+            gl.glScissor(0, 0, width, height)
+            gl.glDisable(gl.GL_SCISSOR_TEST)
+        finally:
+            self.doneCurrent()
+
+    def _present_native_frame(self):
+        """The native window asked for a frame (UpdateRequest)."""
+        surface = self._native_surface
+        if surface is None:
+            return
+        last = getattr(self, '_native_presented_at', None)
+        try:
+            drawn = surface.present()
+        except NativePresentationError as exc:
+            debug_log("Kiosk", "Native presentation failed (%s); presenting on "
+                               "the 3D view instead." % exc)
+            QTimer.singleShot(0, self.editor.kiosk_native_presentation_failed)
+            return
+        if drawn:
+            now = time.perf_counter()
+            self._native_presented_at = now
+            self.presentation_stats.record(
+                'native', interval_ms=(now - last) * 1000.0 if last else None,
+                paint_ms=self.paint_ms, present_ms=surface.last_swap_ms,
+                serial=getattr(self, '_painted_serial', None),
+                latency_ms=self._latency_ms(now))
+
+    def _paint_presented_frame(self):
+        """Draw the newest frame as a presented one (counted, as a Qt paint
+        event is): the native window's present calls this."""
+        self._qt_paint_event_active = True
+        try:
+            self.paintGL()
+        finally:
+            self._qt_paint_event_active = False
+
+    def _widget_frame_swapped(self):
+        """The widget's frame reached the screen (Qt composed and swapped
+        it): its presentation time is from the end of paintGL to here."""
+        ended, self._widget_paint_ended = self._widget_paint_ended, None
+        if ended is None or self._native_surface is not None:
+            return
+        now = time.perf_counter()
+        last = getattr(self, '_widget_presented_at', None)
+        self._widget_presented_at = now
+        self.presentation_stats.record(
+            'widget', interval_ms=(now - last) * 1000.0 if last else None,
+            paint_ms=self.paint_ms, present_ms=(now - ended) * 1000.0,
+            serial=getattr(self, '_painted_serial', None),
+            latency_ms=self._latency_ms(now))
+
+    def _latency_ms(self, presented_at):
+        """From the logic thread preparing the frame just presented to its
+        presentation returning -- not to light on the display, which no API
+        here reports (a swap may return before the frame is scanned out)."""
+        prepared = getattr(self, '_painted_timestamp', 0.0)
+        return (presented_at - prepared) * 1000.0 if prepared else None
+
     def resizeGL(self, width, height):
         super().resizeGL(width, height)
+        if self._native_surface is None:
+            self._apply_viewport_size(width, height)
+
+    def _apply_viewport_size(self, width, height):
+        """The presentation target is *width* x *height* (logical): the
+        projection's aspect, the logic camera's frustum and the console
+        line follow it. The widget's resizeGL and the native kiosk surface's
+        resize both come here."""
         if height > 0:
             vp_w = (width // 2) if self.splitscreen_mode else width
             self._cached_aspect_ratio = vp_w / height
@@ -809,16 +1095,59 @@ class QtGameView(QOpenGLWidget):
             # overlays asks Qt for a paint on its own (``update()``).
             if self.game_state.try_swap():
                 self.update()
-                if self.play_mode and current_time >= self._play_views_due:
-                    # The editor's 2D views follow play at PLAY_2D_VIEWS_HZ,
-                    # not at the frame rate: one repaint of the visible one
-                    # is 4-9 ms of this thread (more than the 3D frame's own
-                    # Python on most maps), and it holds the GIL throughout.
-                    self._play_views_due = current_time + 1.0 / self.PLAY_2D_VIEWS_HZ
-                    self.editor.update_views()
+                self._follow_play_in_2d_views(current_time)
         else:
             self.repaint()
 
+
+    def set_paint_on_publish(self, enabled):
+        """Paint each frame the moment the logic thread publishes it (in
+        Play), instead of on the next tick of the 16 ms update loop.
+
+        On the timer alone a finished frame waited up to a tick before its
+        paint could start: on a fast GPU that is most of a frame of latency
+        and caps the rate near 60 fps whatever the display; on a slow one,
+        every paint left the GPU idle until the next tick. The update loop
+        still runs for input, audio and the console queue.
+        """
+        enabled = bool(enabled)
+        self._paint_on_publish = enabled
+        game_state = getattr(self, 'game_state', None)
+        if game_state is not None:
+            game_state.publish_listener = (self._notify_frame_published
+                                           if enabled else None)
+        self._publish_notify_pending = False
+
+    def _notify_frame_published(self):
+        """On the publishing thread: queue one paint callback, unless one is
+        already queued. If the UI thread is busy while five frames are
+        published, one callback runs and paints the newest -- not five that
+        would each draw that same frame again."""
+        if self._publish_notify_pending:
+            self.publish_notifications_coalesced += 1
+            return
+        self._publish_notify_pending = True
+        self._frame_published_signal.emit()
+
+    def _paint_published_frame(self):
+        """A frame was published (queued from the publishing thread). Cleared
+        before the frame is taken: a publication after this point queues the
+        next callback."""
+        self._publish_notify_pending = False
+        if self._paint_on_publish and self.game_state.try_swap():
+            self.update()
+            self._follow_play_in_2d_views(time.perf_counter())
+
+    def _follow_play_in_2d_views(self, current_time):
+        """With a new frame on its way to the screen: the editor's 2D views
+        follow play at PLAY_2D_VIEWS_HZ, not at the frame rate -- one repaint
+        of the visible one is 4-9 ms of this thread (more than the 3D frame's
+        own Python on most maps), and it holds the GIL throughout. Not at all
+        in kiosk mode, where they are hidden (editor_dormant)."""
+        if (self.play_mode and current_time >= self._play_views_due
+                and not getattr(self.editor, 'editor_dormant', False)):
+            self._play_views_due = current_time + 1.0 / self.PLAY_2D_VIEWS_HZ
+            self.editor.update_views()
 
     def _process_console_command_queue(self):
         """Run any console commands queued by the I/O system on the UI thread.
@@ -895,6 +1224,21 @@ class QtGameView(QOpenGLWidget):
             self._animate_textures()
             self._paint_frame(render_state)
             paint_succeeded = True
+            #: The publication just drawn, and when the logic thread prepared
+            #: it (PresentationStats: duplicates, skipped frames, latency).
+            self._painted_serial = getattr(render_state, 'publication_serial', 0)
+            self._painted_timestamp = getattr(render_state, 'timestamp', 0.0)
+            self._paint_failures = 0
+        except Exception:
+            # The exception still reaches sys.excepthook (the Debug Console
+            # and the crash log, which collapse identical repeats). A paint
+            # that fails every frame in Play would leave a frozen picture
+            # over a world that keeps running: stop Play instead.
+            self._paint_failures = getattr(self, '_paint_failures', 0) + 1
+            if (self._paint_failures == self.MAX_PAINT_FAILURES_IN_PLAY
+                    and self.play_mode):
+                QTimer.singleShot(0, self._stop_play_after_paint_failures)
+            raise
         finally:
             # The render state is a borrowed snapshot, and publication waits
             # while it is borrowed: release it the moment this synchronous
@@ -908,6 +1252,8 @@ class QtGameView(QOpenGLWidget):
             # Count only a successful Qt paint event. Diagnostic/test callers
             # can invoke paintGL directly without presenting a screen frame.
             self.fps = self.sysmon.record_rendered_frame(time.perf_counter())
+            if self._native_surface is None:
+                self._widget_paint_ended = time.perf_counter()
         if self._gl_error_checks_left:
             self._gl_error_checks_left -= 1
             self._report_gl_errors()
@@ -942,7 +1288,7 @@ class QtGameView(QOpenGLWidget):
             return
         # Keep all direct OpenGL rendering inside Qt's native-painting boundary.
         # QPainter owns the GL state again before any HUD/overlay drawing.
-        painter = QPainter(self)
+        painter = QPainter(self._paint_device())
         painter.beginNativePainting()
 
         if render_state:
@@ -982,6 +1328,12 @@ class QtGameView(QOpenGLWidget):
             self.camera.yaw = render_state.editor_camera_yaw
             self.camera.pitch = render_state.editor_camera_pitch
             self.camera.fov = render_state.editor_camera_fov
+            # The 2D views draw this camera: they repaint on the frame it moves
+            # (a view that is hidden, or a camera that has not moved, costs a
+            # comparison) instead of polling it on 60 Hz timers of their own.
+            notify = getattr(self.editor, 'notify_camera_moved', None)
+            if notify is not None:
+                notify()
         else:
             self.camera.pos = glm.vec3(render_state.player_pos)
             self.camera.yaw = 90.0 - math.degrees(render_state.player_angle)
@@ -1455,6 +1807,9 @@ class QtGameView(QOpenGLWidget):
             self.stop_editor_mouselook()
             self.decal_tool.set_active(False)
         self.play_mode = not self.play_mode
+        # In Play each frame is painted when it is published (in kiosk mode
+        # and in the editor alike): see set_paint_on_publish.
+        self.set_paint_on_publish(self.play_mode)
         if self.play_mode:
             player_start_pos = player_start.pos
             player_start_angle = player_start.get_angle()
@@ -1467,7 +1822,7 @@ class QtGameView(QOpenGLWidget):
             # Establish mouse capture as part of entering Play, not on the
             # next 16 ms update-loop poll. The toolbar's activating click has
             # already been handled; subsequent clicks belong to the game view.
-            self._sync_play_mouse_grab(self.window().isActiveWindow())
+            self._sync_play_mouse_grab(self._presentation_active())
 
             # Convert editor angle (0° = east) to game angle (0° = north).
             # Do not add another 180° flip: that would make every PlayerStart
@@ -1957,7 +2312,7 @@ class QtGameView(QOpenGLWidget):
         mouse grab, so every movement is this view's whoever has the keys,
         and focus moving to a panel mid-drag (a property panel rebuilt, a
         floating tool window) left right-drag dead until pressed again."""
-        return self.hasFocus() or (not self.play_mode and self.mouselook_active)
+        return self._presentation_has_focus() or (not self.play_mode and self.mouselook_active)
 
     def _look_window_active(self):
         """Whether the look may turn the camera, as far as windows go.
@@ -1969,7 +2324,7 @@ class QtGameView(QOpenGLWidget):
         with the keys still reaching the editor, and on macOS a right-click
         does not activate a window, so right-drag there was left dead until
         a left click. Switching to another application still stops it."""
-        if self.window().isActiveWindow():
+        if self._presentation_active():
             return True
         return (not self.play_mode and self.mouselook_active
                 and self.mouseGrabber() is self
@@ -2008,15 +2363,15 @@ class QtGameView(QOpenGLWidget):
         """
         if not self.play_mode or self.mouselook_active:
             return              # editor look keeps its own grab
-        grabber = self.mouseGrabber()
-        if held and grabber is not self and self.isVisible():
-            self.grabMouse()
-        elif not held and grabber is self:
-            self.releaseMouse()
+        holds = self._holds_play_mouse_grab()
+        if held and not holds and self._presentation_visible():
+            self._set_play_mouse_grab(True)
+        elif not held and holds:
+            self._set_play_mouse_grab(False)
 
     def _release_play_mouse_grab(self):
-        if not self.mouselook_active and self.mouseGrabber() is self:
-            self.releaseMouse()
+        if not self.mouselook_active and self._holds_play_mouse_grab():
+            self._set_play_mouse_grab(False)
 
     def restore_play_mouse_capture(self):
         """Reclaim the view after an enclosing UI operation has finished.
@@ -2027,12 +2382,13 @@ class QtGameView(QOpenGLWidget):
         returns to the event loop, when the view can own focus and the mouse.
         """
         if (not self.play_mode or not self._mouse_look_captured()
-                or not self.isVisible() or not self.window().isActiveWindow()):
+                or not self._presentation_visible() or not self._presentation_active()):
             return False
-        self.setFocus(Qt.OtherFocusReason)
+        if self._native_surface is None:
+            self.setFocus(Qt.OtherFocusReason)
         self._recentre_look_cursor()
         self._sync_play_mouse_grab(True)
-        return self.mouseGrabber() is self
+        return self._holds_play_mouse_grab()
 
     def _attach_mac_cursor(self):
         """macOS: let the mouse move the cursor again, if it was detached."""
@@ -2331,8 +2687,19 @@ class QtGameView(QOpenGLWidget):
         self.console_overlay_active = True
         QApplication.setOverrideCursor(Qt.ArrowCursor)
         w, h = self.width(), self.height()
-        self._console_input.setGeometry(0, h - 36, w, 36)
+        if self._native_surface is not None:
+            # The view (its parent) is out of sight: the line is shown as a
+            # frameless window over the bottom of the game window instead.
+            self._console_input.setParent(None)
+            self._console_input.setWindowFlags(
+                Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+            corner = self._native_surface.mapToGlobal(QPoint(0, h - 36))
+            self._console_input.setGeometry(corner.x(), corner.y(), w, 36)
+        else:
+            self._console_input.setGeometry(0, h - 36, w, 36)
         self._console_input.show()
+        if self._native_surface is not None:
+            self._console_input.activateWindow()
         self._console_input.raise_()
         self._console_input.setFocus()
         self._console_input.clear()
@@ -2342,7 +2709,10 @@ class QtGameView(QOpenGLWidget):
         self.console_overlay_active = False
         self._console_input.hide()
         self._console_input.clearFocus()
-        self.setFocus()
+        if self._native_surface is not None:
+            self._native_surface.requestActivate()
+        else:
+            self.setFocus()
         if self.play_mode:
             if self._actor_pick is not None:
                 # A command just armed a pick: the cursor stays free for it.

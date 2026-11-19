@@ -97,12 +97,20 @@ class LightingMixin:
         # Sent when they change, per program (M4): the values are compared
         # every frame, so a change still reaches the next draw. The terrain's
         # program belongs to the terrain, which may set them itself.
+        # The camera moves nearly every frame, the rest almost never: they
+        # are compared separately, so a moving camera re-sends one uniform
+        # per program rather than all seven.
         values = (vd.fog_enabled, tuple(vd.fog_color), start, end,
-                  vd.fog_density, tuple(cam), tuple(vd.ambient))
+                  vd.fog_density, tuple(vd.ambient))
+        cam_values = (cam[0], cam[1], cam[2])
         if shader_name != 'terrain':
-            if uniforms.env == values:
+            previous = uniforms.env
+            if previous is not None and previous[0] == values:
+                if previous[1] != cam_values:
+                    uniforms.env = (values, cam_values)
+                    gl.glUniform3f(uniforms['uFogCamPos'], *cam_values)
                 return
-            uniforms.env = values
+            uniforms.env = (values, cam_values)
         gl.glUniform1i(uniforms['uFogEnabled'], 1 if vd.fog_enabled else 0)
         gl.glUniform3f(uniforms['uFogColor'], *vd.fog_color)
         gl.glUniform1f(uniforms['uFogStart'], start)
@@ -175,6 +183,15 @@ class LightingMixin:
         if not (isinstance(lights, tuple) and len(lights) == 2
                 and hasattr(lights[0], 'light_color')):
             raise TypeError("light upload requires (LightTable, slots)")
+        # Every lit pass of a frame hands over the same (table, slots) pair:
+        # the first one built the key and uploaded, so the rest return at
+        # once instead of rebuilding the key (tuple conversions, a weights
+        # pass, the cookie lookup) four to seven times a frame. The pair is
+        # held, so its id cannot be reused; render_scene drops it each frame.
+        if (lights is getattr(self, '_light_ubo_lights', None)
+                and count == self._light_ubo_count
+                and self._light_ubo_key is not None):
+            return
         table, slots = lights
         active_lights = slots[:count]
         # Streamed play lights ease out before their cutoff (LightStream).
@@ -188,6 +205,7 @@ class LightingMixin:
                tuple(active_lights.tolist()), weights,
                None if cookie_layers is None else tuple(cookie_layers.tolist()))
         if self._light_ubo_key == key:
+            self._light_ubo_lights, self._light_ubo_count = lights, count
             return
 
         active = self._light_ubo_data[:count]
@@ -233,6 +251,7 @@ class LightingMixin:
             gl.GL_DYNAMIC_DRAW,
         )
         self._light_ubo_key = key
+        self._light_ubo_lights, self._light_ubo_count = lights, count
 
     def _cookie_layers(self, table, slots):
         """``layer + 1`` of each light's cookie in the shared array, 0 where
@@ -254,6 +273,8 @@ class LightingMixin:
         layers = array.layers(ids)
         # False when no image could be read: the placeholder stands in.
         self._cookie_array_bound = array.bind(shaders.COOKIE_TEXTURE_UNIT)
+        # Whatever array.bind did, the unit no longer holds the placeholder.
+        self._cookie_placeholder_bound = False
         return layers
 
     def _bind_cookie_placeholder(self):
@@ -277,7 +298,10 @@ class LightingMixin:
         program state, set once per program.
         """
         if not getattr(self, '_cookie_array_bound', False):
-            self._bind_cookie_placeholder()
+            # Once a frame, not once a pass: nothing else binds the unit.
+            if not getattr(self, '_cookie_placeholder_bound', False):
+                self._bind_cookie_placeholder()
+                self._cookie_placeholder_bound = True
         if uniforms.cookie_unit:
             return
         loc = uniforms['fioCookies']
@@ -338,6 +362,7 @@ class LightingMixin:
             prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
             self._shadow_fbo = int(gl.glGenFramebuffers(1))
             self._shadow_cubemaps = []
+            self.shadow_units_changed()
             size = self.shadow_map_size
             for _ in range(self.MAX_SHADOW_LIGHTS):
                 cm = int(gl.glGenTextures(1))
@@ -353,6 +378,7 @@ class LightingMixin:
                 gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
                 self._shadow_cubemaps.append(cm)
             gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            self.shadow_units_changed()
 
             # Depth-only FBO: validate completeness with the first face attached.
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._shadow_fbo)
@@ -401,11 +427,29 @@ class LightingMixin:
             slots = uniforms.shadow_slots = tuple(live)
         cubemaps = self._shadow_cubemaps
         count = len(cubemaps)
+        # What each shadow unit holds is remembered for the frame: every lit
+        # pass used to bind all of them again (two GL calls a unit, ~80 calls
+        # a frame, a third of the frame's GL calls on a map with no shadows).
+        # The record is dropped at the start of each frame, after the terrain
+        # pass (which binds its own there) and whenever the cube-maps are
+        # made or deleted (shadow_units_changed).
+        bound = getattr(self, '_shadow_units_bound', None)
+        if bound is None:
+            bound = self._shadow_units_bound = {}
         for i in slots:
-            gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP,
-                             cubemaps[i] if i < count else 0)
+            texture = cubemaps[i] if i < count else 0
+            if bound.get(i) != texture:
+                gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
+                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, texture)
+                bound[i] = texture
         gl.glActiveTexture(gl.GL_TEXTURE0)
+
+    def shadow_units_changed(self):
+        """Forget what the shadow and cookie units hold: something other
+        than _bind_shadow_maps / _bind_light_cookies bound or deleted a
+        texture there (or a new frame starts, where nothing is assumed)."""
+        self._shadow_units_bound = None
+        self._cookie_placeholder_bound = False
 
     #: The shadow pass's render key. One field, because one thing cannot vary
     #: within a depth draw: which cube face is being rendered, since that is

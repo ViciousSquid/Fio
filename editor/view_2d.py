@@ -6,6 +6,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
+from editor import model_wireframe
 from editor.things import (Thing, Light, PlayerStart, Speaker, ReflectionProbe, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState, Effect, Shake)
@@ -151,8 +152,16 @@ class View2D(QWidget):
         self.arrow_travel_progress = {}  # {conn_key: [arrow_positions]}
         
         self.animation_timer = QTimer(self)
+        self.animation_timer.setInterval(16)
         self.animation_timer.timeout.connect(self._update_connection_animations)
-        self.animation_timer.start(16)
+        # Runs only while animated links are drawn in this view, which must be
+        # on screen: started by draw_logic_connections, stopped by the tick
+        # that finds nothing left to animate, and by hideEvent.
+        # The scene below the links, kept while links animate (paintEvent).
+        self._base_layer = None
+        self._base_key = None
+        self._base_layer_valid = False
+        self._arrow_frame = False
 
         # ---- Arrow-key nudge undo coalescing ----
         # A rapid burst of nudges (tapping or holding an arrow key) should be a
@@ -166,11 +175,10 @@ class View2D(QWidget):
         self._nudge_idle_timer.timeout.connect(self._end_nudge_burst)
 
         # ---- Camera tracking for smooth viewcone updates ----
-        # Watches camera position/yaw/pitch and repaints 2D views only when changed
-        self._camera_tracking_timer = QTimer(self)
-        self._camera_tracking_timer.setInterval(16)  # ~60 FPS check
-        self._camera_tracking_timer.timeout.connect(self._check_camera_changed)
-        self._camera_tracking_timer.start()
+        # No timer: each frame the 3D view takes its camera from (editor mode)
+        # it calls _check_camera_changed on the 2D views, which repaint only
+        # when the camera actually moved -- on the same frame, not on the next
+        # tick of a 60 Hz poll (MainWindow.notify_camera_moved).
         # Cached camera state for change detection
         self._last_camera_pos = None
         self._last_camera_yaw = None
@@ -237,6 +245,20 @@ class View2D(QWidget):
             pixmap = load_pixmap(path)
             if not pixmap.isNull():
                 self.color_pixmaps[color_name] = pixmap.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation) 
+
+    def showEvent(self, event):
+        """Only the 2D view on screen does any work: a hidden one is never
+        painted (Qt drops update() for it) and its animation timer sleeps.
+        The first paint after it is shown draws the scene as it is then."""
+        super().showEvent(event)
+        self._last_camera_pos = None        # re-read the camera at once
+        self._base_layer_valid = False
+
+    def hideEvent(self, event):
+        """Let this view sleep while another 2D view is shown."""
+        super().hideEvent(event)
+        self.animation_timer.stop()
+        self._base_layer = None             # not kept while out of sight
 
     def reset_state(self):
         # A drag in flight owns the views: update_views() reaches every 2D view
@@ -1351,12 +1373,13 @@ class View2D(QWidget):
         b = brush_placement.world_bounds(brush)
         min_x, max_x = b[axis1_idx], b[axis1_idx + 3]
         min_y, max_y = b[axis2_idx], b[axis2_idx + 3]
-        
-        # Create brush bounds rect
-        brush_bounds = QRectF(min_x, min_y, max_x - min_x, max_y - min_y)
-        
-        # Check for intersection with visible bounds
-        return visible_bounds.intersects(brush_bounds)
+        # QRectF.intersects, without building a QRectF per brush per paint
+        # (this runs for every brush in the map on each repaint): an empty
+        # box intersects nothing, and touching edges do not intersect.
+        if max_x <= min_x or max_y <= min_y:
+            return False
+        return (min_x < visible_bounds.right() and visible_bounds.left() < max_x
+                and min_y < visible_bounds.bottom() and visible_bounds.top() < max_y)
 
     def is_thing_visible(self, thing, visible_bounds, axis1_idx, axis2_idx):
         """Check if a thing's position (plus its radius) is within the visible area."""
@@ -1410,15 +1433,85 @@ class View2D(QWidget):
         grid = self.grid_size
         return QPointF(round(pos.x() / grid) * grid, round(pos.y() / grid) * grid)
 
+    # -- the link layer ----------------------------------------------------
+    #
+    # With animated I/O links on, the arrows travelling along them asked for
+    # a repaint of the whole view 60 times a second, for as long as a link
+    # was in view: every brush, model and sprite drawn again to move a few
+    # arrowheads. While links animate, everything painted *below* them is
+    # kept as one image; a frame that only moves the arrows draws that image
+    # and the layers from the links up. Any other repaint -- every update()
+    # from the editor, a resize, a pan, a camera move, an edit, a selection
+    # change -- paints the scene in full, as before.
+
+    def update(self, *args):
+        """Repaint, with the scene below the links painted afresh."""
+        self._base_layer_valid = False
+        self._arrow_frame = False
+        super().update(*args)
+
+    def _request_arrow_frame(self):
+        """Repaint only to move the link arrows: the image of the scene below
+        the links is reused if nothing else has asked for a repaint."""
+        self._arrow_frame = True
+        QWidget.update(self)
+
+    def _base_layer_key(self):
+        """What the cached scene below the links depends on beyond the
+        editor's update() calls (a safety net for any change made without
+        one)."""
+        state = self.editor.state
+        camera = self.editor.view_3d.camera if self.editor.view_3d else None
+        cam = ((round(float(camera.pos.x), 2), round(float(camera.pos.y), 2),
+                round(float(camera.pos.z), 2), round(float(camera.yaw), 2),
+                round(float(camera.pitch), 2)) if camera is not None else None)
+        return (self.width(), self.height(), self.devicePixelRatioF(),
+                self.zoom_factor, self.pan_offset.x(), self.pan_offset.y(),
+                getattr(state, 'world_epoch', None),
+                tuple(id(o) for o in state.selected_objects), cam)
+
+    def _animating_links(self):
+        return bool(self.editor.show_logic_links and self.main_window.config.getboolean(
+            'Display', 'animate_connections', fallback=False))
+
     def paintEvent(self, event):
         painter = QPainter(self)
+        arrow_frame, self._arrow_frame = self._arrow_frame, False
+        if not self._animating_links():
+            self._base_layer = None
+            visible_bounds = self._paint_base_layer(painter)
+        else:
+            key = self._base_layer_key()
+            if (arrow_frame and self._base_layer_valid and self._base_layer is not None
+                    and self._base_key == key):
+                painter.drawPixmap(0, 0, self._base_layer)
+                visible_bounds = self.get_visible_world_bounds()
+                if visible_bounds.width() <= 0 or visible_bounds.height() <= 0:
+                    visible_bounds = None
+            else:
+                ratio = self.devicePixelRatioF()
+                layer = QPixmap(max(1, int(round(self.width() * ratio))),
+                                max(1, int(round(self.height() * ratio))))
+                layer.setDevicePixelRatio(ratio)
+                base_painter = QPainter(layer)
+                visible_bounds = self._paint_base_layer(base_painter)
+                base_painter.end()
+                painter.drawPixmap(0, 0, layer)
+                self._base_layer, self._base_key = layer, key
+                self._base_layer_valid = True
+        if visible_bounds is not None:
+            self._paint_link_layers(painter, visible_bounds)
+
+    def _paint_base_layer(self, painter):
+        """Everything below the I/O links. Returns the visible world bounds,
+        or None when the view shows nothing (only the background)."""
         # Use the custom grid background colour (or fallback to dark grey)
         bg_hex = self.main_window.config.get('GridColours', 'background', fallback='#2b2b2b')
         painter.fillRect(self.rect(), QColor(bg_hex))
         
         visible_bounds = self.get_visible_world_bounds()
         if visible_bounds.width() <= 0 or visible_bounds.height() <= 0:
-            return
+            return None
         
         self.draw_grid(painter)
         self.draw_terrain(painter, visible_bounds)
@@ -1430,7 +1523,10 @@ class View2D(QWidget):
             self.draw_clip_overlay(painter)
         if self._rotate_active():
             self.draw_rotate_overlay(painter)
+        return visible_bounds
 
+    def _paint_link_layers(self, painter, visible_bounds):
+        """The I/O links and everything drawn over them."""
         # --- REVISED: Logic/Trigger Connections ---
         # Only draw if the global toggle is ON (F1)
         show_f1_key = self.editor.show_logic_links
@@ -1707,6 +1803,8 @@ class View2D(QWidget):
             
             # Draw Arrows based on setting
             if should_animate:
+                if not self.animation_timer.isActive() and not self._paced_by_play():
+                    self.animation_timer.start()
                 # Initialize animation state if needed
                 if conn_key not in self.connection_animations:
                     self.connection_animations[conn_key] = {'progress': 1.0, 'growing': True}
@@ -1716,7 +1814,13 @@ class View2D(QWidget):
             else:
                 # Draw a single static arrow head at the target end
                 self._draw_connection_arrow(painter, p1, p2, color)
-        
+
+        # Links no longer drawn (deleted, filtered, scrolled away) stop
+        # animating, so the timer sleeps once nothing on screen moves.
+        if self.connection_animations:
+            for stale in [k for k in self.connection_animations if k not in current_connections]:
+                del self.connection_animations[stale]
+                self.arrow_travel_progress.pop(stale, None)
         self.last_io_connections = current_connections
 
     def draw_patrol_paths(self, painter, visible_bounds):
@@ -2024,12 +2128,6 @@ class View2D(QWidget):
                 painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "DOOR")
             
             
-            # Draw glow light direction arrow
-            if brush.get('shader') == 'Glow':
-                # Editor-only guide: hidden in play mode.
-                if not getattr(self.main_window.view_3d, 'play_mode', False):
-                    self.draw_glow_light_arrow(painter, brush, ax1, ax2, ax_map)
-
             # A lone selected brush keeps its own resize handles; when several
             # objects are selected the unified group box owns the handles instead.
             if is_selected and not is_locked and not group_active:
@@ -2054,104 +2152,6 @@ class View2D(QWidget):
             return QRectF(QPointF(sx1, cy - dy1), QPointF(sx2, cy - dy2)).normalized()
         return QRectF(QPointF(sx1, cy + dy1), QPointF(sx2, cy + dy2)).normalized()
 
-    def draw_glow_light_arrow(self, painter, brush, ax1, ax2, ax_map):
-        """Draw a wide colored arrow radiating from the glow brush's light emission face."""
-        light_direction = brush.get('light_direction', 'top')
-        brush_pos = brush['pos']
-        brush_size = brush['size']
-        
-        # Get arrow scale from settings (default 100%)
-        arrow_scale = self.main_window.config.getint('Display', 'glow_arrow_scale', fallback=100) / 100.0
-        
-        # Map face name to direction vector and offset to face center
-        face_directions = {
-            'top':    ([0, 1, 0], [0, brush_size[1]/2, 0]),
-            'bottom': ([0, -1, 0], [0, -brush_size[1]/2, 0]),
-            'north':  ([0, 0, 1], [0, 0, brush_size[2]/2]),
-            'south':  ([0, 0, -1], [0, 0, -brush_size[2]/2]),
-            'east':   ([1, 0, 0], [brush_size[0]/2, 0, 0]),
-            'west':   ([-1, 0, 0], [-brush_size[0]/2, 0, 0]),
-        }
-        
-        if light_direction not in face_directions:
-            return
-        
-        direction, face_offset = face_directions[light_direction]
-        
-        # Calculate start point (center of the emitting face)
-        start_3d = [
-            brush_pos[0] + face_offset[0],
-            brush_pos[1] + face_offset[1],
-            brush_pos[2] + face_offset[2]
-        ]
-        
-        # Arrow length based on brush size and scale setting
-        base_arrow_length = max(brush_size[0], brush_size[1], brush_size[2]) * 0.8
-        arrow_length = base_arrow_length * arrow_scale
-        
-        # Calculate end point
-        end_3d = [
-            start_3d[0] + direction[0] * arrow_length,
-            start_3d[1] + direction[1] * arrow_length,
-            start_3d[2] + direction[2] * arrow_length
-        ]
-        
-        # Cone position - close to the emitting surface (20% along the arrow)
-        cone_3d = [
-            start_3d[0] + direction[0] * arrow_length * 0.2,
-            start_3d[1] + direction[1] * arrow_length * 0.2,
-            start_3d[2] + direction[2] * arrow_length * 0.2
-        ]
-        
-        # Project to 2D
-        p_start = QPointF(start_3d[ax_map[ax1]], start_3d[ax_map[ax2]])
-        p_end = QPointF(end_3d[ax_map[ax1]], end_3d[ax_map[ax2]])
-        p_cone = QPointF(cone_3d[ax_map[ax1]], cone_3d[ax_map[ax2]])
-        
-        # Skip if arrow is too small in this view
-        if (p_start - p_end).manhattanLength() < 2:
-            return
-        
-        s_start = self.world_to_screen(p_start)
-        s_end = self.world_to_screen(p_end)
-        s_cone = self.world_to_screen(p_cone)
-        
-        # Get brush colour for the arrow (use the glow colour)
-        brush_colour = brush.get('colour', [1.0, 0.9, 0.5])  # Default warm glow color
-        arrow_color = QColor(
-            int(min(255, brush_colour[0] * 255 * 1.2)),  # Slightly brighter
-            int(min(255, brush_colour[1] * 255 * 1.2)),
-            int(min(255, brush_colour[2] * 255 * 1.2))
-        )
-        
-        # Draw arrow shaft (from cone to tip)
-        painter.setPen(QPen(arrow_color, 2))
-        painter.drawLine(s_cone, s_end)
-        
-        # Draw big arrowhead/cone near the surface
-        angle = math.atan2(s_end.y() - s_start.y(), s_end.x() - s_start.x())
-        arrow_head_size = max(12, 18 * arrow_scale)  # Bigger arrowhead
-        arrow_head_width = math.pi / 2  # Wide arrowhead (60 degrees)
-        
-        p1 = s_cone - QPointF(
-            math.cos(angle - arrow_head_width) * arrow_head_size,
-            math.sin(angle - arrow_head_width) * arrow_head_size
-        )
-        p2 = s_cone - QPointF(
-            math.cos(angle + arrow_head_width) * arrow_head_size,
-            math.sin(angle + arrow_head_width) * arrow_head_size
-        )
-        
-        # Cone tip extends forward from s_cone
-        cone_tip = s_cone + QPointF(
-            math.cos(angle) * arrow_head_size * 0.6,
-            math.sin(angle) * arrow_head_size * 0.6
-        )
-        
-        painter.setPen(QPen(arrow_color, 2))
-        painter.setBrush(QBrush(arrow_color))
-        painter.drawPolygon(QPolygonF([cone_tip, p1, p2]))
-
     def draw_brush_color_tag(self, painter, brush, screen_rect):
         color = brush.get('color')
         if isinstance(color, str) and color in self.color_pixmaps:
@@ -2171,77 +2171,66 @@ class View2D(QWidget):
             tag_y = int(screen_rect.bottomRight().y() - tag_size - 2) 
             painter.drawPixmap(tag_x, tag_y, pixmap)
 
-    def _compute_model_screen_coords(self, model_thing, ax_map, ax1, ax2):
-        """Helper to compute screen coordinates for a model's wireframe.
-        Returns (pts_x, pts_y) numpy arrays, or None if failed."""
+    #: Models' wireframes: translucent cyan.
+    MODEL_WIREFRAME_COLOUR = (0, 255, 255, 100)
+
+    def _model_edges_for(self, model_thing):
+        """``(model, positions, edges)`` for a Thing's loaded model, or None.
+
+        2D is a QPainter view, not the renderer's OpenGL context. Never load
+        a model here: OBJ/GLB loading creates VAOs/VBOs and must happen in the
+        3D view's current GL context. The 3D renderer loads it on its next
+        frame.
+        """
         model_path = entity_model_path(model_thing)
         if not model_path:
             return None
-
-        # 2D is a QPainter view, not the renderer's OpenGL context. Never load
-        # a model here: OBJ/GLB loading creates VAOs/VBOs and must happen in the
-        # 3D view's current GL context. The 3D renderer loads it on its next frame.
-        if not self.main_window.view_3d.renderer:
-            return None
-
         renderer = self.main_window.view_3d.renderer
+        if not renderer:
+            return None
         obj = renderer.get_loaded_model(model_path)
         if not obj or not obj.is_loaded:
             return None
-        if not obj or not hasattr(obj, 'cpu_vertices') or obj.cpu_vertices is None or len(obj.cpu_vertices) == 0:
+        edges = model_wireframe.model_edges(obj)
+        if edges is None:
             return None
+        positions, segments = edges
+        if len(segments) > model_wireframe.MAX_WIREFRAME_EDGES:
+            return None                         # drawn as a box
+        return obj, positions, segments
 
-        # Optimization: Too many vertices check
-        if len(obj.cpu_vertices) > 50000:
-            return None # Treat as box fallback elsewhere
+    @staticmethod
+    def _model_placement(model_thing):
+        """``(scale, rotation)`` of a model, as finite floats, or None when
+        its map data or a typed value cannot be drawn (then: a box)."""
+        try:
+            if not all(math.isfinite(float(v)) for v in model_thing.pos[:3]):
+                return None
+        except (TypeError, ValueError):
+            return None
+        return model_wireframe.placement(model_scale(model_thing),
+                                         model_rotation(model_thing))
 
-        # Transform parameters
-        pos = model_thing.pos
-        scale = model_scale(model_thing)
-        if isinstance(scale, (int, float)): scale = [scale, scale, scale]
-        rot = model_rotation(model_thing)
-        
-        # Build Rotation Matrix
-        def rotate_x(a):
-            c, s = np.cos(a), np.sin(a)
-            return np.array([[1,0,0], [0,c,-s], [0,s,c]])
-        def rotate_y(a):
-            c, s = np.cos(a), np.sin(a)
-            return np.array([[c,0,s], [0,1,0], [-s,0,c]])
-        def rotate_z(a):
-            c, s = np.cos(a), np.sin(a)
-            return np.array([[c,-s,0], [s,c,0], [0,0,1]])
+    def _project_model(self, model_thing, positions, ax_map, ax1, ax2):
+        """Screen ``(xs, ys)`` of a model's welded corners in this view, or
+        None when its placement cannot be drawn."""
+        placed = self._model_placement(model_thing)
+        if placed is None:
+            return None
+        scale, rotation = placed
+        return model_wireframe.project(
+            positions, model_thing.pos, scale, rotation, (ax_map[ax1], ax_map[ax2]),
+            (self.width() / 2, self.height() / 2),
+            (self.pan_offset.x(), self.pan_offset.y()), self.zoom_factor,
+            flip_y=self.view_type in ('front', 'side'))
 
-        rx = rotate_x(np.radians(rot[0]))
-        ry = rotate_y(np.radians(rot[1]))
-        rz = rotate_z(np.radians(rot[2]))
-        
-        # Rotation Order: Z * X * Y
-        R = rz @ rx @ ry 
-
-        # Prepare vertices array from cached OBJ data
-        verts = np.array(obj.cpu_vertices)
-        
-        # Apply Transforms
-        verts = verts * np.array(scale)
-        verts = verts @ R.T 
-        verts = verts + np.array(pos)
-        
-        # Extract relevant axes for this 2D view
-        ix1, ix2 = ax_map[ax1], ax_map[ax2]
-        
-        # Project to screen coordinates
-        center_x, center_y = self.width() / 2, self.height() / 2
-        pan_x, pan_y = self.pan_offset.x(), self.pan_offset.y()
-        zoom = self.zoom_factor
-        
-        pts_x = center_x + (verts[:, ix1] - pan_x) * zoom
-        if self.view_type in ['front', 'side']:
-            pts_y = center_y - (verts[:, ix2] - pan_y) * zoom
-        else:
-            pts_y = center_y + (verts[:, ix2] - pan_y) * zoom
-            
-        return pts_x, pts_y
+    def _compute_model_screen_coords(self, model_thing, ax_map, ax1, ax2):
+        """Screen coordinates of a model's corners (for its bounds and hit
+        test). Returns (pts_x, pts_y) numpy arrays, or None if failed."""
+        found = self._model_edges_for(model_thing)
+        if found is None:
+            return None
+        return self._project_model(model_thing, found[1], ax_map, ax1, ax2)
 
     #: An explosion's blast radius: dark orange.
     BLAST_RADIUS_COLOUR = (204, 85, 0)
@@ -2269,67 +2258,51 @@ class View2D(QWidget):
         painter.restore()
 
     def _draw_model_wireframe(self, painter, model_thing, ax_map, ax1, ax2):
-        """Draws the projected wireframe of a 3D model in the 2D view."""
-        model_path = entity_model_path(model_thing)
+        """Draws the projected wireframe of a 3D model in the 2D view.
 
-        coords = self._compute_model_screen_coords(model_thing, ax_map, ax1, ax2)
-
-        if coords is None:
+        In bulk (editor/model_wireframe.py): the model's distinct edges are
+        projected, culled and snapped to pixels in NumPy and drawn with one
+        drawLines call. Drawing them a triangle at a time from Python cost
+        ~25 ms a 6,000-triangle model per view, on every repaint of a drag.
+        """
+        found = self._model_edges_for(model_thing)
+        placed = self._model_placement(model_thing) if found is not None else None
+        if found is None or placed is None:
             painter.setPen(QPen(QColor(200, 200, 200), 1))
             s_pos = self.world_to_screen(QPointF(model_thing.pos[ax_map[ax1]], model_thing.pos[ax_map[ax2]]))
             rect = QRectF(s_pos.x()-10, s_pos.y()-10, 20, 20)
             painter.drawRect(rect)
             return rect
 
-        pts_x, pts_y = coords
-        n_pts = len(pts_x)
+        obj, positions, edges = found
+        scale, rotation = placed
+        i1, i2 = ax_map[ax1], ax_map[ax2]
+        flip_y = self.view_type in ('front', 'side')
+        zoom = self.zoom_factor
+        cached = model_wireframe.wireframe_image(
+            obj, positions, edges, scale, rotation, (i1, i2), zoom, flip_y,
+            self.MODEL_WIREFRAME_COLOUR)
+        if cached is not None:
+            # The same picture for every instance at this zoom: placed at the
+            # model's origin (snapped to a pixel), never re-rasterised while
+            # it is dragged.
+            image, left, top = cached
+            origin = self.world_to_screen(QPointF(model_thing.pos[i1], model_thing.pos[i2]))
+            x = int(round(origin.x())) + left
+            y = int(round(origin.y())) + top
+            rect = QRectF(x, y, image.width(), image.height())
+            if rect.intersects(QRectF(0, 0, self.width(), self.height())):
+                painter.drawImage(x, y, image)
+            return rect
 
-        painter.setPen(QPen(QColor(0, 255, 255, 100), 1))
-        width, height = self.width(), self.height()
-
-        # Prefer the model's index buffer (cpu_triangles) for correct wireframe on
-        # indexed geometry (all GLBs; most OBJs).  Without this, the loop treats
-        # unique shared vertices as sequential flat triangles, which gives wrong
-        # edges AND crashes when vertex_count % 3 != 0.
-        obj = None
-        if model_path and self.main_window.view_3d.renderer:
-            obj = self.main_window.view_3d.renderer.get_loaded_model(model_path)
-        cpu_triangles = getattr(obj, 'cpu_triangles', None)
-
-        if cpu_triangles is not None and len(cpu_triangles):
-            for tri in cpu_triangles:
-                i0, i1, i2 = tri
-                # Guard against malformed index data
-                if i0 >= n_pts or i1 >= n_pts or i2 >= n_pts:
-                    continue
-                # Frustum cull
-                if (pts_x[i0] < 0 and pts_x[i1] < 0 and pts_x[i2] < 0) or \
-                (pts_x[i0] > width and pts_x[i1] > width and pts_x[i2] > width) or \
-                (pts_y[i0] < 0 and pts_y[i1] < 0 and pts_y[i2] < 0) or \
-                (pts_y[i0] > height and pts_y[i1] > height and pts_y[i2] > height):
-                    continue
-                p0 = QPointF(pts_x[i0], pts_y[i0])
-                p1 = QPointF(pts_x[i1], pts_y[i1])
-                p2 = QPointF(pts_x[i2], pts_y[i2])
-                painter.drawLine(p0, p1)
-                painter.drawLine(p1, p2)
-                painter.drawLine(p2, p0)
-        else:
-            # Fallback for non-indexed meshes where vertices are laid out as
-            # sequential flat triangles.  Use n_pts - 2 as the bound so a
-            # vertex count not divisible by 3 never reads past the end of the array.
-            for i in range(0, n_pts - 2, 3):
-                if (pts_x[i] < 0 and pts_x[i+1] < 0 and pts_x[i+2] < 0) or \
-                (pts_x[i] > width and pts_x[i+1] > width and pts_x[i+2] > width) or \
-                (pts_y[i] < 0 and pts_y[i+1] < 0 and pts_y[i+2] < 0) or \
-                (pts_y[i] > height and pts_y[i+1] > height and pts_y[i+2] > height):
-                    continue
-                p0 = QPointF(pts_x[i],   pts_y[i])
-                p1 = QPointF(pts_x[i+1], pts_y[i+1])
-                p2 = QPointF(pts_x[i+2], pts_y[i+2])
-                painter.drawLine(p0, p1)
-                painter.drawLine(p1, p2)
-                painter.drawLine(p2, p0)
+        # Larger on screen than a cached image may be: drawn directly, only
+        # the edges inside the view.
+        pts_x, pts_y = self._project_model(model_thing, positions, ax_map, ax1, ax2)
+        segments = model_wireframe.visible_segments(
+            pts_x, pts_y, edges, self.width(), self.height())
+        if len(segments):
+            painter.setPen(QPen(QColor(*self.MODEL_WIREFRAME_COLOUR), 1))
+            painter.drawLines(model_wireframe.segments_polygon(segments))
 
         return QRectF(float(np.min(pts_x)), float(np.min(pts_y)),
                       max(2.0, float(np.ptp(pts_x))), max(2.0, float(np.ptp(pts_y))))
@@ -3006,8 +2979,9 @@ class View2D(QWidget):
         """
         Check if the 3D camera has moved/rotated since last frame.
         If so, schedule a repaint of this 2D view (only the camera indicator).
-        This runs at ~60 FPS but only repaints when the camera actually changes,
-        keeping CPU usage minimal while providing smooth viewcone updates.
+        Called by the 3D view on each frame it draws in editor mode
+        (MainWindow.notify_camera_moved), and repaints only when the camera
+        actually changed.
         """
         if not self.isVisible() or self._paced_by_play():
             return
@@ -3384,8 +3358,11 @@ class View2D(QWidget):
         return bool(self.editor.view_3d.play_mode)
 
     def _update_connection_animations(self):
-        if (not self.isVisible() or not self.editor.show_logic_links
-                or self._paced_by_play()):
+        if (not self.isVisible() or self._paced_by_play()
+                or not self._animating_links() or not self.connection_animations):
+            # Nothing to animate here: sleep until links are drawn animated
+            # again (draw_logic_connections restarts the timer).
+            self.animation_timer.stop()
             return
         animation_speed = 0.05
         arrow_speed = 0.015  # Speed of traveling arrows
@@ -3428,8 +3405,9 @@ class View2D(QWidget):
             self.arrow_travel_progress[conn_key] = new_arrows
             needs_update = True
         
-        if needs_update: 
-            self.update()
+        if needs_update:
+            # Only the arrows moved: the scene below the links is reused.
+            self._request_arrow_frame()
 
     def draw_connection_drag(self, painter):
         ax1, ax2 = self.get_axes()
@@ -4227,7 +4205,10 @@ class View2D(QWidget):
         
         # Model
         elif add_model_action and action == add_model_action:
-            filepath, _ = QFileDialog.getOpenFileName(self, "Select OBJ Model", "assets/models", "OBJ Files (*.obj)")
+            # Packed models too: Fio's filesystem, not the system dialog.
+            from editor.asset_dialog import get_open_asset_file
+            filepath, _ = get_open_asset_file(self, "Select Model", "assets/models",
+                                              "Model Files (*.obj *.glb)")
             if filepath:
                 try:
                     rel_path = os.path.relpath(filepath, "assets")

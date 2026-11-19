@@ -146,20 +146,6 @@ class SettingsWindow(QDialog):
         self.locked_not_selectable_checkbox = QCheckBox("Locked items not selectable")
         view_2d_layout.addWidget(self.locked_not_selectable_checkbox)
         
-        glow_arrow_layout = QHBoxLayout()
-        glow_arrow_layout.addWidget(QLabel("Glow Arrow Scale:"))
-        self.glow_arrow_scale_slider = QSlider(Qt.Horizontal)
-        self.glow_arrow_scale_slider.setRange(50, 300)
-        self.glow_arrow_scale_slider.setValue(100)
-        self.glow_arrow_scale_slider.setTickPosition(QSlider.TicksBelow)
-        self.glow_arrow_scale_slider.setTickInterval(25)
-        glow_arrow_layout.addWidget(self.glow_arrow_scale_slider)
-        self.glow_arrow_scale_label = QLabel("100%")
-        self.glow_arrow_scale_slider.valueChanged.connect(
-            lambda v: self.glow_arrow_scale_label.setText(f"{v}%"))
-        glow_arrow_layout.addWidget(self.glow_arrow_scale_label)
-        view_2d_layout.addLayout(glow_arrow_layout)
-        
         view_2d_group.setLayout(view_2d_layout)
         layout.addWidget(view_2d_group)
 
@@ -423,6 +409,14 @@ class SettingsWindow(QDialog):
         self.res_group.setLayout(res_layout)
         layout.addWidget(self.res_group)
 
+        self.native_surface_checkbox = QCheckBox("Present the game on its own window (experimental)")
+        self.native_surface_checkbox.setToolTip(
+            "Kiosk mode draws on a native window of its own instead of through\n"
+            "the editor's 3D view, so the frame is not composited a second time.\n"
+            "The same renderer draws either way; if the platform cannot, kiosk\n"
+            "mode carries on in the 3D view.")
+        layout.addWidget(self.native_surface_checkbox)
+
         self.launch_in_editor_checkbox = QCheckBox("Launch packages in editor mode")
         self.launch_in_editor_checkbox.setToolTip(
             "When enabled, opening a .fiopak loads the map in the editor\n"
@@ -624,9 +618,6 @@ class SettingsWindow(QDialog):
         self.selection_transparency_label.setText(f"{selection_trans}%")
         self.show_connections_checkbox.setChecked(self.config.getboolean('Display', 'show_connections', fallback=True))
         self.locked_not_selectable_checkbox.setChecked(self.config.getboolean('Display', 'locked_not_selectable_2d', fallback=True))
-        glow_arrow_scale = self.config.getint('Display', 'glow_arrow_scale', fallback=100)
-        self.glow_arrow_scale_slider.setValue(glow_arrow_scale)
-        self.glow_arrow_scale_label.setText(f"{glow_arrow_scale}%")
         
         self.property_editor_tooltips_checkbox.setChecked(
             self.config.getboolean('Editor', 'property_editor_tooltips', fallback=True))
@@ -699,6 +690,8 @@ class SettingsWindow(QDialog):
             self.kiosk_mode_combo.setCurrentIndex(idx)
         self.kiosk_res_w.setValue(self.config.getint('Kiosk', 'res_width', fallback=1280))
         self.kiosk_res_h.setValue(self.config.getint('Kiosk', 'res_height', fallback=720))
+        self.native_surface_checkbox.setChecked(
+            self.config.getboolean('Kiosk', 'native_surface', fallback=False))
         self.launch_in_editor_checkbox.setChecked(
             self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
         )
@@ -751,7 +744,6 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'selection_transparency', str(self.selection_transparency_slider.value()))
         self.config.set('Display', 'show_connections', str(self.show_connections_checkbox.isChecked()))
         self.config.set('Display', 'locked_not_selectable_2d', str(self.locked_not_selectable_checkbox.isChecked()))
-        self.config.set('Display', 'glow_arrow_scale', str(self.glow_arrow_scale_slider.value()))
         
         self.config.set('Display', 'show_fps', str(self.show_fps_checkbox.isChecked()))
         self.config.set('Display', 'always_show_sysmon', str(self.always_show_sysmon_checkbox.isChecked()))
@@ -809,6 +801,8 @@ class SettingsWindow(QDialog):
         self.config.set('Kiosk', 'window_mode', self.kiosk_mode_combo.currentText())
         self.config.set('Kiosk', 'res_width', str(self.kiosk_res_w.value()))
         self.config.set('Kiosk', 'res_height', str(self.kiosk_res_h.value()))
+        self.config.set('Kiosk', 'native_surface',
+                        str(self.native_surface_checkbox.isChecked()))
         self.config.set('Kiosk', 'launch_in_editor',
                         str(self.launch_in_editor_checkbox.isChecked()))
 
@@ -816,16 +810,35 @@ class SettingsWindow(QDialog):
                 str(self.place_camera_at_player_start_checkbox.isChecked()))
 
     def _restart_application(self):
-        
-        python = sys.executable
-        script = sys.argv[0]
-        args = sys.argv[1:]
-        
-        if self.main_window:
+        """Close the editor through its normal shutdown, then start it again.
+
+        Unsaved work has already been settled by :meth:`_confirm_restart`, so
+        the close does not prompt again, but it still runs the usual teardown
+        (layout saved, logic thread stopped). The new process is started with
+        an argument list -- no shell, and no ``os.execl`` that splits a path
+        containing spaces on Windows -- and only once the close went through.
+        """
+        import subprocess
+        from PyQt5.QtWidgets import QApplication
+
+        frozen = getattr(sys, 'frozen', False) or "__compiled__" in globals()
+        if frozen:
+            command = [sys.executable] + sys.argv[1:]
+        else:
+            command = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
+
+        window = self.main_window
+        if window is not None:
+            window._quit_without_prompt = True
             try:
-                self.main_window.closeEvent = lambda e: e.accept()
-                self.main_window.close()
+                closed = window.close()
             except Exception:
-                pass
-        
-        os.execl(python, python, script, *args)
+                closed = False
+            if not closed:
+                window._quit_without_prompt = False
+                return
+        try:
+            subprocess.Popen(command, cwd=os.getcwd())
+        except OSError as error:
+            print(f"Restart failed: {error}")
+        QApplication.quit()

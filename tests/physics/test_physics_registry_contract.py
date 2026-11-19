@@ -2,6 +2,8 @@
 drives it: every member of the contract, and a contract version it can run
 on. The contract has a version of its own, apart from the plugin API's."""
 
+import importlib
+
 import pytest
 
 from engine import physics
@@ -45,11 +47,16 @@ def test_the_contract_has_its_own_version():
 
 
 def test_soma_and_no_physics_satisfy_the_contract():
-    assert physics.missing_members(Soma(SpatialGrid())) == []
-    assert physics.missing_members(physics.NO_PHYSICS) == []
-    assert physics.contract_compatible(Soma(SpatialGrid())) is None
+    # Soma as it is loaded now: unload_physics() (a host with physics off,
+    # tests/physics/test_physics_switch.py) drops its module, and the next
+    # create_physics imports it afresh -- a new class, not this module's
+    # import-time ``Soma``.
     created = registry.create_physics(SpatialGrid(), "Soma")
-    assert isinstance(created, Soma)
+    current = importlib.import_module("engine.physics.soma").Soma
+    assert type(created) is current
+    assert physics.missing_members(current(SpatialGrid())) == []
+    assert physics.missing_members(physics.NO_PHYSICS) == []
+    assert physics.contract_compatible(current(SpatialGrid())) is None
 
 
 def test_a_factory_returning_an_incomplete_object_is_refused(registered):

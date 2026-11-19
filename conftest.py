@@ -49,6 +49,20 @@ try:
 except OSError:  # pragma: no cover - read-only /tmp is not a test failure
     pass
 
+# Fio's GL format as the application default, before any test builds the
+# QApplication -- as main.py does. Editor windows' own contexts take the
+# default; on macOS the 3D view's core-profile context cannot share with a
+# legacy one, and Qt then rebuilds the view's context (and Fio's renderer)
+# whenever the editor window is shown again (engine/gl_format.py). No vsync:
+# a headless display may never come round to the swap.
+try:
+    from PyQt5.QtWidgets import QApplication as _QApplication
+    if _QApplication.instance() is None:
+        from engine.gl_format import set_default_surface_format
+        set_default_surface_format(0)
+except ImportError:  # pragma: no cover - PyQt5 absent: the Qt tiers skip
+    pass
+
 #: Seed used for every test that does not ask for another.  Property/fuzz tests
 #: derive their own seeds from this so a whole run is reproducible from one
 #: number.
@@ -569,14 +583,42 @@ def _fail_on_a_held_modifier():
 _SETTINGS_INI = os.path.join(_ROOT, "settings.ini")
 
 
-@pytest.fixture(autouse=True)
-def _restore_repo_settings_ini():
-    """Put the tracked settings.ini back after a test that wrote to it.
+@pytest.fixture(scope="session")
+def _settings_dir(tmp_path_factory):
+    """Where each test's own settings.ini is kept (one file per test)."""
+    from tests.helpers import settings_isolation
+    settings_isolation.install()
+    return tmp_path_factory.mktemp("settings")
 
-    MainWindow resolves ``settings.ini`` against the working directory, and
-    closing a window saves its dock layout there. A test that builds a window
-    from the repository root therefore rewrote the shipped default settings
-    and handed its layout to every later test.
+
+_settings_serial = [0]
+
+
+@pytest.fixture(autouse=True)
+def _each_test_has_its_own_settings_ini(_settings_dir):
+    """Editor windows a test builds read and save a settings.ini of the
+    test's own: a fresh copy of the tracked defaults, never the tracked file
+    (tests/helpers/settings_isolation.py). No test sees another's settings,
+    and no run -- however many run at once -- writes the shipped file.
+
+    The redirect is installed at the source, before the editor is imported,
+    so it holds for every window whatever the test imports.
+    """
+    from tests.helpers import settings_isolation
+    _settings_serial[0] += 1
+    settings_isolation.use(settings_isolation.fresh_copy(
+        _settings_dir / ("settings-%d.ini" % _settings_serial[0])))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _tracked_settings_ini_untouched():
+    """Fail a test that changed the tracked settings.ini.
+
+    Windows keep their settings in the test's own copy, so a change here is
+    a leak to fix. It is reported, not written back: restoring a snapshot
+    taken at the start of a test is what let concurrent runs overwrite each
+    other's restores (and once left the file empty).
     """
     try:
         with open(_SETTINGS_INI, "rb") as fh:
@@ -589,11 +631,11 @@ def _restore_repo_settings_ini():
     try:
         with open(_SETTINGS_INI, "rb") as fh:
             after = fh.read()
-        if after != before:
-            with open(_SETTINGS_INI, "wb") as fh:
-                fh.write(before)
     except OSError:  # pragma: no cover - read-only checkout
-        pass
+        return
+    if after != before:
+        pytest.fail("this test changed the tracked settings.ini (an editor window "
+                    "saved there instead of its own copy)", pytrace=False)
 
 
 @pytest.fixture(autouse=True)

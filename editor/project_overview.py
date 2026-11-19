@@ -10,6 +10,7 @@ what a map contains can be asserted in a test without building a window.
 """
 
 import datetime
+import html
 import os
 
 from PyQt5.QtWidgets import QMessageBox
@@ -161,7 +162,10 @@ def format_overview(stats: dict, map_name: str) -> str:
         '<hr style="border:1px solid #444; margin-top:10px;">'
         '<div style="color:#aaaaaa;">Created: %s</div>'
         '<div style="color:#aaaaaa;">Last modified: %s</div>'
-        % (map_name, ''.join(rows), stats['created'], stats['modified'])
+        # The name and dates come from the map file (``created`` is shown
+        # as written when it is not an ISO date): text, never markup.
+        % (html.escape(str(map_name)), ''.join(rows),
+           html.escape(str(stats['created'])), html.escape(str(stats['modified'])))
     )
 
 

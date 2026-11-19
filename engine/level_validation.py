@@ -67,6 +67,37 @@ def _vector(value) -> bool:
             and all(finite_number(v) for v in value))
 
 
+#: Largest coordinate a map may place anything at. Far beyond any authored
+#: world (the bundled maps stay within 10,000 units); a value like 1e308
+#: passes ``isfinite`` but overflows the spatial grid at play start.
+WORLD_COORDINATE_LIMIT = 1.0e7
+
+
+def _world_vector(value) -> bool:
+    return _vector(value) and all(abs(v) <= WORLD_COORDINATE_LIMIT for v in value)
+
+
+def _validate_planes(geometry, label):
+    """An angled brush's planes: each a finite, non-zero normal ``n`` and a
+    finite offset ``d`` within the world. A NaN normal used to load, leave the
+    brush without a size, and fail Play start half-way."""
+    planes = geometry.get('planes')
+    if planes is None:
+        return
+    if not isinstance(planes, list):
+        raise ValueError(f"{label}['geometry']['planes'] must be a list")
+    for index, plane in enumerate(planes):
+        where = f"{label}['geometry']['planes'][{index}]"
+        if not isinstance(plane, dict):
+            raise ValueError(f"{where} must be an object")
+        normal = plane.get('n')
+        if not _vector(normal) or not any(abs(v) > 1e-12 for v in normal):
+            raise ValueError(f"{where}['n'] must be a non-zero 3-element vector")
+        offset = plane.get('d')
+        if not finite_number(offset) or abs(offset) > WORLD_COORDINATE_LIMIT * 4:
+            raise ValueError(f"{where}['d'] must be a number within the world")
+
+
 def validate_level(level_data, *, partial=False, where="map") -> None:
     """Raise ``ValueError`` if *level_data* is not shaped like a map.
 
@@ -129,12 +160,17 @@ def _validate_record(item, kind, label, partial):
             continue
         if not _vector(value):
             raise ValueError(f"{label}['{field}'] must be a 3-element vector")
+        if not _world_vector(value):
+            raise ValueError(f"{label}['{field}'] lies beyond the world "
+                             f"(more than {WORLD_COORDINATE_LIMIT:g} units out)")
 
     if kind == 'brushes':
         for field in BRUSH_OBJECT_FIELDS:
             value = item.get(field)
             if value is not None and not isinstance(value, dict):
                 raise ValueError(f"{label}['{field}'] must be an object")
+        if isinstance(item.get('geometry'), dict):
+            _validate_planes(item['geometry'], label)
         for field in BRUSH_NUMBER_FIELDS:
             if field in item and not finite_number(item[field]):
                 raise ValueError(f"{label}['{field}'] must be a number")

@@ -64,6 +64,11 @@ def inspector(main_window):
     host = _record_toasts(main_window)
     brush = make_box()
     host.state.brushes.append(brush)
+    # Its id now, as every brush the editor makes has one: the logic thread
+    # stamps one onto an id-less brush whenever it rebuilds its caches
+    # (engine/logic_world.py), at a moment of its own -- after a test has
+    # taken its "before" copy of the brush, on a slow machine.
+    host.state.ensure_entity_ids()
     host.set_selected_objects([brush])
     host.show_surface_inspector(brush, 'north')
     panel = host.surface_inspector
@@ -609,6 +614,11 @@ def test_escape_is_handled_by_the_editor_host(main_window):
     host = main_window
     brush = make_box()
     host.state.brushes.append(brush)
+    # Its id now, as every brush the editor makes has one: the logic thread
+    # stamps one onto an id-less brush whenever it rebuilds its caches
+    # (engine/logic_world.py), at a moment of its own -- after a test has
+    # taken its "before" copy of the brush, on a slow machine.
+    host.state.ensure_entity_ids()
     host.set_selected_objects([brush])
     host.show_surface_inspector(brush, 'north')
     panel = host.surface_inspector

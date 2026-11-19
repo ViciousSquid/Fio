@@ -244,10 +244,23 @@ class PluginHost:
         a disabled plugin's event hooks go quiet without unsubscribing.
         """
         plugin = self._plugin
+        manager = self._manager
+        hook = f"on('{event}') handler"
 
         def gated(ev):
-            if getattr(plugin, "enabled", True):
-                return handler(ev)
+            if not getattr(plugin, "enabled", True):
+                return None
+            # Failures go through the same policy as on_tick: the first ones
+            # logged in full, then thinned, and a handler that fails on every
+            # emit (a per-frame render or tick event) switches its plugin off
+            # instead of logging a traceback sixty times a second.
+            try:
+                result = handler(ev)
+            except Exception:
+                manager._hook_failed(plugin, hook)
+                return None
+            manager._hook_ok(plugin, hook)
+            return result
 
         # Remember the wrapper so off() can find it by the original handler.
         # Keyed by (event, handler): one handler subscribed to several events
@@ -286,22 +299,43 @@ class PluginHost:
 
         A guarded monkey-patch helper for the rare extension that must intercept
         an existing engine call rather than react to an event. If the wrapper
-        raises, the original is called so behaviour degrades to stock. Returns
-        True if the wrap was installed.
+        raises before calling through, the original is called so behaviour
+        degrades to stock (never twice); while the plugin is disabled the
+        original is called directly. Repeated failures are thinned and
+        disable the plugin, as for ``on_tick``. Returns True if the wrap was
+        installed.
         """
         original = getattr(obj, method_name, None)
         if not callable(original):
             return False
 
+        manager = self._manager
+        plugin = self._plugin
+        hook = f"wrap of {method_name}"
+
         def wrapped(*args, **kwargs):
-            try:
-                return wrapper(original, *args, **kwargs)
-            except Exception:
-                import traceback
-                self._manager._log(
-                    f"[{self._plugin.name}] wrap of {method_name} failed, "
-                    f"using original:\n{traceback.format_exc()}")
+            # Track whether the wrapper already called through: if it raises
+            # *after* the original ran, running the original again would
+            # repeat its side effects (a second door open, a double save).
+            if not getattr(plugin, "enabled", True):
+                # Switched off (by the user, or after repeated failures):
+                # stock behaviour.
                 return original(*args, **kwargs)
+            calls = []
+
+            def tracked(*a, **kw):
+                calls.append(True)
+                return original(*a, **kw)
+
+            try:
+                result = wrapper(tracked, *args, **kwargs)
+            except Exception:
+                manager._hook_failed(plugin, hook)
+                if calls:
+                    return None
+                return original(*args, **kwargs)
+            manager._hook_ok(plugin, hook)
+            return result
 
         try:
             setattr(obj, method_name, wrapped)

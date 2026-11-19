@@ -303,6 +303,9 @@ class PassesMixin:
             shadow_unit_base=self.SHADOW_TEXTURE_UNIT_BASE,
             env_uniforms=self.env_uniform_values(),
         )
+        # The terrain binds its own cube-maps (or placeholders) on the shadow
+        # units: the next lit pass binds the renderer's again.
+        self.shadow_units_changed()
         stats.terrain_visible_chunks = terrain_gl.visible_chunks
         stats.terrain_culled_chunks = terrain_gl.culled_chunks
         stats.terrain_triangles = terrain_gl.total_triangles

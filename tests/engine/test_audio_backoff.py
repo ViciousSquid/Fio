@@ -37,20 +37,19 @@ def test_a_failed_mixer_is_not_reprobed_on_every_sound(main_window, qt_app, monk
     try:
         ensure = view.audio._ensure_pygame_mixer
 
-        # Construction performs the first real mixer probe. Repeated sound
+        # Construction performs the one real mixer probe: __init__ and
+        # _init_sound_system share the backoff (a device-less machine used
+        # to be probed twice at start-up, ~100 ms each). Repeated sound
         # requests must not probe again until the retry window expires.
-        # __init__ probes once before _init_sound_system performs the
-        # shared retry probe; the important contract is that no third probe
-        # occurs until the retry window expires.
-        assert mixer.attempts == 2
+        assert mixer.attempts == 1
 
         for _ in range(20):
             assert ensure() is False
-        assert mixer.attempts == 2
+        assert mixer.attempts == 1
 
         clock[0] += view.audio.MIXER_RETRY_SECONDS
         assert ensure() is False
-        assert mixer.attempts == 3, "a device connected later would never be found"
+        assert mixer.attempts == 2, "a device connected later would never be found"
     finally:
         view.deleteLater()
         qt_app.processEvents()

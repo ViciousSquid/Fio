@@ -2170,6 +2170,41 @@ class MonsterAIThread(threading.Thread):
         self.tick_duration = 1.0 / tick_rate
         self.running = False
         self._stop_event = threading.Event()
+        self._failures = 0
+        self._last_error = None
+
+    #: Consecutive failed updates (one second at 30 Hz) after which Play is
+    #: ended through the logic thread's fault path.
+    MAX_CONSECUTIVE_FAILURES = 30
+
+    def _update_failed(self):
+        """Report a failed update (call inside ``except``).
+
+        One bad update is logged and the AI carries on. The traceback is
+        logged once per distinct error, not 30 times a second; an update that
+        fails every tick (one bad monster aborts the pass, freezing every
+        monster after it) ends Play the way a failed logic tick does.
+        """
+        import traceback
+        trace = traceback.format_exc()
+        key = trace.strip().splitlines()[-1] if trace.strip() else ""
+        self._failures += 1
+        if key != self._last_error:
+            self._last_error = key
+            debug_log("MonsterAI", "Unhandled exception in update:\n" + trace)
+        if self._failures != self.MAX_CONSECUTIVE_FAILURES:
+            return
+        debug_log("MonsterAI", f"Monster AI failed {self._failures} updates in a "
+                  "row; ending the play session.")
+        lt = self.lt
+        callback = getattr(lt, '_gui_fault_teardown', None)
+        if callback is not None and not getattr(lt, '_gui_fault_teardown_requested', True):
+            lt._gui_fault_teardown_requested = True
+            try:
+                callback(trace)
+            except Exception:
+                debug_log("MonsterAI", "Could not queue the play teardown:\n"
+                          + traceback.format_exc())
 
     def start(self):
         # Set before the thread exists, not in run(): a stop() arriving before
@@ -2207,13 +2242,9 @@ class MonsterAIThread(threading.Thread):
                     try:
                         self.monster_ai.update(self.tick_duration)
                     except Exception:
-                        # Same policy as LogicThread.run: one bad update is
-                        # logged in full and the AI carries on, rather than
-                        # every monster silently freezing for the rest of the
-                        # session.
-                        import traceback
-                        debug_log("MonsterAI", "Unhandled exception in update:\n"
-                                  + traceback.format_exc())
+                        self._update_failed()
+                    else:
+                        self._failures = 0
                 #: Milliseconds the last AI update took, lock wait included
                 #: (Debug Tables).
                 self.update_ms = (time.perf_counter() - started) * 1000.0

@@ -401,16 +401,22 @@ class OcclusionMixin:
             elif len(changed):
                 index.update(table, changed.tolist())
             held[3] = table.row_change_serial
+        # Indexing wants intp; the published slots are int32, so asarray made
+        # a new writeable array every frame. Every "unchanged" return below
+        # hands back the caller's own array, and the kept result is found by
+        # it, so what follows (the classify memo) still knows a still frame
+        # by identity instead of comparing its rows (M4).
+        given = slots
         slots = np.asarray(slots, dtype=np.intp)
         visible = index.visible(slots)
         self._occlusion_cpu_index_ms = (
             time.perf_counter_ns() - t_index) * 1e-6
         if visible is None:
-            return slots
+            return given
         eligible, group_bounds, group_of_row, group_cells, counts, signatures = visible
         safe_count = int(np.count_nonzero(eligible))
         if safe_count < self._occlusion_min_rows:
-            return slots
+            return given
         self._occlusion_rows_sampled = safe_count
         groups = (group_bounds, group_of_row, group_cells)
         # A signature is built only when a cell's published rows change.
@@ -452,7 +458,7 @@ class OcclusionMixin:
         if jumped or turned:
             self._occlusion_view_epoch += 1
             book.retire(())
-            return slots
+            return given
 
         frame = self._occlusion_frame
         culled_groups = np.zeros(len(group_bounds), dtype=bool)
@@ -463,7 +469,7 @@ class OcclusionMixin:
                 culled_groups[i] = True
         if not culled_groups.any():
             self._occlusion_drawn = len(slots)
-            return slots
+            return given
 
         # The same visible set (the same immutable array), the same rows and
         # the same hidden groups: the same result, handed back as the same
@@ -472,8 +478,12 @@ class OcclusionMixin:
         if kept is None:
             kept = self._occlusion_kept = {}
         inputs = (table.generation, table.transform_version)
-        held = kept.get(self._instance_view)
-        if (held is not None and held[0] is slots and held[1] == inputs
+        # Per view and table: the two render buffers' tables take turns.
+        key = (self._instance_view, id(table))
+        held = kept.get(key)
+        if held is not None and held[5]() is not table:
+            held = None
+        if (held is not None and held[0] is given and held[1] == inputs
                 and np.array_equal(held[2], culled_groups)):
             self._occlusion_skipped, self._occlusion_drawn = held[4]
             return held[3]
@@ -485,8 +495,14 @@ class OcclusionMixin:
         # convex geometry should not bury a useful small occlusion region.
         out = slots[keep]
         out.flags.writeable = False
-        kept[self._instance_view] = (slots, inputs, culled_groups, out,
-                                     (self._occlusion_skipped, self._occlusion_drawn))
+        if key not in kept:
+            for dead in [k for k, e in kept.items() if e[5]() is None]:
+                del kept[dead]
+            while len(kept) >= 32:
+                del kept[next(iter(kept))]
+        kept[key] = (given, inputs, culled_groups, out,
+                     (self._occlusion_skipped, self._occlusion_drawn),
+                     weakref.ref(table))
         return out
 
     def _occlusion_end_of_frame(self, projection, view, camera_pos, config):

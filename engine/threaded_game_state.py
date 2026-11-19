@@ -139,6 +139,7 @@ class RenderState:
         self.total_brushes = 0
         self.culled_brushes = 0
         self.timestamp = 0.0
+        self.publication_serial = 0
         #: Logic-thread milliseconds spent preparing this frame.
         self.prepare_ms = 0.0
 
@@ -222,6 +223,7 @@ class RenderState:
         self.total_brushes = 0
         self.culled_brushes = 0
         self.timestamp = 0.0
+        self.publication_serial = 0
         self.prepare_ms = 0.0
 
 
@@ -259,6 +261,10 @@ class ThreadedGameState:
 
     #: Pending sound requests kept while the UI is not draining them.
     SOUND_QUEUE_LIMIT = 256
+    #: Console commands queued by map logic (logic_command) between frames. A
+    #: timer firing every tick cannot grow the queue without bound; the
+    #: oldest are dropped, as with sounds.
+    CONSOLE_QUEUE_LIMIT = 256
     def __init__(self):
         self._render_state_lock = _OwnedLock()
         #: Lease releases a finalizer could not take the lock for (it ran on
@@ -289,6 +295,14 @@ class ThreadedGameState:
         #: handed to the renderer, and swaps declined because it was reading.
         self.published_frames = 0
         self.declined_swaps = 0
+        #: Published frames replaced by a newer one before the renderer took
+        #: them (try_swap): publications no paint ever showed.
+        self.superseded_frames = 0
+        #: Called (no arguments, outside the lock, on whichever thread
+        #: published) each time a frame is published. Kiosk mode sets it so
+        #: the view paints a frame the moment it exists rather than on its
+        #: next timer tick; None otherwise.
+        self.publish_listener = None
 
         # Input state
         self._keys_lock = threading.Lock()
@@ -331,7 +345,7 @@ class ThreadedGameState:
         # main thread, where the console handler and its Qt widgets are safe to
         # touch. Mirrors the sound queue pattern.
         self._console_cmd_lock = threading.Lock()
-        self.console_command_queue = deque()
+        self.console_command_queue = deque(maxlen=self.CONSOLE_QUEUE_LIMIT)
 
     @staticmethod
     def _release_render_state_lease(owner_ref) -> None:
@@ -347,12 +361,16 @@ class ThreadedGameState:
             # A collection inside a locked section of this very thread.
             owner._deferred_releases.append(1)
             return
+        published = False
         with owner._render_state_lock:
             owner._fold_deferred_releases()
             if owner._read_leases > 0:
                 owner._read_leases -= 1
             if owner._read_leases == 0 and owner._write_ready:
                 owner._swap_locked()
+                published = True
+        if published:
+            owner._notify_published()
 
     def _fold_deferred_releases(self) -> None:
         """Apply lease releases deferred by a finalizer (caller holds the lock)."""
@@ -444,15 +462,31 @@ class ThreadedGameState:
                 self._write_ready = True
                 return False
             self._swap_locked()
-            return True
+        self._notify_published()
+        return True
+
+    def _notify_published(self) -> None:
+        """Tell :attr:`publish_listener` a frame was published. Never raises
+        into the publisher (the logic thread)."""
+        listener = self.publish_listener
+        if listener is not None:
+            try:
+                listener()
+            except Exception:
+                pass
 
     def _swap_locked(self) -> None:
         self.published_frames += 1
+        if self._has_new_frame:
+            self.superseded_frames += 1
         self._write_ready = False
         old_read = self._read_state
         self._read_state = self._write_state
         old_read.reset()
         self._write_state = old_read
+        # Which publication this is: a paint can tell a frame it already
+        # showed (a duplicate) from a new one, and count those it skipped.
+        self._read_state.publication_serial = self.published_frames
         self._has_new_frame = True
 
     def try_swap(self) -> bool:

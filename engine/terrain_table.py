@@ -111,8 +111,16 @@ def pack_keys(cx, cz):
     return (cx << 32) + (cz & 0xFFFFFFFF)
 
 
+#: The last bounds ensure_bounds refused, so the warning is printed once.
+_last_refused_bounds = None
+
+
 class TerrainTable:
     """Dense per-chunk terrain state. See the module docstring."""
+
+    #: Most chunks ensure_bounds makes resident (the non-streaming mode).
+    #: Generous next to Terrain.MAX_BOUNDED_CHUNKS, which a map may name.
+    MAX_ENSURED_CHUNKS = 256 * 256
 
     # Declared like RenderTable's and EntityTable's, which is also how the
     # Debug Tables instrument discovers a table's columns.
@@ -310,6 +318,17 @@ class TerrainTable:
         """
         min_cx, max_cx, min_cz, max_cz = bounds
         if min_cx > max_cx or min_cz > max_cz:
+            return
+        count = (int(max_cx) - int(min_cx) + 1) * (int(max_cz) - int(min_cz) + 1)
+        if count > self.MAX_ENSURED_CHUNKS:
+            # Not a terrain anyone authored (the editor's bounds and a map's
+            # are both checked): a bounding box this size is meant to be
+            # streamed. Making it all resident would exhaust memory.
+            global _last_refused_bounds
+            if tuple(bounds) != _last_refused_bounds:
+                _last_refused_bounds = tuple(bounds)
+                print(f"[Terrain] Not making {count} chunks resident; "
+                      f"bounds {tuple(bounds)} need streaming")
             return
         gz, gx = np.meshgrid(np.arange(min_cz, max_cz + 1, dtype=np.int64),
                              np.arange(min_cx, max_cx + 1, dtype=np.int64),

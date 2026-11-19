@@ -22,9 +22,10 @@ ticks and projects the frame, ``ThreadedGameState`` publishes it, and
 * **the display** - offscreen Qt, or Xvfb for :meth:`paint`.
 
 The working directory is the repository root, as for ``main.py``: the engine
-resolves ``assets/`` against it. The editor writes its layout and recent files
-back to the repository's ``settings.ini``; the session restores the file when
-it closes, so a session used outside pytest leaves no trace either.
+resolves ``assets/`` against it. The editor keeps its settings in a file of
+its own, never the repository's ``settings.ini``
+(tests/helpers/settings_isolation.py): under pytest each test's copy; used
+outside pytest, a temporary copy for the session's lifetime.
 """
 
 import contextlib
@@ -61,9 +62,16 @@ class FioTestSession:
         self.app = app
         self._previous_cwd = os.getcwd()
         os.chdir(REPO_ROOT)
-        self._settings_path = os.path.join(REPO_ROOT, "settings.ini")
-        with open(self._settings_path, "rb") as handle:
-            self._settings = handle.read()
+        self._own_settings = None
+        from tests.helpers import settings_isolation
+        if not settings_isolation.redirected():
+            # Outside pytest: a temporary copy of its own, for its lifetime.
+            import tempfile
+            settings_isolation.install()
+            handle, path = tempfile.mkstemp(prefix="fio-session-", suffix=".ini")
+            os.close(handle)
+            self._own_settings = settings_isolation.fresh_copy(path)
+            settings_isolation.use(self._own_settings)
         self.window = MainWindow(REPO_ROOT)
         self.window.show()
         self.view = self.window.view_3d
@@ -205,8 +213,14 @@ class FioTestSession:
             self.window.close()
             self.window.deleteLater()
             self.window = self.view = self.logic = None
-            with open(self._settings_path, "wb") as handle:
-                handle.write(self._settings)
+            if self._own_settings is not None:
+                from tests.helpers import settings_isolation
+                settings_isolation.use(None)
+                try:
+                    os.remove(self._own_settings)
+                except OSError:
+                    pass
+                self._own_settings = None
             os.chdir(self._previous_cwd)
             deadline = time.perf_counter() + 2.0
             while window() is not None and time.perf_counter() < deadline:

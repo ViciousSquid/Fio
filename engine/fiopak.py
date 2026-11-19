@@ -29,6 +29,7 @@ import io
 import json
 import posixpath
 import zipfile
+import zlib
 from typing import BinaryIO, Dict, List, Optional
 
 
@@ -180,7 +181,10 @@ class FioPackage:
     @property
     def required_plugins(self) -> List[str]:
         """Names of separately-installed plugins this package depends on."""
-        return list(self._manifest.get("plugins", []) or [])
+        plugins = self._manifest.get("plugins")
+        if not isinstance(plugins, list):
+            return []
+        return [str(name) for name in plugins if isinstance(name, str)]
 
     # ------------------------------------------------------------------
     # Map discovery
@@ -314,7 +318,7 @@ class FioPackage:
 
         try:
             data = self._zf.read(resolved)
-        except (KeyError, zipfile.BadZipFile):
+        except _MEMBER_READ_ERRORS:
             return None
 
         self._asset_bytes_loaded += declared_size
@@ -411,7 +415,7 @@ class FioPackage:
                 f"byte limit for package documents")
         try:
             return self._zf.read(name)
-        except (KeyError, zipfile.BadZipFile):
+        except _MEMBER_READ_ERRORS:
             return None
 
     def namelist(self) -> List[str]:
@@ -422,6 +426,15 @@ class FioPackage:
 # ----------------------------------------------------------------------
 # Module-level helpers
 # ----------------------------------------------------------------------
+#: What reading one archive member can raise for a damaged or unusual
+#: package: a bad CRC (BadZipFile), an encrypted member (RuntimeError), an
+#: unsupported compression method (NotImplementedError), corrupt deflate data
+#: (zlib.error) or a truncated file (EOFError, OSError). Each means that
+#: member cannot be read -- not that the editor should stop.
+_MEMBER_READ_ERRORS = (KeyError, zipfile.BadZipFile, RuntimeError,
+                       NotImplementedError, zlib.error, EOFError, OSError)
+
+
 def _normalize(path: str) -> str:
     """Forward slashes, no leading slash, no ``./`` — ZIP-internal form."""
     p = str(path).replace("\\", "/").lstrip("/")

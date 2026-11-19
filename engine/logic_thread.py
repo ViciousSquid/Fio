@@ -419,6 +419,11 @@ class LogicThread(threading.Thread):
         Returns the time left over for the next frame.
         """
         with self._tick_lock:
+            if self._tick_faulted and self.session_runtime.play_mode:
+                # A tick failed and the GUI teardown is queued but has not run
+                # yet: the world is half-advanced, so it must not be ticked
+                # again (each attempt would also log another fatal traceback).
+                accumulator = 0.0
             while accumulator >= self.TICK_DURATION:
                 started = time.perf_counter()
                 try:

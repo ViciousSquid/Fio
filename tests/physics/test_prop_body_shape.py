@@ -78,6 +78,14 @@ def test_a_pushed_prop_stops_at_the_other_s_face(fio_session):
     session.window.unsaved_changes = False
 
 
+def _show_physics_tab(main_window):
+    """Open the Prop page's Physics tab, as a click on it does (it is built
+    the first time it is shown)."""
+    tabs = main_window.property_editor.tab_widget
+    tabs.setCurrentIndex(next(i for i in range(tabs.count())
+                              if tabs.tabText(i) == "Physics"))
+
+
 def test_the_collision_shape_is_aabb_or_mesh_and_aabb_by_default(main_window):
     from editor.things import Thing
     from PyQt5.QtWidgets import QComboBox
@@ -86,6 +94,7 @@ def test_the_collision_shape_is_aabb_or_mesh_and_aabb_by_default(main_window):
     legacy = Thing.from_dict(_prop("old", (0, 0, 0), collision_shape="auto"))
     main_window.state.things += [prop, legacy]
     main_window.set_selected_objects([prop])
+    _show_physics_tab(main_window)
     combo = main_window.property_editor._widgets.get('prop_collision_shape_combo')
 
     assert isinstance(combo, QComboBox)
@@ -96,6 +105,7 @@ def test_the_collision_shape_is_aabb_or_mesh_and_aabb_by_default(main_window):
 
     # A map saved when there was an "Automatic": it is AABB.
     main_window.set_selected_objects([legacy])
+    _show_physics_tab(main_window)
     combo = main_window.property_editor._widgets.get('prop_collision_shape_combo')
     assert combo.currentText() == 'AABB'
     main_window.unsaved_changes = False

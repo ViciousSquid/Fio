@@ -41,7 +41,8 @@ class Thing:
             Thing._counters[cls] = Thing._counters.get(cls, 0) + 1
             self.properties["name"] = f"{cls}_{Thing._counters[cls]}"
 
-        self.properties.setdefault("id", str(uuid.uuid4()))
+        if "id" not in self.properties:
+            self.properties["id"] = str(uuid.uuid4())
         self.properties.setdefault("_io_connections", [])
 
     @property

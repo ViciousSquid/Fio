@@ -209,6 +209,42 @@ def visible_decals(models, projection, view, camera_pos, viewport_height):
     return np.flatnonzero(inside & big_enough)
 
 
+
+def _decode_layers(names, size):
+    """:func:`_decal_layer` for each decal file in *names*, in order, on a
+    few worker threads; None for one that cannot be read (it is reported, and
+    kept as a blank layer so every later image keeps its layer)."""
+    def load(name):
+        try:
+            return _decal_layer(asset_source(os.path.join(DECAL_FOLDER, name)), size)
+        except Exception as exc:
+            print(f'[Renderer] decal texture {name} not loaded: {exc}')
+            return None
+
+    if len(names) < 4:
+        return [load(name) for name in names]
+    from concurrent.futures import ThreadPoolExecutor
+    workers = max(1, min(4, (os.cpu_count() or 1)))
+    with ThreadPoolExecutor(max_workers=workers,
+                            thread_name_prefix='DecalDecode') as pool:
+        return list(pool.map(load, names))
+
+
+def _decal_layer(source, size):
+    """The decal image at *source* as a ``size`` x ``size`` RGBA layer.
+
+    Every library image is decoded for the first frame that shows decals, and
+    they are up to 1536 px for a 256 px layer. A JPEG is decoded at a reduced
+    scale (``draft``) and the picture box-reduced to within twice the layer
+    size before the Lanczos pass (``reducing_gap``): Pillow's own fast path,
+    about a third of the cost, and visually the same at 256 px.
+    """
+    from PIL import Image
+    with Image.open(source) as image:
+        image.draft('RGB', (size * 2, size * 2))
+        return np.asarray(image.convert('RGBA').resize(
+            (size, size), Image.LANCZOS, reducing_gap=2.0), dtype=np.uint8)
+
 class DecalsMixin:
     """``draw_decals`` and the GL objects it owns."""
 
@@ -281,23 +317,20 @@ class DecalsMixin:
         files = tuple(n for n in names if not decal_text.is_entry(n))
         kept = self._decal_layer_pixels if files == self._decal_layer_files else {}
         pixels = {}
+        # A sign's words are drawn only at full resolution, into the placed
+        # images' array (it always paints from there): here a blank layer
+        # keeps its place. The image files are decoded in parallel -- Pillow
+        # releases the GIL while it decodes and resizes, and the whole
+        # library (up to 1536 px sources) is read for the first frame that
+        # shows a decal.
+        wanted = [n for n in names if n not in kept and not decal_text.is_entry(n)]
+        decoded = dict(zip(wanted, _decode_layers(wanted, size)))
         for name in names:
             layer = kept.get(name)
             if layer is None:
-                try:
-                    if decal_text.is_entry(name):
-                        # A sign's words are drawn only at full resolution,
-                        # into the placed images' array (it always paints
-                        # from there): here a blank layer keeps its place.
-                        layer = blank
-                    else:
-                        image = Image.open(asset_source(os.path.join(DECAL_FOLDER, name)))
-                        layer = np.asarray(image.convert('RGBA').resize(
-                            (size, size), Image.LANCZOS), dtype=np.uint8)
-                except Exception as exc:
-                    # Kept as a blank layer: every later image keeps its layer.
-                    print(f'[Renderer] decal texture {name} not loaded: {exc}')
-                    layer = blank
+                layer = decoded.get(name)
+            if layer is None:
+                layer = blank
             pixels[name] = layer
             layers.append(layer)
         previous = self._decal_layer_names

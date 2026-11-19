@@ -146,13 +146,11 @@ def test_choosing_the_oil_barrel_takes_back_the_ball_settings(panel):
 
 def test_browsing_to_the_numbered_ball_applies_the_ball_settings_at_scale_2(
         panel, monkeypatch):
-    from PyQt5.QtWidgets import QFileDialog
-
     prop = Prop.for_model(Prop.DEFAULT_MODEL_PATH, pos=[0, 0, 0])
     representation_combo(panel, prop)
     picked = os.path.join(ROOT, 'assets', 'models', 'ball_numbers.obj')
-    monkeypatch.setattr(QFileDialog, 'getOpenFileName',
-                        staticmethod(lambda *a, **k: (picked, '')))
+    monkeypatch.setattr('editor.property_editor.get_open_asset_file',
+                        lambda *a, **k: (picked, ''))
     panel._widgets['prop_model_browse_button'].click()
 
     p = prop.properties
@@ -162,14 +160,12 @@ def test_browsing_to_the_numbered_ball_applies_the_ball_settings_at_scale_2(
 
 
 def test_browsing_to_another_model_changes_only_the_model(panel, monkeypatch):
-    from PyQt5.QtWidgets import QFileDialog
-
     prop = Prop.for_model(Prop.DEFAULT_MODEL_PATH, pos=[0, 0, 0])
     before = dict(prop.properties)
     representation_combo(panel, prop)
     picked = os.path.join(ROOT, 'assets', 'models', 'prop_book.obj')
-    monkeypatch.setattr(QFileDialog, 'getOpenFileName',
-                        staticmethod(lambda *a, **k: (picked, '')))
+    monkeypatch.setattr('editor.property_editor.get_open_asset_file',
+                        lambda *a, **k: (picked, ''))
     panel._widgets['prop_model_browse_button'].click()
 
     changed = {k for k in prop.properties if prop.properties[k] != before.get(k)}

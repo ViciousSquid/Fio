@@ -46,6 +46,21 @@ from .shaders import ShadersMixin
 
 
 
+
+#: Entries a per-(view, table) kept result holds at most: views (main,
+#: split-screen, portal, mirror) times the two render buffers, with room.
+KEPT_PER_TABLE_LIMIT = 32
+
+
+def _forget_dead_tables(kept, ref_index):
+    """Drop *kept* entries whose table (``entry[ref_index]``, a weakref) is
+    gone, then the oldest while over :data:`KEPT_PER_TABLE_LIMIT`."""
+    for key in [k for k, entry in kept.items() if entry[ref_index]() is None]:
+        del kept[key]
+    while len(kept) >= KEPT_PER_TABLE_LIMIT:
+        del kept[next(iter(kept))]
+
+
 class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
                       PassesMixin, LightingMixin, PortalsMixin, InstancingMixin, DecalsMixin,
                       OcclusionMixin, ShadersMixin, RendererCore):
@@ -244,6 +259,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._light_ubo = None
         self._light_ubo_capacity = 0
         self._light_ubo_key = None
+        self._light_ubo_lights = None
         #: Whether ``_light_ubo`` is bound to ``LIGHT_UBO_BINDING``; see
         #: :meth:`_ensure_light_ubo`.
         self._light_ubo_bound = False
@@ -366,8 +382,13 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         """:meth:`_distance_cull_slots`, its result kept per view (M4): the
         same read-only array while the visible set (the same immutable
         array), the camera's position, the limit and the table's transforms
-        stand; a result equal to the last keeps the last array."""
-        key = self._instance_view
+        stand; a result equal to the last keeps the last array.
+
+        Kept per view *and table*: the two double-buffered render tables take
+        turns frame by frame, so one entry per view was replaced every frame
+        and a still frame in Play handed every pass after it a new array
+        (the classify memo then compared all its rows)."""
+        key = (self._instance_view, id(table))
         held = self._distance_culls.get(key)
         inputs = (cx, cz, limit_sq, table.generation, table.transform_version)
         if (held is not None and held[0] is slots and not slots.flags.writeable
@@ -378,6 +399,8 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
             culled = held[3]
         else:
             culled.flags.writeable = False
+        if held is None:
+            _forget_dead_tables(self._distance_culls, 1)
         self._distance_culls[key] = (slots, weakref.ref(table), inputs, culled)
         return culled
 
@@ -404,6 +427,15 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         """Decode and upload the selected panorama once for this renderer."""
         path = self._background_image_path
         if not path or path == self._background_failed_path:
+            return False
+        # The path comes from the map. Outside files are allowed (the user
+        # can pick one), but a UNC or device path is never probed: on Windows
+        # that alone opens an SMB connection to the named host.
+        normal = path.replace('\\', '/')
+        if normal[:2] == '//' or '://' in normal:
+            from engine.asset_paths import warn_refused
+            warn_refused(path, 'sky image')
+            self._background_failed_path = path
             return False
         from engine.asset_archives import asset_source
         source = asset_source(path)
@@ -841,6 +873,9 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._begin_geo_frame()
         self._frame_lights_uploaded.clear()
         self._light_ubo_key = None
+        self._light_ubo_lights = None
+        # Texture units are not assumed bound from the last frame.
+        self.shadow_units_changed()
         self._light_ubo_bound = False
         self._current_shader = None
         if current_mode == RENDER_MODE_WIREFRAME:
@@ -1225,6 +1260,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         if self._shadow_cubemaps:
             try:
                 gl.glDeleteTextures(self._shadow_cubemaps)
+                self.shadow_units_changed()
             except Exception:
                 pass
             self._shadow_cubemaps = []
@@ -1251,6 +1287,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
             self._light_ubo = None
             self._light_ubo_capacity = 0
             self._light_ubo_key = None
+            self._light_ubo_lights = None
             self._light_ubo_bound = False
         if self._light_cookies is not None:
             self._light_cookies.close()
@@ -1266,6 +1303,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._selected_payloads.clear()
         self._distance_culls.clear()
         self.__dict__.pop('_occlusion_kept', None)
+        self.__dict__.pop('_portal_culls', None)
         for vao in (self._sprite_instance_vao, self._effect_instance_vao,
                     self._particle_instance_vao):
             if vao:

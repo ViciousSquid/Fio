@@ -4,7 +4,6 @@ import sys
 import io
 import json
 import os
-import subprocess
 import random
 import numpy as np
 import configparser
@@ -607,7 +606,11 @@ class MainWindow(QMainWindow):
     def setup_autosave(self):
         enabled = self.config.getboolean('Editor', 'autosave_enabled', fallback=True)
         interval_min = self.config.getint('Editor', 'autosave_interval', fallback=10)
-        
+        # settings.ini is hand-editable: 0 would autosave on every idle loop
+        # and a huge value overflows QTimer (raising during start-up). The
+        # Settings dialog offers 5-60 minutes.
+        interval_min = max(1, min(60, interval_min))
+
         if enabled:
             # Convert minutes to milliseconds
             self.autosave_timer.start(interval_min * 60 * 1000)
@@ -904,7 +907,7 @@ class MainWindow(QMainWindow):
             if index >= 0:
                 tab.setCurrentIndex(index)
 
-    def _clear_terrain(self):
+    def _clear_terrain(self, refresh=True):
         """Remove the terrain object and clear all references."""
         # Destroy the live terrain object
         if self.terrain is not None:
@@ -921,8 +924,10 @@ class MainWindow(QMainWindow):
         # Close the terrain editor panel if it is open in the Properties dock
         self.close_terrain_editor()
 
-        # Force a UI refresh
-        self.update_all_ui()
+        # Force a UI refresh (not while a level is being applied: that
+        # refreshes everything once the new level is in).
+        if refresh:
+            self.update_all_ui()
 
     # ------------------------------------------------------------------
     #  Play-mode console overlay helpers
@@ -1670,7 +1675,23 @@ class MainWindow(QMainWindow):
         self.update_all_ui()
 
 
-    def add_model_to_scene(self, filepath, rotation, scale):
+    def placement_position(self):
+        """Where a newly added object goes: on the floor just ahead of the
+        editor camera, short of any wall in the way (editor/placement.py)."""
+        from editor.placement import placement_ahead
+        camera = self.view_3d.camera
+        grid = self.view_3d.grid_size if self.snap_to_grid_enabled() else 0
+        return placement_ahead(camera.pos, camera.yaw, self.state.brushes,
+                               terrain=self.terrain, grid=grid)
+
+    def add_model_to_scene(self, filepath, rotation, scale, pos=None):
+        """Add *filepath* as a model Prop at *pos* -- by default where the user
+        is, ahead of the editor camera, not the world origin."""
+        if pos is None:
+            try:
+                pos = self.placement_position()
+            except Exception:
+                pos = [0.0, 0.0, 0.0]
         self.save_state()
         
         # Optional: Try to make path relative to project root for portability
@@ -1686,7 +1707,7 @@ class MainWindow(QMainWindow):
 
         # Every model is a Prop, with a Prop's defaults: not solid and not
         # carryable until the author turns either on.
-        new_model = Prop.for_model(filepath, pos=[0, 0, 0],
+        new_model = Prop.for_model(filepath, pos=list(pos),
                                    properties={'rotation': rotation})
 
         # Downloaded OBJs are commonly authored in real-world units and can be
@@ -1741,12 +1762,29 @@ class MainWindow(QMainWindow):
         self.update_all_ui()
         self.selection_changed.emit()
 
+    @property
+    def editor_dormant(self):
+        """Whether the editor's own UI is out of sight and does no work:
+        kiosk mode, where the game has the window (fullscreen, borderless or
+        windowed) and rendering has the UI thread to itself. Its panels and
+        2D views are brought up to date once, when kiosk mode is left."""
+        return bool(getattr(self, 'is_kiosk_mode', False))
+
     def update_all_ui(self):
         # Every editor operation ends here: a PlayerStart it created, deleted,
         # pasted or cloned is held to the primary invariant inside that
         # operation (and its undo step), before anything shows the level.
         self.state.settle_player_starts()
         self.sync_sky_image_from_map()
+        if self.editor_dormant:
+            # Kiosk mode (a level change inside the game, a console command):
+            # only what the game draws -- the sky above, and a Big World's
+            # terrain fill. The panels nobody can see wait for kiosk mode to
+            # end (exit_kiosk_mode).
+            self.sync_bigworld_terrain(allow_create=True)
+            self._editor_ui_stale = True
+            return
+        self._editor_ui_stale = False
         self.property_editor.set_object(self._property_target())
         self.scene_hierarchy.refresh_list()
         self.sync_surface_inspector()
@@ -1801,6 +1839,14 @@ class MainWindow(QMainWindow):
             self.terrain.locked = bool(locked)
         self.mark_as_modified()
         self.update_all_ui()
+
+    def notify_camera_moved(self):
+        """The 3D view's camera may have moved: each 2D view on screen
+        repaints if it did (View2D._check_camera_changed)."""
+        for view in (getattr(self, 'view_top', None), getattr(self, 'view_front', None),
+                     getattr(self, 'view_side', None)):
+            if view is not None:
+                view._check_camera_changed()
 
     def update_views(self):
         self.sync_bigworld_terrain(allow_create=True)
@@ -3274,6 +3320,13 @@ class MainWindow(QMainWindow):
 
     def _exit_play_mode(self):
         """Exit play mode and return to editor."""
+        if (getattr(self, 'is_kiosk_mode', False)
+                and self.view_3d._native_surface is not None):
+            # Play ending on its own (repeated paint failures, a fatal tick)
+            # in native kiosk mode: leave kiosk mode too, or the editor window
+            # would stay hidden behind a window with no game in it.
+            self.exit_kiosk_mode(keep_play_mode=False, confirm=False)
+            return
         if self.view_3d.play_mode:
             self.view_3d.toggle_play_mode()
             self.view_3d.play_mode = False  # Force state change before UI update
@@ -5290,7 +5343,7 @@ class MainWindow(QMainWindow):
         # Drop the previous map's terrain; this also clears terrain_data,
         # so keep the one the new map just brought.
         terrain_data = self.state.terrain_data
-        self._clear_terrain()
+        self._clear_terrain(refresh=False)
         self.view_3d.terrain = None
         self.state.terrain_data = terrain_data
 
@@ -5557,9 +5610,9 @@ class MainWindow(QMainWindow):
             if file_path:
                 self.add_recent_file(file_path)
 
-            # Force full UI and view refresh
+            # Full UI and view refresh: set_selected_objects runs
+            # update_all_ui itself (a second call rebuilt the hierarchy again).
             self.set_selected_objects([])
-            self.update_all_ui()
 
             # Resume play on the new level, at the destination start.
             # Opened by the user mid-Play with nowhere to resume: said in the
@@ -5849,20 +5902,6 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
 
-    def _restart_application(self):
-        """Restart the application."""
-        try:
-            executable = sys.executable
-            script = os.path.abspath(sys.argv[0])
-            args = sys.argv[1:]
-            
-            self.close()
-            subprocess.Popen([executable, script] + args)
-            QApplication.quit()
-            
-        except Exception as e:
-            self.show_toast(f"Failed to restart: {e}", is_error=True)
-
     def _close_package(self):
         """End the package session: its maps, cutscenes and assets are no
         longer looked up (nothing to delete: it was never extracted)."""
@@ -6045,12 +6084,94 @@ class MainWindow(QMainWindow):
         elif self.view_3d.play_mode:
             self.enter_kiosk_mode()
 
+    def kiosk_native_surface_enabled(self):
+        """[Kiosk] native_surface: kiosk frames are presented on a native
+        window of their own rather than composited through the editor's 3D
+        view (engine/kiosk_surface.py). Off by default."""
+        return self.config.getboolean('Kiosk', 'native_surface', fallback=False)
+
+    def _begin_native_kiosk(self):
+        """Present kiosk mode on a native window: the same renderer and GL
+        context, made current on it. False -- with the reason in the console
+        -- when this platform or context cannot, so the caller shows kiosk
+        mode on the 3D view as before."""
+        from engine.kiosk_surface import NativePresentationError
+        view = self.view_3d
+        try:
+            surface = view.begin_native_presentation()
+            surface.show_in_mode(
+                self.kiosk_window_mode(),
+                self.config.getint('Kiosk', 'res_width', fallback=1280),
+                self.config.getint('Kiosk', 'res_height', fallback=720),
+                screen=self.screen())
+            view.verify_native_presentation()
+        except NativePresentationError as exc:
+            view.end_native_presentation()
+            debug_log("Kiosk", "Native presentation unavailable (%s); kiosk mode "
+                               "is shown on the 3D view." % exc)
+            return False
+        # The editor window is out of sight while the game has its own.
+        self.hide()
+        surface.requestActivate()
+        return True
+
+    def set_kiosk_native_surface(self, enabled):
+        """Turn [Kiosk] native_surface on or off and save it. In kiosk mode
+        the game switches presentation now, by the same paths kiosk mode is
+        entered and left by; it falls back to the 3D view if the native
+        window cannot be used. Returns whether the native window presents."""
+        if not self.config.has_section('Kiosk'):
+            self.config.add_section('Kiosk')
+        self.config.set('Kiosk', 'native_surface', str(bool(enabled)))
+        self.save_config()
+        view = self.view_3d
+        if getattr(self, 'is_kiosk_mode', False):
+            if enabled and view._native_surface is None:
+                if self._begin_native_kiosk():
+                    self._restore_editor_window_state_for_native()
+            elif not enabled and view._native_surface is not None:
+                view.end_native_presentation()
+                self.show()
+                self._apply_kiosk_window_mode()
+                view.setFocus()
+        return view._native_surface is not None
+
+    def _restore_editor_window_state_for_native(self):
+        """The editor window was fullscreen (or frameless) for kiosk mode on
+        the 3D view; hidden behind a native kiosk window it goes back to a
+        normal window, as it is when native kiosk mode starts from the
+        editor."""
+        if self.windowFlags() & Qt.FramelessWindowHint:
+            self.setWindowFlag(Qt.FramelessWindowHint, False)
+        # Left hidden throughout (showNormal() would show it).
+        self.setWindowState(self.windowState() & ~Qt.WindowFullScreen)
+        self.hide()
+
+    def kiosk_native_presentation_failed(self):
+        """The native window could not present a frame: carry on in kiosk
+        mode on the 3D view."""
+        if self.view_3d._native_surface is None:
+            return
+        self.view_3d.end_native_presentation()
+        if getattr(self, 'is_kiosk_mode', False):
+            self.show()
+            self._apply_kiosk_window_mode()
+            self.view_3d.setFocus()
+
     def _apply_kiosk_window_mode(self):
         """Show the window as the configured game window mode.
 
         Toggling the frameless hint keeps the native window (and the 3D
-        view's GL context): Qt 5 updates the flags in place.
+        view's GL context): Qt 5 updates the flags in place. While a native
+        kiosk window presents, it is that window that takes the mode.
         """
+        surface = self.view_3d._native_surface
+        if surface is not None:
+            surface.show_in_mode(
+                self.kiosk_window_mode(),
+                self.config.getint('Kiosk', 'res_width', fallback=1280),
+                self.config.getint('Kiosk', 'res_height', fallback=720))
+            return
         mode = self.kiosk_window_mode()
         frameless = mode == 'Borderless'
         if bool(self.windowFlags() & Qt.FramelessWindowHint) != frameless:
@@ -6102,12 +6223,20 @@ class MainWindow(QMainWindow):
         # Hide sysmon overlay by default in kiosk mode (F3 to toggle back on)
         self.view_3d.sysmon.set_active(False)
 
-        # Fullscreen, borderless or windowed (Settings > Play Modes)
-        self._apply_kiosk_window_mode()
+        # Fullscreen, borderless or windowed (Settings > Play Modes): on a
+        # native window of its own when [Kiosk] native_surface asks and the
+        # platform allows, otherwise this window.
+        if not (self.kiosk_native_surface_enabled() and self._begin_native_kiosk()):
+            self._apply_kiosk_window_mode()
 
         # Launch play mode ONLY if not already in play mode
         if not self.view_3d.play_mode:
             self.enter_play_mode()
+
+        # The game has the UI thread: each frame is painted the moment it is
+        # published, and the editor does no work until kiosk mode ends
+        # (editor_dormant).
+        self.view_3d.set_paint_on_publish(True)
 
     def exit_kiosk_mode(self, keep_play_mode=False, confirm=True):
         """Restore editor UI and exit play mode.
@@ -6132,12 +6261,23 @@ class MainWindow(QMainWindow):
 
         self.is_kiosk_mode = False
 
+        # Back on the 3D view: the context is handed back to the widget (its
+        # framebuffer) and the native window goes, before anything else
+        # draws or the editor window returns.
+        if self.view_3d._native_surface is not None:
+            self.view_3d.end_native_presentation()
+            self.show()
+
         # Exit play mode only if not keeping it (F12 toggle vs Escape)
         if not keep_play_mode and self.view_3d.play_mode:
             self._exit_play_mode()
         else:
             # --- Restore previous tab ---
             self._restore_properties_tab()
+
+        # Frames go on being painted when published while Play goes on (F12
+        # back to the editor); leaving Play turned it off.
+        self.view_3d.set_paint_on_publish(bool(self.view_3d.play_mode))
 
         # Exit fullscreen FIRST - critical for proper geometry restoration
         if self.windowFlags() & Qt.FramelessWindowHint:
@@ -6170,6 +6310,11 @@ class MainWindow(QMainWindow):
             self.view_3d.last_mouse_pos = self.view_3d.mapFromGlobal(center_pos)
             QApplication.setOverrideCursor(Qt.BlankCursor)
             self.view_3d.setFocus()
+
+        # What changed while the editor was dormant (a level changed inside
+        # the game) reaches its panels and views now, once.
+        if getattr(self, '_editor_ui_stale', False):
+            self.update_all_ui()
 
     # =========================================================================
     # LOGIC GRAPH / WIZARD

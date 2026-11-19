@@ -1,4 +1,6 @@
 from engine.asset_qt import load_icon
+import copy
+import re
 import json
 from types import SimpleNamespace
 import os
@@ -27,6 +29,9 @@ from editor.terrain_selection import TerrainHandle
 from engine import player_starts as start_rules
 from editor import state_values as _sv
 from editor.sky_assets import store_sky_image_in_project
+# Every Browse button picks from Fio's filesystem: loose files and the
+# ones packed in mounted .fiopak archives (editor/asset_dialog.py).
+from editor.asset_dialog import get_open_asset_file
 from editor.portal_links import sync_group_to
 from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
@@ -311,6 +316,61 @@ class _Style:
                 f"QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; left: 8px; "
                 f"padding: 0 4px; background-color: {title_bg}; }}")
 
+    # -- one shared style sheet --------------------------------------------
+    #
+    # A style sheet of its own on a control makes Qt build and match a
+    # separate sheet for it as it is polished: about a quarter of building a
+    # page. The panel's recurring looks are instead rules in ONE sheet, set
+    # once on the PropertyEditor, each scoped to a dynamic property
+    # (``fio="key"``) that :meth:`apply` sets on the control. Rules for the
+    # control itself match it alone; rules for other kinds of widget (a tab
+    # widget's tab bar) match its descendants, as its own sheet did.
+
+    #: ``sheet text -> (key, Qt class name)`` for every shared look.
+    _shared = {}
+
+    @classmethod
+    def register(cls, key, class_name, sheet):
+        cls._shared[sheet] = (key, class_name)
+
+    @classmethod
+    def apply(cls, widget, sheet):
+        """Give *widget* the look *sheet*: through the shared sheet when it is
+        registered for this kind of widget, otherwise its own style sheet."""
+        entry = cls._shared.get(sheet)
+        if entry is not None and widget.inherits(entry[1]):
+            widget.setProperty('fio', entry[0])
+            if widget.testAttribute(Qt.WA_WState_Polished):
+                # Already styled (a scroll area's own scroll bar): a property
+                # set now is read only when the widget is polished again.
+                style = widget.style()
+                style.unpolish(widget)
+                style.polish(widget)
+            return
+        widget.setStyleSheet(sheet)
+
+    @classmethod
+    def panel_sheet(cls):
+        """The shared sheet: every registered look, scoped to its key."""
+        rules = []
+        for sheet, (key, class_name) in cls._shared.items():
+            scope = f'{class_name}[fio="{key}"]'
+            body = sheet.strip()
+            if '{' not in body:                 # bare declarations: the widget itself
+                rules.append(f'{scope} {{ {body} }}')
+                continue
+            for selectors, declarations in re.findall(r'([^{}]+)\{([^{}]*)\}', body):
+                scoped = []
+                for selector in selectors.split(','):
+                    selector = selector.strip()
+                    head = re.match(r'[A-Za-z_][A-Za-z0-9_]*', selector)
+                    if head and head.group(0) == class_name:
+                        scoped.append(scope + selector[head.end():])
+                    else:
+                        scoped.append(f'{scope} {selector}')
+                rules.append(f'{", ".join(scoped)} {{{declarations}}}')
+        return '\n'.join(rules)
+
 
 # ────────────────────────────
 # Widget factories
@@ -351,7 +411,7 @@ def _make_checkbox(label: str, checked: bool, callback, style=None) -> QCheckBox
     cb = QCheckBox(label)
     cb.setChecked(checked)
     if style:
-        cb.setStyleSheet(style)
+        _Style.apply(cb, style)
     if callback is not None:
         cb.toggled.connect(callback)
     return cb
@@ -494,7 +554,7 @@ class CollapsibleSection(QWidget):
         self.toggle.setText(label)
         self.toggle.setCheckable(True)
         self.toggle.setChecked(expanded)
-        self.toggle.setStyleSheet(self.HEADER)
+        _Style.apply(self.toggle, self.HEADER)
         self.toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self.toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -518,9 +578,35 @@ class CollapsibleSection(QWidget):
         self.content_layout.addWidget(w)
 
 
+
+# The panel's recurring looks, shared through one sheet (_Style.apply).
+for _key, _cls, _sheet in (
+        ('check', 'QCheckBox', _Style.CHECKBOX),
+        ('name_lbl', 'QLabel', _Style.NAME_LBL),
+        ('name_inp', 'QLineEdit', _Style.NAME_INP),
+        ('id_btn', 'QPushButton', _Style.ID_BTN),
+        ('id_field', 'QLineEdit', _Style.ID_FIELD),
+        ('targeted', 'QLabel', _Style.TARGETED),
+        ('section', 'QLabel', _Style.SECTION),
+        ('tabs', 'QTabWidget', _Style.TAB_BAR),
+        ('scroll', 'QScrollBar', _Style.SCROLL_V),
+        ('header', 'QToolButton', CollapsibleSection.HEADER)):
+    _Style.register(_key, _cls, _sheet)
+for _colour, _title in (
+        ('#00BFFF', '#2b3d3b'), ('#00CED1', '#2b3d3b'), ('#26A69A', '#1a2f2d'),
+        ('#42A5F5', '#1a2a3d'), ('#48D1CC', '#2b3d3b'), ('#87CEEB', '#2b3d3b'),
+        ('#98FB98', '#2b3d3b'), ('#AB47BC', '#2a1a3d'), ('#B0C4DE', '#2b3d3b'),
+        ('#F08000', '#2b3d3b'), ('#FFD700', '#2b3d3b')):
+    _Style.register('group_%s_%s' % (_colour[1:], _title[1:]), 'QGroupBox',
+                    _Style.group_box(_colour, _title))
+del _key, _cls, _sheet, _colour, _title
+
 class PropertyEditor(QWidget):
     def __init__(self, editor):
         super().__init__()
+        # The panel's recurring control looks, once (_Style.apply), rather
+        # than a style sheet on each control of every page built.
+        self.setStyleSheet(_Style.panel_sheet())
         self.editor = editor
         self.current_object = None
         self._populating = False
@@ -542,13 +628,13 @@ class PropertyEditor(QWidget):
         self._page = None                 # the QScrollArea currently shown
         self._page_cache = []             # [(obj, signature, page, state)], LRU
 
-        # Parked pages live in here rather than being reparented to nothing.
-        # A widget with no parent is a top-level window, and Qt walks every
-        # top-level window when it propagates style/font/palette changes — so
-        # parking pages that way made building the *next* page measurably
-        # slower, in proportion to how many were parked.
-        self._parking = QWidget(self)
-        self._parking.setVisible(False)
+        # Parked pages stay children of this panel, hidden. Never reparented
+        # to nothing: a widget with no parent is a top-level window, and Qt
+        # walks every top-level window when it propagates style/font/palette
+        # changes. Nor moved under a holder widget: reparenting makes Qt
+        # re-polish the page's whole widget tree against the style sheet, on
+        # parking and again on restore -- 37 ms of a 6 ms switch back to a
+        # page that is kept.
 
         # Settings > Editor > Tooltips.  Held here rather than read from the
         # config on every build: a page is rebuilt often enough that this sits
@@ -628,7 +714,7 @@ class PropertyEditor(QWidget):
     #: page is on screen; everything else is part of a page's state.
     _PERSISTENT_ATTRS = frozenset({
         'editor', 'current_object', 'main_layout', '_populating',
-        '_signature', '_page', '_page_cache', '_parking',
+        '_signature', '_page', '_page_cache',
         '_tooltips_enabled',
     })
 
@@ -666,9 +752,16 @@ class PropertyEditor(QWidget):
         """Everything the panel would read to build itself for ``obj``.
 
         Two calls returning the same value mean the panel that is already on
-        screen is exactly the panel a rebuild would produce.  The I/O
-        revision is folded in because the "Targeted by" line depends on other
-        entities' connections, not on this object at all.
+        screen is exactly the panel a rebuild would produce.
+
+        The page also shows things read from the rest of the scene. The
+        "Targeted by" line (other entities' connections to this one) is in the
+        signature itself, looked up through the I/O reverse index. The global
+        I/O revision -- bumped by every undo checkpoint -- stands in for the
+        rest (the names listed in target, path-node and portal pickers): it
+        decides whether a *parked* page may be reused (see
+        :meth:`_same_page_on_screen`), but no longer rebuilds the page on
+        screen after every edit, which cost ~100 ms an edit.
         """
         if obj is None:
             return ('none',)
@@ -680,9 +773,17 @@ class PropertyEditor(QWidget):
         if isinstance(obj, dict):
             source = obj
             kind = 'brush'
+            target_name, target_id = obj.get('name', ''), obj.get('id', '')
         else:
             source = obj.properties
             kind = type(obj).__name__
+            target_name = getattr(obj, 'name', '') or source.get('name', '')
+            target_id = source.get('id', '')
+        try:
+            targeted_by = tuple(self._find_targeting_sources(target_name, target_id)
+                                if (target_name or target_id) else ())
+        except Exception:
+            targeted_by = None
 
         fields = []
         # A snapshot, taken in one step: the logic thread adds its cache keys
@@ -701,7 +802,18 @@ class PropertyEditor(QWidget):
             else:
                 fields.append((key, self._hashable(value)))
         fields.sort()
-        return (kind, id(obj), revision, tuple(fields))
+        return (kind, id(obj), revision, tuple(fields), self._hashable(targeted_by))
+
+    @staticmethod
+    def _same_page_on_screen(current, signature):
+        """Whether the page built for signature *current* still shows what a
+        rebuild for *signature* would: equal apart from the global I/O
+        revision (index 2 of an object's signature)."""
+        if current == signature:
+            return True
+        if current is None or len(current) != 5 or len(signature) != 5:
+            return False
+        return current[:2] == signature[:2] and current[3:] == signature[3:]
 
     def _capture_page_state(self):
         """The instance attributes the page on screen owns.
@@ -726,7 +838,6 @@ class PropertyEditor(QWidget):
         page = self._page
         if page is not None:
             self.main_layout.removeWidget(page)
-            page.setParent(self._parking)
             page.setVisible(False)
         self._page = None
         return page
@@ -785,7 +896,7 @@ class PropertyEditor(QWidget):
             return
         # A page already parked for this object was built for an older
         # signature and is superseded; destroy it rather than just forgetting
-        # it, or it stays parented to _parking for the rest of the session.
+        # it, or it stays parented (hidden) for the rest of the session.
         kept = []
         for entry in self._page_cache:
             if entry[0] is self.current_object:
@@ -881,8 +992,11 @@ class PropertyEditor(QWidget):
         """
         signature = self._object_signature(obj)
 
-        if not force and obj is self.current_object and self._signature == signature \
+        if not force and obj is self.current_object \
+                and self._same_page_on_screen(self._signature, signature) \
                 and (self._page is not None or obj is None):
+            # self._signature keeps the revision the page was *built* at, so
+            # once parked it is reused only if nothing changed since.
             return
 
         saved_tab_index = None
@@ -1012,7 +1126,7 @@ class PropertyEditor(QWidget):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
+        _Style.apply(scroll.verticalScrollBar(), _Style.SCROLL_V)
 
         content = QWidget(scroll)
         layout = QVBoxLayout(content)
@@ -1023,14 +1137,14 @@ class PropertyEditor(QWidget):
         form = QFormLayout()
         form.setSpacing(4)
         name_lbl = QLabel("Name:")
-        name_lbl.setStyleSheet(_Style.NAME_LBL)
+        _Style.apply(name_lbl, _Style.NAME_LBL)
         name_inp = QLineEdit(brush.get('name', ''))
-        name_inp.setStyleSheet(_Style.NAME_INP)
+        _Style.apply(name_inp, _Style.NAME_INP)
         name_inp.setPlaceholderText("Enter name...")
         name_inp.editingFinished.connect(lambda: self.update_object_prop('name', name_inp.text()))
 
         id_btn = QPushButton("ID")
-        id_btn.setStyleSheet(_Style.ID_BTN)
+        _Style.apply(id_btn, _Style.ID_BTN)
         id_btn.setFixedWidth(32)
         id_btn.setToolTip("Show/hide UUID")
 
@@ -1043,7 +1157,7 @@ class PropertyEditor(QWidget):
         self._widgets['name_input'] = name_inp
 
         uuid_field = QLineEdit(brush.get('id', ''))
-        uuid_field.setStyleSheet(_Style.ID_FIELD)
+        _Style.apply(uuid_field, _Style.ID_FIELD)
         uuid_field.setReadOnly(True)
         uuid_field.setVisible(False)
         form.addRow("", uuid_field)
@@ -1057,7 +1171,7 @@ class PropertyEditor(QWidget):
             if sources:
                 txt = ", ".join(f"{n} ({t})" for n, t in sources)
                 lbl = QLabel(txt)
-                lbl.setStyleSheet(_Style.TARGETED)
+                _Style.apply(lbl, _Style.TARGETED)
                 lbl.setWordWrap(True)
                 form.addRow("Targeted by:", lbl)
 
@@ -1065,7 +1179,7 @@ class PropertyEditor(QWidget):
 
         # Tabs
         self.tab_widget = QTabWidget(content)
-        self.tab_widget.setStyleSheet(_Style.TAB_BAR)
+        _Style.apply(self.tab_widget, _Style.TAB_BAR)
 
         is_trigger = brush.get('is_trigger', False)
         is_mover = brush.get('is_mover', False)
@@ -1074,17 +1188,19 @@ class PropertyEditor(QWidget):
 
         self.tab_widget.addTab(self._create_general_tab(brush), "General")
 
-        self.trigger_tab = self._create_trigger_tab(brush)
-        self.trigger_tab_index = self.tab_widget.addTab(self.trigger_tab, load_icon("assets/ui/controls/target.svg"), "Trigger")
-        self.tab_widget.setTabVisible(self.trigger_tab_index, is_trigger)
-
-        self.mover_tab = self._create_mover_tab(brush)
-        self.mover_tab_index = self.tab_widget.addTab(self.mover_tab, load_icon("assets/ui/controls/move.svg"), "Mover")
-        self.tab_widget.setTabVisible(self.mover_tab_index, is_mover)
-
-        self.door_tab = self._create_door_tab(brush)
-        self.door_tab_index = self.tab_widget.addTab(self.door_tab, load_icon("assets/ui/controls/door.svg"), "Door")
-        self.tab_widget.setTabVisible(self.door_tab_index, is_door)
+        # A tab the brush does not use yet (Trigger, Mover, Door on a plain
+        # brush) is added empty and built the first time it is shown -- when
+        # the brush is made one, which switches to it. Building three hidden
+        # tabs on every selection was a quarter of selecting a brush.
+        self.trigger_tab, self.trigger_tab_index = self._add_brush_tab(
+            lambda: self._create_trigger_tab(brush), "assets/ui/controls/target.svg",
+            "Trigger", is_trigger)
+        self.mover_tab, self.mover_tab_index = self._add_brush_tab(
+            lambda: self._create_mover_tab(brush), "assets/ui/controls/move.svg",
+            "Mover", is_mover)
+        self.door_tab, self.door_tab_index = self._add_brush_tab(
+            lambda: self._create_door_tab(brush), "assets/ui/controls/door.svg",
+            "Door", is_door)
 
         self.shader_tab = self._create_shader_tab(brush)
         self.shader_tab_index = self.tab_widget.addTab(self.shader_tab, load_icon("assets/ui/controls/shader.svg"), "Shader")
@@ -1105,6 +1221,56 @@ class PropertyEditor(QWidget):
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
         self._page = scroll
+
+    def _add_brush_tab(self, builder, icon, title, shown):
+        """``(widget, index)`` of a brush tab: built now when *shown*,
+        otherwise added hidden and empty, and built on its first showing
+        (the tab bar is the same either way)."""
+        if shown:
+            widget = builder()
+            index = self.tab_widget.addTab(widget, load_icon(icon), title)
+            return widget, index
+        holder = QWidget(self.tab_widget)
+        QVBoxLayout(holder).setContentsMargins(0, 0, 0, 0)
+        index = self.tab_widget.addTab(holder, load_icon(icon), title)
+        self.tab_widget.setTabVisible(index, False)
+        tabs = self.tab_widget
+
+        def fill(current, _index=index, _holder=holder):
+            if current != _index or _holder.property('tab_built'):
+                return
+            _holder.setProperty('tab_built', True)
+            inner = builder()
+            configure_property_forms(inner)
+            if not self._tooltips_enabled:
+                set_tooltips_enabled(inner, False)
+            _holder.layout().addWidget(inner)
+
+        tabs.currentChanged.connect(fill)
+        return holder, index
+
+    def _add_deferred_tab(self, builder, title):
+        """Add tab *title* empty now and fill it with ``builder()`` the first
+        time it is shown (the tab bar looks the same). Returns its index."""
+        holder = QWidget(self.tab_widget)
+        QVBoxLayout(holder).setContentsMargins(0, 0, 0, 0)
+        index = self.tab_widget.addTab(holder, title)
+        tabs = self.tab_widget
+
+        def fill(current, _index=index, _holder=holder):
+            if current != _index or _holder.property('tab_built'):
+                return
+            _holder.setProperty('tab_built', True)
+            inner = builder()
+            configure_property_forms(inner)
+            if not self._tooltips_enabled:
+                set_tooltips_enabled(inner, False)
+            _holder.layout().addWidget(inner)
+
+        tabs.currentChanged.connect(fill)
+        if tabs.currentIndex() == index:
+            fill(index)
+        return index
 
     def _defer_io_tab(self, builder):
         """Add the I/O tab now, but build its contents the first time it is shown.
@@ -1270,7 +1436,7 @@ class PropertyEditor(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
 
         type_group = QGroupBox("Brush Type")
-        type_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(type_group, _Style.group_box("#F08000"))
         type_layout = QVBoxLayout(type_group)
 
         # Shader + Lock row
@@ -1312,7 +1478,7 @@ class PropertyEditor(QWidget):
 
     def _section(self, text):
         lbl = QLabel(text)
-        lbl.setStyleSheet(_Style.SECTION)
+        _Style.apply(lbl, _Style.SECTION)
         return lbl
 
     def _create_trigger_tab(self, brush):
@@ -1417,7 +1583,7 @@ class PropertyEditor(QWidget):
         # Detection filters are independent of the trigger action. Any selected
         # category can activate the trigger when its object enters the volume.
         filter_group = QGroupBox("Detection Filters")
-        filter_group.setStyleSheet(_Style.group_box("#42A5F5", "#1a2a3d"))
+        _Style.apply(filter_group, _Style.group_box("#42A5F5", "#1a2a3d"))
         filter_layout = QVBoxLayout(filter_group)
         filter_layout.setSpacing(4)
         filter_layout.setContentsMargins(8, 8, 8, 8)
@@ -1613,7 +1779,7 @@ class PropertyEditor(QWidget):
 
         # PathNode waypoint
         path_group = QGroupBox("PathNode Waypoint")
-        path_group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
+        _Style.apply(path_group, _Style.group_box("#26A69A", "#1a2f2d"))
         path_form = QFormLayout(path_group)
         path_target = self._pathnode_combo(brush.get('path_target', ''))
         path_target.currentTextChanged.connect(
@@ -1624,7 +1790,7 @@ class PropertyEditor(QWidget):
 
         # Options
         opt_group = QGroupBox("Options")
-        opt_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(opt_group, _Style.group_box("#F08000"))
         opt_layout = QVBoxLayout(opt_group)
 
         start_cb = _make_checkbox("Start moving immediately", brush.get('start_on', False),
@@ -1699,7 +1865,7 @@ class PropertyEditor(QWidget):
         layout.addLayout(form)
 
         opt_group = QGroupBox("Door Options")
-        opt_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(opt_group, _Style.group_box("#F08000"))
         opt_layout = QVBoxLayout(opt_group)
 
         for key, label in (('door_auto_open', "Auto-open when player is near"),
@@ -1767,7 +1933,7 @@ class PropertyEditor(QWidget):
 
     def _create_glass_properties(self, brush):
         group = QGroupBox("Glass Properties")
-        group.setStyleSheet(_Style.group_box("#00BFFF"))
+        _Style.apply(group, _Style.group_box("#00BFFF"))
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
         form = QFormLayout()
@@ -1786,7 +1952,7 @@ class PropertyEditor(QWidget):
 
         # Distortion
         dist_group = QGroupBox("Distortion Effects")
-        dist_group.setStyleSheet(_Style.group_box("#87CEEB", "#2b3d3b"))
+        _Style.apply(dist_group, _Style.group_box("#87CEEB", "#2b3d3b"))
         dist_form = QFormLayout(dist_group)
         for key, label_txt, default, tip in (
             ('glass_distortion', "Warp Strength:", 0.5, "How much the view through glass is warped"),
@@ -1822,7 +1988,7 @@ class PropertyEditor(QWidget):
 
         # Fresnel
         fres_group = QGroupBox("Fresnel Effect")
-        fres_group.setStyleSheet(_Style.group_box("#98FB98", "#2b3d3b"))
+        _Style.apply(fres_group, _Style.group_box("#98FB98", "#2b3d3b"))
         fres_form = QFormLayout(fres_group)
         slider, label = _make_slider(self, brush.get('glass_fresnel', 0.5), 0, 100,
                                      callback=lambda v: self.update_object_prop('glass_fresnel', v),
@@ -1835,7 +2001,7 @@ class PropertyEditor(QWidget):
 
     def _create_glow_properties(self, brush):
         group = QGroupBox("Glow Properties")
-        group.setStyleSheet(_Style.group_box("#FFD700"))
+        _Style.apply(group, _Style.group_box("#FFD700"))
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
         form = QFormLayout()
@@ -1912,7 +2078,7 @@ class PropertyEditor(QWidget):
 
     def _create_water_properties(self, brush):
         group = QGroupBox("Water Properties")
-        group.setStyleSheet(_Style.group_box("#00CED1"))
+        _Style.apply(group, _Style.group_box("#00CED1"))
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
 
@@ -1963,7 +2129,7 @@ class PropertyEditor(QWidget):
         layout.addLayout(form)
 
         dist_group = QGroupBox("Distortion Effects")
-        dist_group.setStyleSheet(_Style.group_box("#87CEEB", "#2b3d3b"))
+        _Style.apply(dist_group, _Style.group_box("#87CEEB", "#2b3d3b"))
         dist_form = QFormLayout(dist_group)
         dist_form.setSpacing(6)
         for key, label_txt, default, tip in (
@@ -2000,7 +2166,7 @@ class PropertyEditor(QWidget):
         layout.addWidget(dist_group)
 
         wave_group = QGroupBox("Surface")
-        wave_group.setStyleSheet(_Style.group_box("#48D1CC", "#2b3d3b"))
+        _Style.apply(wave_group, _Style.group_box("#48D1CC", "#2b3d3b"))
         wave_layout = QFormLayout(wave_group)
         wave_layout.setSpacing(6)
 
@@ -2117,7 +2283,7 @@ class PropertyEditor(QWidget):
 
     def _create_fog_properties(self, brush):
         group = QGroupBox("Fog Properties")
-        group.setStyleSheet(_Style.group_box("#B0C4DE"))
+        _Style.apply(group, _Style.group_box("#B0C4DE"))
         layout = QFormLayout(group)
         layout.setSpacing(8)
 
@@ -2161,7 +2327,7 @@ class PropertyEditor(QWidget):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
+        _Style.apply(scroll.verticalScrollBar(), _Style.SCROLL_V)
 
         content = QWidget(scroll)
         layout = QVBoxLayout(content)
@@ -2172,14 +2338,14 @@ class PropertyEditor(QWidget):
         name_layout = QFormLayout()
         name_layout.setSpacing(4)
         name_lbl = QLabel("Name:")
-        name_lbl.setStyleSheet(_Style.NAME_LBL)
+        _Style.apply(name_lbl, _Style.NAME_LBL)
         name_inp = QLineEdit(str(thing.properties.get('name', '')))
-        name_inp.setStyleSheet(_Style.NAME_INP)
+        _Style.apply(name_inp, _Style.NAME_INP)
         name_inp.setPlaceholderText("Enter name...")
         name_inp.editingFinished.connect(lambda: self.update_object_prop('name', name_inp.text()))
 
         id_btn = QPushButton("ID")
-        id_btn.setStyleSheet(_Style.ID_BTN)
+        _Style.apply(id_btn, _Style.ID_BTN)
         id_btn.setFixedWidth(32)
         id_btn.setToolTip("Show/hide UUID")
 
@@ -2191,7 +2357,7 @@ class PropertyEditor(QWidget):
         name_layout.addRow(name_lbl, name_row)
 
         uuid_field = QLineEdit(thing.properties.get('id', ''))
-        uuid_field.setStyleSheet(_Style.ID_FIELD)
+        _Style.apply(uuid_field, _Style.ID_FIELD)
         uuid_field.setReadOnly(True)
         uuid_field.setVisible(False)
         name_layout.addRow("", uuid_field)
@@ -2205,22 +2371,26 @@ class PropertyEditor(QWidget):
         if sources:
             txt = ", ".join(f"{n} ({t})" for n, t in sources)
             lbl = QLabel(txt)
-            lbl.setStyleSheet(_Style.TARGETED)
+            _Style.apply(lbl, _Style.TARGETED)
             lbl.setWordWrap(True)
             name_layout.addRow("Targeted by:", lbl)
 
         layout.addLayout(name_layout)
 
         self.tab_widget = QTabWidget(content)
-        self.tab_widget.setStyleSheet(_Style.TAB_BAR)
+        _Style.apply(self.tab_widget, _Style.TAB_BAR)
         self.tab_widget.setUsesScrollButtons(True)
 
         props_tab = self._create_thing_properties_tab(thing)
         self.tab_widget.addTab(props_tab, "Properties")
 
         if isinstance(thing, Prop):
-            physics_tab = self._create_prop_physics_tab(thing)
-            self.tab_widget.addTab(physics_tab, "Physics")
+            # Never the tab on screen when a page appears: added empty and
+            # built, from the Prop's values then, the first time it is shown.
+            # Building it with every Prop page was over half the page's
+            # widgets (a placed model is a Prop: the commonest selection).
+            self._add_deferred_tab(lambda t=thing: self._create_prop_physics_tab(t),
+                                   "Physics")
 
         advanced_tab = self._create_thing_advanced_tab(thing)
         if advanced_tab is not None:
@@ -2329,7 +2499,7 @@ class PropertyEditor(QWidget):
                 sprite_btn.setFixedWidth(30)
 
                 def pick_sprite():
-                    fp, _ = QFileDialog.getOpenFileName(
+                    fp, _ = get_open_asset_file(
                         self, "Select Billboard Sprite", "assets/sprites",
                         "Image Files (*.png *.jpg *.jpeg *.bmp)"
                     )
@@ -2900,7 +3070,7 @@ class PropertyEditor(QWidget):
                 project_root, "assets", "textures", "effects"
             )
             os.makedirs(start, exist_ok=True)
-            fp, _ = QFileDialog.getOpenFileName(
+            fp, _ = get_open_asset_file(
                 self,
                 "Select Custom Effect GIF",
                 start,
@@ -4158,7 +4328,7 @@ class PropertyEditor(QWidget):
                 start_path = os.path.dirname(start_path)
             if not os.path.isdir(start_path):
                 start_path = _project_root()
-            filepath, _ = QFileDialog.getOpenFileName(
+            filepath, _ = get_open_asset_file(
                 self,
                 "Select Sky Image",
                 start_path,
@@ -4167,7 +4337,12 @@ class PropertyEditor(QWidget):
             if not filepath:
                 return
             try:
-                relative = store_sky_image_in_project(filepath, _project_root())
+                if (not os.path.isfile(filepath)
+                        and filepath.replace('\\', '/').startswith('assets/')):
+                    # Packed in a mounted .fiopak: referenced where it is.
+                    relative = filepath.replace('\\', '/')
+                else:
+                    relative = store_sky_image_in_project(filepath, _project_root())
             except OSError as exc:
                 QMessageBox.warning(
                     self, "Sky Image", f"Could not import sky image:\n{exc}")
@@ -4774,7 +4949,7 @@ class PropertyEditor(QWidget):
             thing.properties.setdefault(k, v)
 
         group = QGroupBox("Path Node")
-        group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
+        _Style.apply(group, _Style.group_box("#26A69A", "#1a2f2d"))
         form = QFormLayout(group)
         form.setSpacing(6)
         form.setContentsMargins(8, 8, 8, 8)
@@ -4855,7 +5030,7 @@ class PropertyEditor(QWidget):
 
     def _build_logic_camera_group(self, tab_layout, thing):
         group = QGroupBox("Cinematic Camera")
-        group.setStyleSheet(_Style.group_box("#42A5F5", "#1a2a3d"))
+        _Style.apply(group, _Style.group_box("#42A5F5", "#1a2a3d"))
         form = QFormLayout(group)
         form.setSpacing(6)
         form.setContentsMargins(8, 8, 8, 8)
@@ -4960,7 +5135,7 @@ class PropertyEditor(QWidget):
         from engine.shake import SHAKE_DURATION_RANGE, shake_settings
         intensity, duration = shake_settings(thing.properties)
         group = QGroupBox("Shake")
-        group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(group, _Style.group_box("#F08000"))
         form = QFormLayout(group)
         form.setSpacing(6)
         form.setContentsMargins(8, 8, 8, 8)
@@ -5012,7 +5187,7 @@ class PropertyEditor(QWidget):
     def _build_spawner_group(self, tab_layout, thing):
         from editor.things import ENTITY_TYPES
         group = QGroupBox("Spawner")
-        group.setStyleSheet(_Style.group_box("#AB47BC", "#2a1a3d"))
+        _Style.apply(group, _Style.group_box("#AB47BC", "#2a1a3d"))
         form = QFormLayout(group)
         form.setSpacing(6)
         form.setContentsMargins(8, 8, 8, 8)
@@ -5093,7 +5268,7 @@ class PropertyEditor(QWidget):
 
         # Monster spawn settings (conditional)
         monster_group = QGroupBox("Monster Spawn Settings")
-        monster_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(monster_group, _Style.group_box("#F08000"))
         mform = QFormLayout(monster_group)
         mform.setSpacing(6)
         mform.setContentsMargins(8, 8, 8, 8)
@@ -5244,7 +5419,7 @@ class PropertyEditor(QWidget):
         # Type / Value / State columns say what it is. Two more labels saying
         # the same thing cost a row of height each and add nothing.
         group = QGroupBox()
-        group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
+        _Style.apply(group, _Style.group_box("#26A69A", "#1a2f2d"))
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -5491,7 +5666,7 @@ class PropertyEditor(QWidget):
 
         # AI group
         ai_group = QGroupBox("AI")
-        ai_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(ai_group, _Style.group_box("#F08000"))
         aform = QFormLayout(ai_group)
         aform.setSpacing(6)
         aform.setContentsMargins(8, 8, 8, 8)
@@ -5558,7 +5733,7 @@ class PropertyEditor(QWidget):
         def pick_proj():
             start = os.path.join(os.getcwd(), 'assets', 'sprites', 'monsters')
             os.makedirs(start, exist_ok=True)
-            fp, _ = QFileDialog.getOpenFileName(self, "Select Projectile Sprite", start,
+            fp, _ = get_open_asset_file(self, "Select Projectile Sprite", start,
                                                 "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)")
             if fp:
                 rel = os.path.relpath(fp, os.getcwd()).replace('\\', '/')
@@ -5669,7 +5844,7 @@ class PropertyEditor(QWidget):
 
         # Flags
         flags_group = QGroupBox("Behaviour Flags")
-        flags_group.setStyleSheet(_Style.group_box("#F08000"))
+        _Style.apply(flags_group, _Style.group_box("#F08000"))
         flay = QVBoxLayout(flags_group)
         flay.setSpacing(6)
         for prop_key, label_text, tooltip in (
@@ -5799,7 +5974,8 @@ class PropertyEditor(QWidget):
         color = QColorDialog.getColor(qc, self, f"Choose {prop_name.replace('_', ' ').title()}")
         if color.isValid():
             new_color = [color.redF(), color.greenF(), color.blueF()]
-            self.current_object[prop_name] = new_color
+            # Through the shared path, so a multi-selection takes it too.
+            self.update_object_prop(prop_name, new_color)
             self._update_color_button(button, new_color)
             self.editor.update_all_ui()
 
@@ -5817,6 +5993,13 @@ class PropertyEditor(QWidget):
             rgb = [color.redF(), color.greenF(), color.blueF()]
             self.editor.save_state()
             self._update_color_button(button, rgb)
+            # Every selected brush takes it (a group recoloured at once).
+            selected = getattr(self.editor.state, 'selected_objects', None) or ()
+            for other in selected:
+                if other is not brush and isinstance(other, dict):
+                    other['colour'] = [float(c) for c in rgb]
+                    other.pop('tint', None)
+                    self.editor.state.mark_world_changed([other])
             self.editor.set_brush_colour(brush, rgb)
 
     def _reset_brush_colour(self, button):
@@ -6175,7 +6358,7 @@ class PropertyEditor(QWidget):
             return
         start = os.path.join(_project_root(), 'assets', 'sprites')
         os.makedirs(start, exist_ok=True)
-        fp, _ = QFileDialog.getOpenFileName(
+        fp, _ = get_open_asset_file(
             self,
             "Select Sprite Image",
             start,
@@ -6345,7 +6528,9 @@ class PropertyEditor(QWidget):
                 choose(MODEL_PRESETS[name]['model_path'])
 
         def browse():
-            fp, _ = QFileDialog.getOpenFileName(
+            # Fio's own filesystem: models packed in a mounted .fiopak are
+            # listed with the loose ones (the system dialog cannot see them).
+            fp, _ = get_open_asset_file(
                 self, "Select Model", "assets/models", "Model Files (*.obj *.glb)"
             )
             if fp:
@@ -6400,11 +6585,16 @@ class PropertyEditor(QWidget):
 
             def update_vec(text, idx=i):
                 try:
-                    vec = thing.properties.get(key, [0, 0, 0])
-                    vec[idx] = float(text)
-                    self.update_object_prop(key, vec)
+                    number = float(text)
                 except ValueError:
-                    pass
+                    return
+                vec = thing.properties.get(key, [0, 0, 0])
+                vec = list(vec) if isinstance(vec, list) and len(vec) == 3 else [0, 0, 0]
+                vec[idx] = number
+                # Only this component changes on the rest of a multi-selection:
+                # three props at different yaws keep their own yaw when one
+                # axis is typed.
+                self.update_object_prop(key, vec, component=idx)
 
             le.editingFinished.connect(lambda l=le, idx=i: update_vec(l.text(), idx))
             h.addWidget(le)
@@ -6434,7 +6624,7 @@ class PropertyEditor(QWidget):
             start = os.path.join(root, 'assets', 'textures', 'cookies')
             if not os.path.isdir(start):
                 start = os.path.join(root, 'assets', 'textures')
-            fp, _ = QFileDialog.getOpenFileName(
+            fp, _ = get_open_asset_file(
                 self, "Select Cookie Image", start,
                 "Images (*.png *.jpg *.jpeg *.bmp *.tga)")
             if not fp:
@@ -6475,7 +6665,7 @@ class PropertyEditor(QWidget):
             from engine.speaker_audio import speaker_sound_path
             start = os.path.join(_project_root(), 'assets', 'sounds')
             os.makedirs(start, exist_ok=True)
-            fp, _ = QFileDialog.getOpenFileName(
+            fp, _ = get_open_asset_file(
                 self,
                 "Select Sound File",
                 start,
@@ -6609,9 +6799,75 @@ class PropertyEditor(QWidget):
             if hasattr(self.editor, name):
                 getattr(self.editor, name).update()
 
-    def update_object_prop(self, key, value):
+    #: Properties a multi-selection edit never copies to the other selected
+    #: objects: what identifies or places each one (names must stay unique;
+    #: there is one primary PlayerStart), its own I/O wiring, and the brush
+    #: toggles that change what a brush *is* (a group may hold one mover).
+    _PER_OBJECT_KEYS = frozenset({
+        'name', 'id', 'pos', 'type', 'brush_group', '_io_connections',
+        'io_connections', 'primary', 'creation_index', 'targetname',
+    })
+
+    def _shared_edit_targets(self, key):
+        """The other selected objects an edit of *key* also applies to.
+
+        A multi-selection (a whole group, say) is edited together: the panel
+        shows the primary object, and a change made in it goes to every other
+        selected object that has the same property -- brushes to brushes,
+        entities to entities. Keys in :data:`_PER_OBJECT_KEYS`, a brush's
+        ``is_*`` toggles and internal ``_`` keys stay per object.
+        """
+        primary = self.current_object
+        selected = getattr(self.editor.state, 'selected_objects', None) or ()
+        if len(selected) < 2 or primary is None or key in self._PER_OBJECT_KEYS \
+                or str(key).startswith('_'):
+            return []
+        targets = []
+        if isinstance(primary, dict):
+            if str(key).startswith('is_'):
+                return []
+            for obj in selected:
+                if obj is not primary and isinstance(obj, dict) and key in obj:
+                    targets.append(obj)
+        elif isinstance(primary, Thing):
+            for obj in selected:
+                if obj is not primary and isinstance(obj, Thing) \
+                        and key in obj.properties:
+                    targets.append(obj)
+        return targets
+
+    @staticmethod
+    def _set_prop(obj, key, value):
+        """Store one property on a brush dict or a Thing (a float property
+        stays a float)."""
+        if isinstance(obj, dict):
+            obj[key] = value
+            return
+        if key in obj.properties and type(obj.properties.get(key)) == float:
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                value = 0.0
+        obj.properties[key] = value
+        if isinstance(obj, Portal) and key == 'angle':
+            rot = obj.properties.get('rotation', [0.0, 0.0, 0.0])
+            if isinstance(rot, list) and len(rot) > 0:
+                rot[0] = float(value)
+
+    def update_object_prop(self, key, value, component=None):
+        """Set *key* to *value* on the object on the panel, and on every other
+        selected object sharing the property (:meth:`_shared_edit_targets`).
+
+        *component*: *value* is a list of which only that index was edited;
+        the other selected objects get just that element, keeping the rest of
+        their own list.
+        """
         if self.current_object is None:
             return
+        shared = self._shared_edit_targets(key)
+        if shared:
+            # One undo step puts every object the edit reaches back.
+            self.editor.save_state()
         if isinstance(self.current_object, dict):
             self.current_object[key] = value
         elif isinstance(self.current_object, Thing):
@@ -6624,10 +6880,25 @@ class PropertyEditor(QWidget):
                         value = 0.0
             self.current_object.properties[key] = value
 
+        # The rest of a multi-selection gets the same value -- each its own
+        # copy, so no two objects ever share one list or dict.
+        for obj in shared:
+            if component is not None:
+                own = obj.get(key) if isinstance(obj, dict) else obj.properties.get(key)
+                if not (isinstance(own, list) and isinstance(value, list)
+                        and 0 <= component < min(len(own), len(value))):
+                    continue
+                own = list(own)
+                own[component] = value[component]
+                self._set_prop(obj, key, own)
+                continue
+            self._set_prop(obj, key, copy.deepcopy(value)
+                           if isinstance(value, (list, dict)) else value)
+
         # Property edits are live scene mutations, not merely UI state.  The
         # dense render/entity projections cache their cold columns behind the
         # editor's world epoch, so journal this exact object immediately.
-        self.editor.state.mark_world_changed([self.current_object])
+        self.editor.state.mark_world_changed([self.current_object] + shared)
         if isinstance(self.current_object, PlayerStart) and key == 'sky_image':
             # This is an explicit authoring action, so the selected value
             # (including an empty value) replaces any legacy copies.
