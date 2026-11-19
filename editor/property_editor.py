@@ -1167,6 +1167,29 @@ class PropertyEditor(QWidget):
         tabs.currentChanged.connect(fill)
         return holder, index
 
+    def _add_deferred_tab(self, builder, title):
+        """Add tab *title* empty now and fill it with ``builder()`` the first
+        time it is shown (the tab bar looks the same). Returns its index."""
+        holder = QWidget(self.tab_widget)
+        QVBoxLayout(holder).setContentsMargins(0, 0, 0, 0)
+        index = self.tab_widget.addTab(holder, title)
+        tabs = self.tab_widget
+
+        def fill(current, _index=index, _holder=holder):
+            if current != _index or _holder.property('tab_built'):
+                return
+            _holder.setProperty('tab_built', True)
+            inner = builder()
+            configure_property_forms(inner)
+            if not self._tooltips_enabled:
+                set_tooltips_enabled(inner, False)
+            _holder.layout().addWidget(inner)
+
+        tabs.currentChanged.connect(fill)
+        if tabs.currentIndex() == index:
+            fill(index)
+        return index
+
     def _defer_io_tab(self, builder):
         """Add the I/O tab now, but build its contents the first time it is shown.
 
@@ -2280,8 +2303,12 @@ class PropertyEditor(QWidget):
         self.tab_widget.addTab(props_tab, "Properties")
 
         if isinstance(thing, Prop):
-            physics_tab = self._create_prop_physics_tab(thing)
-            self.tab_widget.addTab(physics_tab, "Physics")
+            # Never the tab on screen when a page appears: added empty and
+            # built, from the Prop's values then, the first time it is shown.
+            # Building it with every Prop page was over half the page's
+            # widgets (a placed model is a Prop: the commonest selection).
+            self._add_deferred_tab(lambda t=thing: self._create_prop_physics_tab(t),
+                                   "Physics")
 
         advanced_tab = self._create_thing_advanced_tab(thing)
         if advanced_tab is not None:
