@@ -7,7 +7,8 @@
 * The view no longer refreshes the editor's hidden 2D views at 10 Hz (each
   refresh also asked for a 3D repaint of a frame already on screen).
 * Each frame is painted when it is published rather than on the next tick of
-  the 16 ms update loop. Outside kiosk mode nothing changes.
+  the 16 ms update loop -- in Play inside the editor too, where the 2D views
+  go on following play at 10 Hz.
 """
 
 import pytest
@@ -91,5 +92,31 @@ def test_kiosk_frames_are_painted_when_published(kiosk, monkeypatch, qt_app):
     assert paints, "a published frame did not ask for a paint"
     assert not view.game_state.try_swap(), "the frame was taken for that paint"
 
+    # F12 back to the editor: Play goes on, and so does painting on publish;
+    # leaving Play stops it.
     window.exit_kiosk_mode(keep_play_mode=True, confirm=False)
+    assert view.game_state.publish_listener is not None
+    kiosk.stop_play()
+    assert view.game_state.publish_listener is None
+
+
+def test_play_in_the_editor_paints_on_publish_and_its_2d_views_follow(
+        fio_session, monkeypatch, qt_app):
+    start = make_thing(PlayerStart, "start", (0.0, 8.0, 0.0))
+    session = fio_session(level_data(brushes=room(), things=[start]))
+    window, view = session.window, session.view
+    assert view.game_state.publish_listener is None
+    session.start_play()
+    assert not window.editor_dormant
+    assert view.game_state.publish_listener is not None
+    paints = _count(monkeypatch, view, 'update')
+    views = _count(monkeypatch, window, 'update_views')
+    view._play_views_due = 0.0
+    session.publish()
+    qt_app.processEvents()
+    assert paints and views == [True], "the 2D views follow play at 10 Hz"
+    session.publish()
+    qt_app.processEvents()
+    assert views == [True], "not at the frame rate"
+    session.stop_play()
     assert view.game_state.publish_listener is None

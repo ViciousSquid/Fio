@@ -822,21 +822,14 @@ class QtGameView(QOpenGLWidget):
             # overlays asks Qt for a paint on its own (``update()``).
             if self.game_state.try_swap():
                 self.update()
-                if (self.play_mode and current_time >= self._play_views_due
-                        and not getattr(self.editor, 'editor_dormant', False)):
-                    # The editor's 2D views follow play at PLAY_2D_VIEWS_HZ,
-                    # not at the frame rate: one repaint of the visible one
-                    # is 4-9 ms of this thread (more than the 3D frame's own
-                    # Python on most maps), and it holds the GIL throughout.
-                    self._play_views_due = current_time + 1.0 / self.PLAY_2D_VIEWS_HZ
-                    self.editor.update_views()
+                self._follow_play_in_2d_views(current_time)
         else:
             self.repaint()
 
 
     def set_paint_on_publish(self, enabled):
-        """Paint each frame the moment the logic thread publishes it (kiosk
-        mode), instead of on the next tick of the 16 ms update loop.
+        """Paint each frame the moment the logic thread publishes it (in
+        Play), instead of on the next tick of the 16 ms update loop.
 
         On the timer alone a finished frame waited up to a tick before its
         paint could start: on a fast GPU that is most of a frame of latency
@@ -855,6 +848,18 @@ class QtGameView(QOpenGLWidget):
         """A frame was published (queued from the publishing thread)."""
         if self._paint_on_publish and self.game_state.try_swap():
             self.update()
+            self._follow_play_in_2d_views(time.perf_counter())
+
+    def _follow_play_in_2d_views(self, current_time):
+        """With a new frame on its way to the screen: the editor's 2D views
+        follow play at PLAY_2D_VIEWS_HZ, not at the frame rate -- one repaint
+        of the visible one is 4-9 ms of this thread (more than the 3D frame's
+        own Python on most maps), and it holds the GIL throughout. Not at all
+        in kiosk mode, where they are hidden (editor_dormant)."""
+        if (self.play_mode and current_time >= self._play_views_due
+                and not getattr(self.editor, 'editor_dormant', False)):
+            self._play_views_due = current_time + 1.0 / self.PLAY_2D_VIEWS_HZ
+            self.editor.update_views()
 
     def _process_console_command_queue(self):
         """Run any console commands queued by the I/O system on the UI thread.
@@ -1508,6 +1513,9 @@ class QtGameView(QOpenGLWidget):
             self.stop_editor_mouselook()
             self.decal_tool.set_active(False)
         self.play_mode = not self.play_mode
+        # In Play each frame is painted when it is published (in kiosk mode
+        # and in the editor alike): see set_paint_on_publish.
+        self.set_paint_on_publish(self.play_mode)
         if self.play_mode:
             player_start_pos = player_start.pos
             player_start_angle = player_start.get_angle()

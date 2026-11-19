@@ -6168,7 +6168,6 @@ class MainWindow(QMainWindow):
                 return  # User cancelled — stay in kiosk mode
 
         self.is_kiosk_mode = False
-        self.view_3d.set_paint_on_publish(False)
 
         # Exit play mode only if not keeping it (F12 toggle vs Escape)
         if not keep_play_mode and self.view_3d.play_mode:
@@ -6176,6 +6175,10 @@ class MainWindow(QMainWindow):
         else:
             # --- Restore previous tab ---
             self._restore_properties_tab()
+
+        # Frames go on being painted when published while Play goes on (F12
+        # back to the editor); leaving Play turned it off.
+        self.view_3d.set_paint_on_publish(bool(self.view_3d.play_mode))
 
         # Exit fullscreen FIRST - critical for proper geometry restoration
         if self.windowFlags() & Qt.FramelessWindowHint:
