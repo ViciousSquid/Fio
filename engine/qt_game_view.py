@@ -105,6 +105,9 @@ def perspective_projection(fov, aspect, near, far):
 
 class QtGameView(QOpenGLWidget):
     _logic_tick_fault_signal = pyqtSignal(str)
+    #: Emitted by whichever thread publishes a frame while frames are
+    #: painted on publication (kiosk mode: :meth:`set_paint_on_publish`).
+    _frame_published_signal = pyqtSignal()
     #: Weapon slot keys in Play: slot n holds item ITEM_IDS[n - 1].
     _SLOT_KEYS = {Qt.Key_1: 1, Qt.Key_2: 2, Qt.Key_3: 3, Qt.Key_4: 4}
     #: macOS: frames to wait for the capture re-centre to land before the
@@ -419,6 +422,8 @@ class QtGameView(QOpenGLWidget):
         self.setAttribute(Qt.WA_NoSystemBackground)
 
         self._play_views_due = 0.0
+        self._paint_on_publish = False
+        self._frame_published_signal.connect(self._paint_published_frame, Qt.QueuedConnection)
         timer = QTimer(self)
         timer.setInterval(16)
         timer.timeout.connect(self.update_loop)
@@ -817,7 +822,8 @@ class QtGameView(QOpenGLWidget):
             # overlays asks Qt for a paint on its own (``update()``).
             if self.game_state.try_swap():
                 self.update()
-                if self.play_mode and current_time >= self._play_views_due:
+                if (self.play_mode and current_time >= self._play_views_due
+                        and not getattr(self.editor, 'editor_dormant', False)):
                     # The editor's 2D views follow play at PLAY_2D_VIEWS_HZ,
                     # not at the frame rate: one repaint of the visible one
                     # is 4-9 ms of this thread (more than the 3D frame's own
@@ -827,6 +833,28 @@ class QtGameView(QOpenGLWidget):
         else:
             self.repaint()
 
+
+    def set_paint_on_publish(self, enabled):
+        """Paint each frame the moment the logic thread publishes it (kiosk
+        mode), instead of on the next tick of the 16 ms update loop.
+
+        On the timer alone a finished frame waited up to a tick before its
+        paint could start: on a fast GPU that is most of a frame of latency
+        and caps the rate near 60 fps whatever the display; on a slow one,
+        every paint left the GPU idle until the next tick. The update loop
+        still runs for input, audio and the console queue.
+        """
+        enabled = bool(enabled)
+        self._paint_on_publish = enabled
+        game_state = getattr(self, 'game_state', None)
+        if game_state is not None:
+            game_state.publish_listener = (self._frame_published_signal.emit
+                                           if enabled else None)
+
+    def _paint_published_frame(self):
+        """A frame was published (queued from the publishing thread)."""
+        if self._paint_on_publish and self.game_state.try_swap():
+            self.update()
 
     def _process_console_command_queue(self):
         """Run any console commands queued by the I/O system on the UI thread.

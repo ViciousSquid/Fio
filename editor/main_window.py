@@ -1762,12 +1762,29 @@ class MainWindow(QMainWindow):
         self.update_all_ui()
         self.selection_changed.emit()
 
+    @property
+    def editor_dormant(self):
+        """Whether the editor's own UI is out of sight and does no work:
+        kiosk mode, where the game has the window (fullscreen, borderless or
+        windowed) and rendering has the UI thread to itself. Its panels and
+        2D views are brought up to date once, when kiosk mode is left."""
+        return bool(getattr(self, 'is_kiosk_mode', False))
+
     def update_all_ui(self):
         # Every editor operation ends here: a PlayerStart it created, deleted,
         # pasted or cloned is held to the primary invariant inside that
         # operation (and its undo step), before anything shows the level.
         self.state.settle_player_starts()
         self.sync_sky_image_from_map()
+        if self.editor_dormant:
+            # Kiosk mode (a level change inside the game, a console command):
+            # only what the game draws -- the sky above, and a Big World's
+            # terrain fill. The panels nobody can see wait for kiosk mode to
+            # end (exit_kiosk_mode).
+            self.sync_bigworld_terrain(allow_create=True)
+            self._editor_ui_stale = True
+            return
+        self._editor_ui_stale = False
         self.property_editor.set_object(self._property_target())
         self.scene_hierarchy.refresh_list()
         self.sync_surface_inspector()
@@ -6124,6 +6141,11 @@ class MainWindow(QMainWindow):
         if not self.view_3d.play_mode:
             self.enter_play_mode()
 
+        # The game has the UI thread: each frame is painted the moment it is
+        # published, and the editor does no work until kiosk mode ends
+        # (editor_dormant).
+        self.view_3d.set_paint_on_publish(True)
+
     def exit_kiosk_mode(self, keep_play_mode=False, confirm=True):
         """Restore editor UI and exit play mode.
 
@@ -6146,6 +6168,7 @@ class MainWindow(QMainWindow):
                 return  # User cancelled — stay in kiosk mode
 
         self.is_kiosk_mode = False
+        self.view_3d.set_paint_on_publish(False)
 
         # Exit play mode only if not keeping it (F12 toggle vs Escape)
         if not keep_play_mode and self.view_3d.play_mode:
@@ -6185,6 +6208,11 @@ class MainWindow(QMainWindow):
             self.view_3d.last_mouse_pos = self.view_3d.mapFromGlobal(center_pos)
             QApplication.setOverrideCursor(Qt.BlankCursor)
             self.view_3d.setFocus()
+
+        # What changed while the editor was dormant (a level changed inside
+        # the game) reaches its panels and views now, once.
+        if getattr(self, '_editor_ui_stale', False):
+            self.update_all_ui()
 
     # =========================================================================
     # LOGIC GRAPH / WIZARD

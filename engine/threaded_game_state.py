@@ -293,6 +293,11 @@ class ThreadedGameState:
         #: handed to the renderer, and swaps declined because it was reading.
         self.published_frames = 0
         self.declined_swaps = 0
+        #: Called (no arguments, outside the lock, on whichever thread
+        #: published) each time a frame is published. Kiosk mode sets it so
+        #: the view paints a frame the moment it exists rather than on its
+        #: next timer tick; None otherwise.
+        self.publish_listener = None
 
         # Input state
         self._keys_lock = threading.Lock()
@@ -351,12 +356,16 @@ class ThreadedGameState:
             # A collection inside a locked section of this very thread.
             owner._deferred_releases.append(1)
             return
+        published = False
         with owner._render_state_lock:
             owner._fold_deferred_releases()
             if owner._read_leases > 0:
                 owner._read_leases -= 1
             if owner._read_leases == 0 and owner._write_ready:
                 owner._swap_locked()
+                published = True
+        if published:
+            owner._notify_published()
 
     def _fold_deferred_releases(self) -> None:
         """Apply lease releases deferred by a finalizer (caller holds the lock)."""
@@ -448,7 +457,18 @@ class ThreadedGameState:
                 self._write_ready = True
                 return False
             self._swap_locked()
-            return True
+        self._notify_published()
+        return True
+
+    def _notify_published(self) -> None:
+        """Tell :attr:`publish_listener` a frame was published. Never raises
+        into the publisher (the logic thread)."""
+        listener = self.publish_listener
+        if listener is not None:
+            try:
+                listener()
+            except Exception:
+                pass
 
     def _swap_locked(self) -> None:
         self.published_frames += 1
