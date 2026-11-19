@@ -146,20 +146,6 @@ class SettingsWindow(QDialog):
         self.locked_not_selectable_checkbox = QCheckBox("Locked items not selectable")
         view_2d_layout.addWidget(self.locked_not_selectable_checkbox)
         
-        glow_arrow_layout = QHBoxLayout()
-        glow_arrow_layout.addWidget(QLabel("Glow Arrow Scale:"))
-        self.glow_arrow_scale_slider = QSlider(Qt.Horizontal)
-        self.glow_arrow_scale_slider.setRange(50, 300)
-        self.glow_arrow_scale_slider.setValue(100)
-        self.glow_arrow_scale_slider.setTickPosition(QSlider.TicksBelow)
-        self.glow_arrow_scale_slider.setTickInterval(25)
-        glow_arrow_layout.addWidget(self.glow_arrow_scale_slider)
-        self.glow_arrow_scale_label = QLabel("100%")
-        self.glow_arrow_scale_slider.valueChanged.connect(
-            lambda v: self.glow_arrow_scale_label.setText(f"{v}%"))
-        glow_arrow_layout.addWidget(self.glow_arrow_scale_label)
-        view_2d_layout.addLayout(glow_arrow_layout)
-        
         view_2d_group.setLayout(view_2d_layout)
         layout.addWidget(view_2d_group)
 
@@ -624,9 +610,6 @@ class SettingsWindow(QDialog):
         self.selection_transparency_label.setText(f"{selection_trans}%")
         self.show_connections_checkbox.setChecked(self.config.getboolean('Display', 'show_connections', fallback=True))
         self.locked_not_selectable_checkbox.setChecked(self.config.getboolean('Display', 'locked_not_selectable_2d', fallback=True))
-        glow_arrow_scale = self.config.getint('Display', 'glow_arrow_scale', fallback=100)
-        self.glow_arrow_scale_slider.setValue(glow_arrow_scale)
-        self.glow_arrow_scale_label.setText(f"{glow_arrow_scale}%")
         
         self.property_editor_tooltips_checkbox.setChecked(
             self.config.getboolean('Editor', 'property_editor_tooltips', fallback=True))
@@ -751,7 +734,6 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'selection_transparency', str(self.selection_transparency_slider.value()))
         self.config.set('Display', 'show_connections', str(self.show_connections_checkbox.isChecked()))
         self.config.set('Display', 'locked_not_selectable_2d', str(self.locked_not_selectable_checkbox.isChecked()))
-        self.config.set('Display', 'glow_arrow_scale', str(self.glow_arrow_scale_slider.value()))
         
         self.config.set('Display', 'show_fps', str(self.show_fps_checkbox.isChecked()))
         self.config.set('Display', 'always_show_sysmon', str(self.always_show_sysmon_checkbox.isChecked()))

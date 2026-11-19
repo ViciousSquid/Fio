@@ -2121,12 +2121,6 @@ class View2D(QWidget):
                 painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, "DOOR")
             
             
-            # Draw glow light direction arrow
-            if brush.get('shader') == 'Glow':
-                # Editor-only guide: hidden in play mode.
-                if not getattr(self.main_window.view_3d, 'play_mode', False):
-                    self.draw_glow_light_arrow(painter, brush, ax1, ax2, ax_map)
-
             # A lone selected brush keeps its own resize handles; when several
             # objects are selected the unified group box owns the handles instead.
             if is_selected and not is_locked and not group_active:
@@ -2150,104 +2144,6 @@ class View2D(QWidget):
         if invert_y:
             return QRectF(QPointF(sx1, cy - dy1), QPointF(sx2, cy - dy2)).normalized()
         return QRectF(QPointF(sx1, cy + dy1), QPointF(sx2, cy + dy2)).normalized()
-
-    def draw_glow_light_arrow(self, painter, brush, ax1, ax2, ax_map):
-        """Draw a wide colored arrow radiating from the glow brush's light emission face."""
-        light_direction = brush.get('light_direction', 'top')
-        brush_pos = brush['pos']
-        brush_size = brush['size']
-        
-        # Get arrow scale from settings (default 100%)
-        arrow_scale = self.main_window.config.getint('Display', 'glow_arrow_scale', fallback=100) / 100.0
-        
-        # Map face name to direction vector and offset to face center
-        face_directions = {
-            'top':    ([0, 1, 0], [0, brush_size[1]/2, 0]),
-            'bottom': ([0, -1, 0], [0, -brush_size[1]/2, 0]),
-            'north':  ([0, 0, 1], [0, 0, brush_size[2]/2]),
-            'south':  ([0, 0, -1], [0, 0, -brush_size[2]/2]),
-            'east':   ([1, 0, 0], [brush_size[0]/2, 0, 0]),
-            'west':   ([-1, 0, 0], [-brush_size[0]/2, 0, 0]),
-        }
-        
-        if light_direction not in face_directions:
-            return
-        
-        direction, face_offset = face_directions[light_direction]
-        
-        # Calculate start point (center of the emitting face)
-        start_3d = [
-            brush_pos[0] + face_offset[0],
-            brush_pos[1] + face_offset[1],
-            brush_pos[2] + face_offset[2]
-        ]
-        
-        # Arrow length based on brush size and scale setting
-        base_arrow_length = max(brush_size[0], brush_size[1], brush_size[2]) * 0.8
-        arrow_length = base_arrow_length * arrow_scale
-        
-        # Calculate end point
-        end_3d = [
-            start_3d[0] + direction[0] * arrow_length,
-            start_3d[1] + direction[1] * arrow_length,
-            start_3d[2] + direction[2] * arrow_length
-        ]
-        
-        # Cone position - close to the emitting surface (20% along the arrow)
-        cone_3d = [
-            start_3d[0] + direction[0] * arrow_length * 0.2,
-            start_3d[1] + direction[1] * arrow_length * 0.2,
-            start_3d[2] + direction[2] * arrow_length * 0.2
-        ]
-        
-        # Project to 2D
-        p_start = QPointF(start_3d[ax_map[ax1]], start_3d[ax_map[ax2]])
-        p_end = QPointF(end_3d[ax_map[ax1]], end_3d[ax_map[ax2]])
-        p_cone = QPointF(cone_3d[ax_map[ax1]], cone_3d[ax_map[ax2]])
-        
-        # Skip if arrow is too small in this view
-        if (p_start - p_end).manhattanLength() < 2:
-            return
-        
-        s_start = self.world_to_screen(p_start)
-        s_end = self.world_to_screen(p_end)
-        s_cone = self.world_to_screen(p_cone)
-        
-        # Get brush colour for the arrow (use the glow colour)
-        brush_colour = brush.get('colour', [1.0, 0.9, 0.5])  # Default warm glow color
-        arrow_color = QColor(
-            int(min(255, brush_colour[0] * 255 * 1.2)),  # Slightly brighter
-            int(min(255, brush_colour[1] * 255 * 1.2)),
-            int(min(255, brush_colour[2] * 255 * 1.2))
-        )
-        
-        # Draw arrow shaft (from cone to tip)
-        painter.setPen(QPen(arrow_color, 2))
-        painter.drawLine(s_cone, s_end)
-        
-        # Draw big arrowhead/cone near the surface
-        angle = math.atan2(s_end.y() - s_start.y(), s_end.x() - s_start.x())
-        arrow_head_size = max(12, 18 * arrow_scale)  # Bigger arrowhead
-        arrow_head_width = math.pi / 2  # Wide arrowhead (60 degrees)
-        
-        p1 = s_cone - QPointF(
-            math.cos(angle - arrow_head_width) * arrow_head_size,
-            math.sin(angle - arrow_head_width) * arrow_head_size
-        )
-        p2 = s_cone - QPointF(
-            math.cos(angle + arrow_head_width) * arrow_head_size,
-            math.sin(angle + arrow_head_width) * arrow_head_size
-        )
-        
-        # Cone tip extends forward from s_cone
-        cone_tip = s_cone + QPointF(
-            math.cos(angle) * arrow_head_size * 0.6,
-            math.sin(angle) * arrow_head_size * 0.6
-        )
-        
-        painter.setPen(QPen(arrow_color, 2))
-        painter.setBrush(QBrush(arrow_color))
-        painter.drawPolygon(QPolygonF([cone_tip, p1, p2]))
 
     def draw_brush_color_tag(self, painter, brush, screen_rect):
         color = brush.get('color')
