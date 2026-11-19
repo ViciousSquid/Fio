@@ -177,7 +177,7 @@ jobs:
           # A skip (no OpenGL, no display) is not a demonstration: all three must run.
           grep -qE '(^|[^0-9])3 passed' "$log" || { echo "::error::not every native test ran"; exit 1; }
           [ "$kiosk_status" -eq 0 ] || { echo "::error::native kiosk presentation failed here"; exit "$kiosk_status"; }
-          grep -qE '(^|[^0-9])14 passed' "$kiosk_log" || { echo "::error::not every native kiosk test ran"; exit 1; }
+          grep -qE '(^|[^0-9])15 passed' "$kiosk_log" || { echo "::error::not every native kiosk test ran"; exit 1; }
           # Each step the tests report on this platform, not merely a pass:
           # the native window created and presenting (the same scene as the
           # widget), the widget's GL state restored, the editor resuming, and

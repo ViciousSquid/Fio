@@ -29,13 +29,22 @@ pytestmark = [pytest.mark.gl, pytest.mark.qt]
 SIZE = (320, 180)
 
 
-def _pump(app, until, tries=200):
-    from PyQt5.QtCore import QEvent as _E
-    for _ in range(tries):
+def _pump(app, until, seconds=5.0):
+    """Run the event loop until *until()* holds, for up to *seconds* of wall
+    clock. Time, not a count of turns: a Wayland compositor exposes a new
+    window only after a round trip, and spinning processEvents can finish
+    before that answer arrives."""
+    import time
+    from PyQt5.QtCore import QEventLoop
+    deadline = time.monotonic() + seconds
+    while True:
         app.processEvents()
+        app.processEvents(QEventLoop.AllEvents, 20)
         if until():
             return True
-    return until()
+        if time.monotonic() >= deadline:
+            return until()
+        time.sleep(0.002)
 
 
 @pytest.fixture
@@ -199,7 +208,8 @@ def test_the_view_follows_the_native_window(session):
     finally:
         view._restore_widget_framebuffer()
     surface.resize(400, 200)
-    _pump(session.app, lambda: surface.width() == 400)
+    # The window's resize event (not resize() itself) is what the view follows.
+    _pump(session.app, lambda: view._cached_aspect_ratio == pytest.approx(400 / 200))
     assert view.width() == 400
     assert view._cached_aspect_ratio == pytest.approx(400 / 200)
     resized = _native_frame(session, surface)          # drawn at the new size
@@ -546,6 +556,40 @@ def test_the_console_switches_native_presentation_live(session):
     handler.handle_command('r_nativekiosk toggle')
     assert view._native_surface is not None
     _report("console: r_nativekiosk switched a running kiosk mode both ways")
+
+
+def test_events_while_the_window_is_created_do_not_touch_the_view(session, monkeypatch):
+    """Windows delivers expose and resize while the native window is being
+    created, before the constructor returns and before the view presents
+    there (CI run #48: every native test logged an AttributeError from
+    that, and the traceback kept the window alive). Such events, and any
+    after presentation ended, leave the view alone."""
+    import sys
+    from PyQt5.QtCore import QSize
+    from PyQt5.QtGui import QResizeEvent, QWindow
+    from PyQt5.QtWidgets import QApplication
+    from engine.kiosk_surface import NativeKioskSurface
+    view = session.view
+    errors = []
+    monkeypatch.setattr(sys, 'excepthook', lambda *info: errors.append(info))
+    original_create = QWindow.create
+
+    def create_with_early_events(window):
+        original_create(window)
+        QApplication.sendEvent(window, QResizeEvent(QSize(640, 100), QSize(1, 1)))
+        QApplication.sendEvent(window, QEvent(QEvent.UpdateRequest))
+        window.schedule_update()
+    monkeypatch.setattr(QWindow, 'create', create_with_early_events)
+    aspect = view._cached_aspect_ratio
+    presented = []
+    monkeypatch.setattr(type(view), '_present_native_frame', lambda self: presented.append(1))
+    surface = NativeKioskSurface(view)
+    session.app.processEvents()
+    assert not errors, errors
+    assert view._native_surface is None and not presented
+    assert view._cached_aspect_ratio == aspect, "a window not yet presenting resized the view"
+    surface.destroy()
+    surface.deleteLater()
 
 
 def test_map_logic_cannot_switch_native_presentation(session):

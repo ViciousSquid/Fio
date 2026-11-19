@@ -73,6 +73,8 @@ In the editor (and in kiosk mode by default) the 3D view is a `QOpenGLWidget`. F
 
 Any failure leaves kiosk mode on the 3D view as before, and the reason goes to the Debug Console. A present that fails mid-game does the same.
 
+The window acts on its own events (expose, resize, frame requests, input) only while the view presents on it. Windows delivers an expose and a resize while the native window is still being created, before the view has switched to it. A window that has ended and is waiting to be deleted gets events too. Neither may touch the view. Frame requests go through a timer the window owns, so no queued request outlives it.
+
 On exit, the context is made current on the widget before the window is destroyed. The widget's framebuffer, viewport and scissor are put back explicitly. Qt's own paint setup restores the framebuffer and viewport, but GL work done outside a paint (the decal tool, a renderer switch, uploads) does not get that, and must not inherit the native window's viewport.
 
 ## Measuring it
@@ -122,9 +124,9 @@ A `QOpenGLPaintDevice` belongs to the GL context current when it is created. One
 
 | Platform | Status |
 |---|---|
-| Linux X11, GLX (Mesa) | All 14 tests pass, including the same-picture test. |
-| Linux X11, EGL (Mesa) | All 14 tests pass, including the same-picture test. |
-| Windows (Mesa llvmpipe) | Run in CI on every push touching these files (`.github/workflows/play-click-native.yml`), on the runner's real window system. CI requires all 14 to pass, and each step to be reported: created and presenting (with the native window handle and the framebuffer drawn into, never the widget's), restored, editor resumed, console switch, repeated transitions. |
+| Linux X11, GLX (Mesa) | All 15 tests pass, including the same-picture test. |
+| Linux X11, EGL (Mesa) | All 15 tests pass, including the same-picture test. |
+| Windows (Mesa llvmpipe) | Run in CI on every push touching these files (`.github/workflows/play-click-native.yml`), on the runner's real window system. CI requires all 15 to pass, and each step to be reported: created and presenting (with the native window handle and the framebuffer drawn into, never the widget's), restored, editor resumed, console switch, repeated transitions. |
 | macOS (Cocoa OpenGL) | Same CI workflow as Windows. |
 | Linux Wayland (sway) | Same CI workflow as Windows. |
 | Snapdragon ARM (Windows on ARM) | Not yet tested. Run the tool above. |

@@ -89,7 +89,23 @@ class NativeKioskSurface(QWindow):
 
     def __init__(self, view):
         super().__init__()
+        # Set before anything can deliver an event: Windows sends expose and
+        # resize while the native window is being created, before the
+        # constructor returns.
         self.view = view
+        self._device = None
+        #: Seconds the last swap took (PresentationStats).
+        self.last_swap_ms = 0.0
+        #: For tests: a callable given the framebuffer just drawn, before the
+        #: swap (it is undefined after it).
+        self.before_swap = None
+        # One frame request at a time, coalesced. A timer of the surface's
+        # own rather than QTimer.singleShot(0, bound method): it goes with
+        # the surface, so no request queued at the end of a turn outlives it.
+        self._update_timer = QTimer(self)
+        self._update_timer.setSingleShot(True)
+        self._update_timer.setInterval(0)
+        self._update_timer.timeout.connect(self._deliver_update)
         context = view.context()
         if context is None or not context.isValid():
             raise NativePresentationError("the 3D view has no valid OpenGL context")
@@ -106,13 +122,13 @@ class NativeKioskSurface(QWindow):
         if mismatch:
             self.destroy()
             raise NativePresentationError("incompatible surface (%s)" % mismatch)
-        self._device = None
-        self._update_pending = False
-        #: Seconds the last swap took (PresentationStats).
-        self.last_swap_ms = 0.0
-        #: For tests: a callable given the framebuffer just drawn, before the
-        #: swap (it is undefined after it).
-        self.before_swap = None
+
+    def presenting(self):
+        """Whether the view presents here now. Not yet while the window is
+        being created (Windows delivers its first expose and resize then),
+        and no longer once presentation has ended and the window waits to be
+        deleted: events then must not touch the view."""
+        return getattr(self.view, '_native_surface', None) is self
 
     # -- presenting --------------------------------------------------------
 
@@ -155,7 +171,7 @@ class NativeKioskSurface(QWindow):
     def present(self):
         """Draw the newest published frame here and swap. Returns whether a
         frame was drawn (False while the window is not exposed)."""
-        self._update_pending = False
+        self._update_timer.stop()
         if not self.make_current():
             return False
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.context.defaultFramebufferObject())
@@ -175,18 +191,23 @@ class NativeKioskSurface(QWindow):
         QWindow.requestUpdate(): Qt delivers that on its own refresh-rate
         timer, which put a published frame back on a ~16 ms grid -- the
         doubled frames painting on publication had removed."""
-        if not self._update_pending:
-            self._update_pending = True
-            QTimer.singleShot(0, self._deliver_update)
+        if not self._update_timer.isActive():
+            self._update_timer.start()
 
     def _deliver_update(self):
-        if self._update_pending:
+        if self.presenting():
             self.view._present_native_frame()
 
     # -- events ------------------------------------------------------------
 
     def event(self, event):
         kind = event.type()
+        if not self.presenting():
+            # Being created, or ended: the view is the widget's again.
+            if kind == QEvent.Close:
+                event.ignore()
+                return True
+            return super().event(event)
         if kind == QEvent.UpdateRequest:
             self.view._present_native_frame()
             return True
@@ -214,12 +235,13 @@ class NativeKioskSurface(QWindow):
         return super().event(event)
 
     def exposeEvent(self, event):
-        if self.isExposed():
+        if self.presenting() and self.isExposed():
             self.schedule_update()
 
     def resizeEvent(self, event):
-        self.view._apply_viewport_size(self.width(), self.height())
-        self.schedule_update()
+        if self.presenting():
+            self.view._apply_viewport_size(self.width(), self.height())
+            self.schedule_update()
 
     # -- window modes ---------------------------------------------------------
 
