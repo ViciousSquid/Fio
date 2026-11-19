@@ -184,3 +184,59 @@ def test_highlight_cleanup_survives_deleted_rows(hierarchy, refresh):
     hierarchy._clear_highlight()
     assert hierarchy._highlighted_item is None
     assert hierarchy._highlight_backgrounds is None
+
+
+def _rebuilds(hierarchy, monkeypatch):
+    calls = []
+    original = hierarchy._rebuild_items
+
+    def counted(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(hierarchy, '_rebuild_items', counted)
+    return calls
+
+
+def test_a_selection_change_reselects_rows_as_a_rebuild_would(hierarchy, monkeypatch):
+    state = hierarchy.main_window.state
+    brushes = [{'id': 'a', 'name': 'wall', 'brush_group': 'G'},
+               {'id': 'b', 'name': 'floor', 'hidden': True, 'brush_group': 'G'},
+               {'id': 'c', 'color': 'red'}]
+    things = [HierarchyThing('prop', brush_group='G'), HierarchyThing('lamp')]
+    state.brushes, state.things = brushes, things
+    state.terrain_data = {'biome': 'desert_canyon'}
+    state.selected_objects = []
+    hierarchy.refresh_list()
+    calls = _rebuilds(hierarchy, monkeypatch)
+    for selected in ([brushes[1]], [things[0], brushes[2]], brushes + things,
+                     [dict(brushes[0])], []):
+        state.selected_objects = selected
+        hierarchy.refresh_list()
+        fast = hierarchy_rows(hierarchy)
+        reference_refresh_list(hierarchy)       # from scratch
+        hierarchy.refresh_list()                # rebuilds: the rows were cleared
+        assert fast == hierarchy_rows(hierarchy), selected
+    # Each selection was applied without a rebuild; each reference forced one.
+    assert len(calls) == 5
+
+
+@pytest.mark.parametrize('edit', [
+    lambda s: s.brushes[0].__setitem__('name', 'renamed'),
+    lambda s: s.brushes[1].__setitem__('hidden', True),
+    lambda s: s.brushes[0].__setitem__('lock', True),
+    lambda s: s.brushes[1].__setitem__('color', 'blue'),
+    lambda s: s.brushes[0].__setitem__('brush_group', 'G'),
+    lambda s: s.brushes.append({'name': 'new'}),
+    lambda s: s.things[0].properties.__setitem__('hidden', True),
+    lambda s: setattr(s.things[0], 'name', 'renamed'),
+    lambda s: setattr(s, 'brushes', [dict(b) for b in s.brushes][::-1]),
+])
+def test_any_displayed_change_still_rebuilds(hierarchy, monkeypatch, edit):
+    state = hierarchy.main_window.state
+    state.brushes = [{'name': 'a'}, {'name': 'b'}]
+    state.things = [HierarchyThing('prop')]
+    hierarchy.refresh_list()
+    calls = _rebuilds(hierarchy, monkeypatch)
+    edit(state)
+    hierarchy.refresh_list()
+    assert calls == [True]
