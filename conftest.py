@@ -569,6 +569,52 @@ def _fail_on_a_held_modifier():
 _SETTINGS_INI = os.path.join(_ROOT, "settings.ini")
 
 
+@pytest.fixture(scope="session")
+def _session_settings_ini(tmp_path_factory):
+    """``(path, defaults)``: where editor windows in tests keep settings.ini,
+    and the tracked file's contents it is reset to before every test."""
+    path = tmp_path_factory.mktemp("settings") / "settings.ini"
+    try:
+        with open(_SETTINGS_INI, "rb") as fh:
+            defaults = fh.read()
+    except OSError:  # pragma: no cover - no tracked settings
+        defaults = b""
+    return str(path), defaults
+
+
+@pytest.fixture(autouse=True)
+def _editor_never_writes_the_repo_settings_ini(_session_settings_ini, monkeypatch):
+    """Point an editor window built in the repository root at a session copy
+    of settings.ini, not the tracked file.
+
+    Windows built from the repository root (FioTestSession, tests that need
+    the real asset folder) resolve settings.ini there, and a save made outside
+    the test that opened the window -- a deferred close, a recent-files entry
+    -- reached the shipped default settings past the restore below. Only that
+    one path is redirected (``editor.user_paths`` is tested on its own), and
+    only once ``editor.main_window`` is loaded, so the headless tier never
+    imports the editor for it.
+    """
+    module = sys.modules.get("editor.main_window")
+    if module is None:
+        return
+    copy_path, defaults = _session_settings_ini
+    # Every test starts from the shipped defaults, as it did when windows
+    # used the tracked file and it was restored after each test.
+    with open(copy_path, "wb") as fh:
+        fh.write(defaults)
+    original = sys.modules["editor.user_paths"].settings_path
+    repo = os.path.normcase(os.path.abspath(_SETTINGS_INI))
+
+    def settings_path(root_dir):
+        path = original(root_dir)
+        if os.path.normcase(os.path.abspath(path)) == repo:
+            return copy_path
+        return path
+
+    monkeypatch.setattr(module, "settings_path", settings_path)
+
+
 @pytest.fixture(autouse=True)
 def _restore_repo_settings_ini():
     """Put the tracked settings.ini back after a test that wrote to it.
