@@ -65,11 +65,12 @@ In the editor (and in kiosk mode by default) the 3D view is a `QOpenGLWidget`. F
 
 **Entry and exit.** Entry runs in this order:
 
-1. The window is created.
-2. The context's and the window's pixel formats are compared (renderable type, colour, depth, stencil, samples). Version and profile belong to the context, not the surface.
-3. The window is shown in the kiosk window mode.
-4. `makeCurrent` is tried once.
-5. The context is handed back to the widget.
+1. The 3D view's context must share with its editor window's. A `QOpenGLWidget` shares its context with one the top-level window makes from the window's format, which is the application default. Where the platform refuses (macOS will not share a core-profile context with a legacy one: "falling back to unshared context"), Qt rebuilds the widget's context, and Fio's renderer with it, the next time the widget is shown. Native kiosk mode hides the editor window and shows it again on leaving, so it is refused in that case. `main.py` makes Fio's format (`engine/gl_format.py`) the default, so in Fio the two share. The test harness and the benchmark tool set the same default; the first macOS CI run without it rebuilt the renderer on every exit from native kiosk mode.
+2. The window is created.
+3. The context's and the window's pixel formats are compared (renderable type, colour, depth, stencil, samples). Version and profile belong to the context, not the surface.
+4. The window is shown in the kiosk window mode.
+5. `makeCurrent` is tried once.
+6. The context is handed back to the widget.
 
 Any failure leaves kiosk mode on the 3D view as before, and the reason goes to the Debug Console. A present that fails mid-game does the same.
 
@@ -124,10 +125,10 @@ A `QOpenGLPaintDevice` belongs to the GL context current when it is created. One
 
 | Platform | Status |
 |---|---|
-| Linux X11, GLX (Mesa) | All 15 tests pass, including the same-picture test. |
-| Linux X11, EGL (Mesa) | All 15 tests pass, including the same-picture test. |
-| Windows (Mesa llvmpipe) | Run in CI on every push touching these files (`.github/workflows/play-click-native.yml`), on the runner's real window system. CI requires all 15 to pass, and each step to be reported: created and presenting (with the native window handle and the framebuffer drawn into, never the widget's), restored, editor resumed, console switch, repeated transitions. |
-| macOS (Cocoa OpenGL) | Same CI workflow as Windows. |
+| Linux X11, GLX (Mesa) | All 16 tests pass, including the same-picture test. |
+| Linux X11, EGL (Mesa) | All 16 tests pass, including the same-picture test. |
+| Windows (Mesa llvmpipe) | Run in CI on every push touching these files (`.github/workflows/play-click-native.yml`), on the runner's real window system. CI requires all 16 to pass, and each step to be reported: created and presenting (with the native window handle and the framebuffer drawn into, never the widget's), restored, editor resumed, console switch, repeated transitions. |
+| macOS (Cocoa OpenGL) | Same CI workflow as Windows. The first run there (Apple Software Renderer) found the renderer rebuilt on leaving native kiosk mode: the test harness had not set Fio's GL format as the default (see Entry and exit). |
 | Linux Wayland (sway) | Same CI workflow as Windows. |
 | Snapdragon ARM (Windows on ARM) | Not yet tested. Run the tool above. |
 

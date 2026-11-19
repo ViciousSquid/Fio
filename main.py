@@ -212,21 +212,16 @@ if __name__ == "__main__":
     # ---------------------------------------------------------
     # Configure OpenGL BEFORE QApplication is created
     # ---------------------------------------------------------
-    fmt = QSurfaceFormat()
-    fmt.setVersion(3, 3)
-    fmt.setProfile(QSurfaceFormat.CoreProfile)
-    fmt.setDepthBufferSize(24)
-    fmt.setStencilBufferSize(8)
-
     # A damaged settings.ini falls back to the defaults (and is set aside);
     # it must never be the reason Fio does not start.
     from editor.settings_file import SettingsParser, read_settings
     config = SettingsParser()
     read_settings(config, settings_path(root_directory))
     vsync = config.getboolean('Display', 'vsync', fallback=True)
-    fmt.setSwapInterval(1 if vsync else 0)
-
-    QSurfaceFormat.setDefaultFormat(fmt)
+    # The editor's top-level windows take this format too: the 3D view's
+    # context can share with theirs only if they agree (engine/gl_format.py).
+    from engine.gl_format import set_default_surface_format
+    set_default_surface_format(1 if vsync else 0)
 
     # Qt reads the UI scale only when the QApplication is created.
     from editor.ui_scale import apply_ui_scale

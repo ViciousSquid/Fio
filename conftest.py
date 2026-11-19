@@ -49,6 +49,20 @@ try:
 except OSError:  # pragma: no cover - read-only /tmp is not a test failure
     pass
 
+# Fio's GL format as the application default, before any test builds the
+# QApplication -- as main.py does. Editor windows' own contexts take the
+# default; on macOS the 3D view's core-profile context cannot share with a
+# legacy one, and Qt then rebuilds the view's context (and Fio's renderer)
+# whenever the editor window is shown again (engine/gl_format.py). No vsync:
+# a headless display may never come round to the swap.
+try:
+    from PyQt5.QtWidgets import QApplication as _QApplication
+    if _QApplication.instance() is None:
+        from engine.gl_format import set_default_surface_format
+        set_default_surface_format(0)
+except ImportError:  # pragma: no cover - PyQt5 absent: the Qt tiers skip
+    pass
+
 #: Seed used for every test that does not ask for another.  Property/fuzz tests
 #: derive their own seeds from this so a whole run is reproducible from one
 #: number.

@@ -60,15 +60,9 @@ def _child(args):
         return own_settings if os.path.normcase(os.path.abspath(path)) == tracked else path
     user_paths.settings_path = settings_path
     from PyQt5.QtCore import Qt, QTimer
-    from PyQt5.QtGui import QSurfaceFormat
     from PyQt5.QtWidgets import QApplication
-    fmt = QSurfaceFormat()
-    fmt.setVersion(3, 3)
-    fmt.setProfile(QSurfaceFormat.CoreProfile)
-    fmt.setDepthBufferSize(24)
-    fmt.setStencilBufferSize(8)
-    fmt.setSwapInterval(1 if args.vsync == 'on' else 0)
-    QSurfaceFormat.setDefaultFormat(fmt)
+    from engine.gl_format import set_default_surface_format
+    set_default_surface_format(1 if args.vsync == 'on' else 0)
     app = QApplication(sys.argv[:1])
     from editor.desktop_style import install_editor_style
     install_editor_style(app)

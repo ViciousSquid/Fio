@@ -132,12 +132,8 @@ class QtGameView(QOpenGLWidget):
         self.debug_draw = ViewDebugDraw(self)
         self._logic_tick_fault_signal.connect(self._handle_logic_tick_fault)
 
-        fmt = QSurfaceFormat()
-        fmt.setVersion(3, 3)
-        fmt.setProfile(QSurfaceFormat.CoreProfile)
-        fmt.setDepthBufferSize(24)
-        fmt.setStencilBufferSize(8)
-        self.setFormat(fmt)
+        from engine.gl_format import fio_surface_format
+        self.setFormat(fio_surface_format())
 
         self.editor = editor
         #: Frames left whose GL errors are reported (see _report_gl_errors).
@@ -913,6 +909,11 @@ class QtGameView(QOpenGLWidget):
             return self._native_surface
         if not self.renderer or not getattr(self.renderer, 'ready', False):
             raise NativePresentationError("the renderer is not ready")
+        if not self._context_survives_window_show():
+            raise NativePresentationError(
+                "the 3D view's GL context does not share with its window's, so Qt "
+                "would rebuild it (and the renderer) when the editor window is "
+                "shown again (engine/gl_format.py)")
         surface = NativeKioskSurface(self)
         # A widget grab must not outlive the widget presenting.
         self._release_play_mouse_grab()
@@ -921,6 +922,23 @@ class QtGameView(QOpenGLWidget):
         self._native_presented_at = None
         self._apply_viewport_size(surface.width(), surface.height())
         return surface
+
+    def _context_survives_window_show(self):
+        """Whether showing the editor window again keeps this context.
+
+        A QOpenGLWidget shares its context with one its top-level window
+        makes from the window's format. When the platform refused that
+        sharing (macOS, a core-profile view in a window whose default format
+        is legacy: "falling back to unshared context"), Qt resets the widget
+        -- a new context, initializeGL, a new renderer -- the next time it is
+        shown. Native kiosk mode hides the editor window and shows it again
+        on leaving, so there it would replace the renderer. With Fio's format
+        as the application default (main.py) the two share."""
+        from PyQt5.QtCore import QCoreApplication
+        if QCoreApplication.testAttribute(Qt.AA_ShareOpenGLContexts):
+            return True
+        context = self.context()
+        return context is not None and context.shareContext() is not None
 
     def verify_native_presentation(self):
         """Make the context current on the shown native window once, then

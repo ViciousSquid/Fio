@@ -480,6 +480,26 @@ def _editor_pick(session):
         return np.array((p.x / p.w, p.y / p.w, p.z / p.w))
     near, far = unproject(-1.0), unproject(1.0)
     expected = near + (far - near) * (near[1] / (near[1] - far[1]))
+    if hit is None:
+        # What the pick saw, for a platform where it found nothing.
+        from OpenGL import GL
+        view.makeCurrent()
+        try:
+            GL.glBindFramebuffer(GL.GL_READ_FRAMEBUFFER, view.defaultFramebufferObject())
+            depth = GL.glReadPixels(px, py, 1, 1, GL.GL_DEPTH_COMPONENT, GL.GL_FLOAT)
+            depth_bits = GL.glGetFramebufferAttachmentParameteriv(
+                GL.GL_READ_FRAMEBUFFER, GL.GL_DEPTH_ATTACHMENT,
+                GL.GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE)
+            error = GL.glGetError()
+        except Exception as exc:
+            depth, depth_bits, error = None, None, repr(exc)
+        finally:
+            view.doneCurrent()
+        _editor_pick.seen = dict(
+            pixel=(px, py), size=(width, height), logical=(view.width(), view.height()),
+            ratio=scale, depth=np.asarray(depth).ravel().tolist() if depth is not None else None,
+            depth_bits=depth_bits, gl_error=error, fbo=view.defaultFramebufferObject(),
+            samples=view.format().samples(), frame_mean=float(frame.mean()))
     return hit, expected
 
 
@@ -493,7 +513,8 @@ def test_the_editor_carries_on_after_native_kiosk(session):
     renderer, context, world = view.renderer, view.context(), window.state
     session.stop_play()
     before, expected = _editor_pick(session)
-    assert before is not None, "no surface under the editor camera before kiosk mode"
+    assert before is not None, \
+        "no surface under the editor camera before kiosk mode: %r" % getattr(_editor_pick, 'seen', None)
     assert np.allclose(before[0], expected, atol=0.5), (before[0], expected)
 
     session.start_play()
@@ -512,7 +533,8 @@ def test_the_editor_carries_on_after_native_kiosk(session):
     # The view is the editor's widget again (the editor layout comes back on
     # leaving kiosk mode, so its size, and the centre pixel's ray, change).
     after, expected = _editor_pick(session)
-    assert after is not None, "the decal pick found no surface in the widget's depth"
+    assert after is not None, \
+        "the decal pick found no surface in the widget's depth: %r" % getattr(_editor_pick, 'seen', None)
     point, normal = np.asarray(after[0]), np.asarray(after[1])
     # The floor's top is y = 0 (tests.helpers.worlds.room), facing up: the
     # depth read back from the widget puts the pick where the ray meets it.
@@ -603,6 +625,25 @@ def test_events_while_the_window_is_created_do_not_touch_the_view(session, monke
         view._cached_aspect_ratio == pytest.approx(aspect)
     surface.destroy()
     surface.deleteLater()
+
+
+def test_a_context_qt_would_rebuild_on_show_keeps_kiosk_mode_on_the_3d_view(session, monkeypatch):
+    """Where the view's context could not share with its window's (macOS:
+    a core-profile view in a window of legacy format), Qt rebuilds the
+    context -- and the renderer -- when the editor window is shown again.
+    Native kiosk mode hides it and shows it on leaving, so it is refused
+    there: kiosk mode stays on the 3D view, the same renderer throughout."""
+    window, view = session.window, session.view
+    assert view.context().shareContext() is not None, \
+        "the test harness should run Fio's GL format as the default (engine/gl_format.py)"
+    renderer, context = view.renderer, view.context()
+    monkeypatch.setattr(type(view), '_context_survives_window_show', lambda self: False)
+    window.config.set('Kiosk', 'native_surface', 'True')
+    window.enter_kiosk_mode()
+    assert window.is_kiosk_mode and window.isVisible()
+    assert view._native_surface is None, "native presentation started on a context Qt would rebuild"
+    window.exit_kiosk_mode(keep_play_mode=True, confirm=False)
+    assert view.renderer is renderer and view.context() is context
 
 
 def test_map_logic_cannot_switch_native_presentation(session):
