@@ -175,6 +175,10 @@ class EditorState:
         #: world; the custom slots' definitions are saved with the map.
         self.item_definitions = ItemDefinitions()
         self.terrain_data = None
+        #: A callable that brings ``terrain_data`` up to date with the live
+        #: terrain, left by a tool that edits the terrain faster than it is
+        #: worth re-encoding it (sculpt dabs); see :meth:`defer_terrain_sync`.
+        self._terrain_sync = None
         self._logic_graph_positions = {}  # Persisted node positions for the logic graph
         self.created_at = ''              # ISO timestamp, set on first save
         self.undo_stack = deque(maxlen=50)
@@ -458,6 +462,7 @@ class EditorState:
         self._invalidate_entity_caches()
         self.selected_objects = []
         self.terrain_data = None
+        self._terrain_sync = None           # it was the old terrain's
         self.view_filters.load_level_data({})
         self.item_definitions.reset()
         self.undo_stack.clear()
@@ -546,8 +551,26 @@ class EditorState:
             self.mark_world_changed(changed)
         return changed
 
+    def defer_terrain_sync(self, sync):
+        """*sync()* will copy the live terrain into ``terrain_data``; it is
+        run before anything reads the scene to keep it (a save, an autosave,
+        an undo checkpoint), or when the tool calls :meth:`sync_terrain`.
+
+        A sculpt dab used to re-encode the whole terrain into
+        ``terrain_data`` every time; now a stroke does it once, at its end,
+        and nothing that keeps the scene can see it out of date.
+        """
+        self._terrain_sync = sync
+
+    def sync_terrain(self):
+        """Run a deferred terrain sync, if one is pending."""
+        sync, self._terrain_sync = self._terrain_sync, None
+        if sync is not None:
+            sync()
+
     def get_level_data(self):
         """Serializes the current scene state into a dictionary."""
+        self.sync_terrain()
         data = {
             # 3: stable entity IDs and logic graph layout. 4: one material
             # record per brush face (engine.brush_faces.CANONICAL_MAP_VERSION).
@@ -951,6 +974,7 @@ class EditorState:
         self._invalidate_entity_caches()
 
         self.terrain_data = level_data.get('terrain_data', None)
+        self._terrain_sync = None           # it was the old terrain's
         self.view_filters.load_level_data(level_data)
         self.item_definitions.load(level_data.get('items'))
         self.sync_item_props()
@@ -1171,6 +1195,7 @@ class EditorState:
 
     def _checkpoint_data(self):
         """The scene as a JSON-ready checkpoint dict (see :meth:`snapshot`)."""
+        self.sync_terrain()
         terrain_csg = []
         if isinstance(self.terrain_data, dict):
             terrain_csg = [

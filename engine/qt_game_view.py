@@ -2637,6 +2637,9 @@ class QtGameView(QOpenGLWidget):
         if event.button() == Qt.LeftButton and self._stamp_drag is not None:
             self.terrain_edit._end_stamp_drag()
             return
+        if (event.button() == Qt.LeftButton and self.terrain_sculpt_active
+                and not self.play_mode):
+            self.terrain_edit.end_sculpt_stroke()
         if event.button() == Qt.LeftButton and self.decal_tool.dragging():
             self.decal_tool.release()
             return

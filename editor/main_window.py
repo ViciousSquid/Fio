@@ -3973,20 +3973,82 @@ class MainWindow(QMainWindow):
             # temporary copy stays too (the overlay's close removes it).
             return
 
-        from editor.package_exporter import PackageExporter
-        exporter = PackageExporter(self.state, self.root_dir)
-        success, errors = exporter.export(output_path, metadata, abs_map, parent_widget=dialog)
+        job = getattr(self, '_export_job', None)
+        if job is not None and job.running:
+            self.show_toast("A package export is already running", is_error=True)
+            return
 
-        if success:
-            dialog.dep_label.setStyleSheet("color: #4CAF50; font-size: 12px; padding: 4px;")
-            dialog.dep_label.setText(f"Export successful!\nSaved to: {os.path.basename(output_path)}")
-            dialog.export_btn.setText("Done")
-            dialog.export_btn.setEnabled(False)
-            self.show_toast(f"Package exported: {os.path.basename(output_path)}", level='success')
-        else:
-            dialog.dep_label.setStyleSheet("color: #f44336; font-size: 12px; padding: 4px;")
-            dialog.dep_label.setText("Export failed:\n" + "\n".join(errors[:5]))
-            # Error already shown in exporter
+        # The export runs on a worker thread and reads files only, so the
+        # scene it packages is fixed here, on the GUI thread: an unsaved
+        # level is written to a copy of its own, taken now (the overlay's
+        # temporary copy dates from when it opened, and the overlay may be
+        # closed -- removing that copy -- while the export still reads).
+        job_copy = None
+        if self.unsaved_changes or self.file_path is None or abs_map == os.path.abspath(
+                getattr(self, '_export_temp_file', None) or ''):
+            import tempfile
+            try:
+                text = _strict_json(self.state.get_level_data(), indent=4)
+                fd, job_copy = tempfile.mkstemp(suffix=".json", prefix="export_temp_",
+                                                dir=os.path.dirname(abs_map))
+                with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                    handle.write(text)
+            except Exception as e:
+                if job_copy and os.path.exists(job_copy):
+                    os.unlink(job_copy)
+                self.show_toast(f"Failed to snapshot the map for export: {e}", is_error=True)
+                return
+            abs_map = job_copy
+
+        def discard_copy():
+            if job_copy and os.path.exists(job_copy):
+                os.unlink(job_copy)
+
+        def finished(success, errors):
+            self._export_job = None
+            try:
+                bar.deleteLater()
+                dialog.cancel_btn.setEnabled(True)
+                if success:
+                    dialog.dep_label.setStyleSheet("color: #4CAF50; font-size: 12px; padding: 4px;")
+                    dialog.dep_label.setText(
+                        f"Export successful!\nSaved to: {os.path.basename(output_path)}")
+                    dialog.export_btn.setText("Done")
+                else:
+                    dialog.dep_label.setStyleSheet("color: #f44336; font-size: 12px; padding: 4px;")
+                    dialog.dep_label.setText("Export failed:\n" + "\n".join(errors[:5]))
+                    dialog.export_btn.setText("Export...")
+                    dialog.export_btn.setEnabled(True)
+            except RuntimeError:
+                pass                    # the overlay was closed meanwhile
+            if success:
+                self.show_toast(f"Package exported: {os.path.basename(output_path)}",
+                                level='success')
+            else:
+                first = (errors[0] if errors else "unknown error").splitlines()
+                self.show_toast(f"Package export failed: {' '.join(first[:2])}",
+                                is_error=True)
+
+        # Progress: a busy bar and a disabled Export button while it runs;
+        # the rest of the editor stays usable.
+        from PyQt5.QtWidgets import QProgressBar
+        bar = QProgressBar(dialog)
+        bar.setRange(0, 0)
+        bar.setTextVisible(False)
+        if dialog.layout() is not None:
+            dialog.layout().addWidget(bar)
+        dialog.export_btn.setEnabled(False)
+        dialog.export_btn.setText("Exporting...")
+        dialog.cancel_btn.setEnabled(False)
+        dialog.dep_label.setStyleSheet("color: #888; font-size: 12px; padding: 4px;")
+        dialog.dep_label.setText(f"Exporting {os.path.basename(output_path)}...")
+
+        from editor.export_job import ExportJob
+        from editor.package_exporter import PackageExporter
+        self._export_job = ExportJob(PackageExporter(self.state, self.root_dir),
+                                     output_path, metadata, abs_map, finished,
+                                     cleanup=discard_copy)
+        self._export_job.start()
 
     def new_map(self):
         if self._refuse_file_command_in_play("start a new map"):

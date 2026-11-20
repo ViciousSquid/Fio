@@ -83,6 +83,7 @@ class ViewTerrainEdit:
         self.view.terrain_sculpt_active = active
         self.view.terrain_sculpt_painting = False
         if not active:
+            self.end_sculpt_stroke()
             self._end_stamp_drag()
             self.clear_stamp_selection()
         if active:
@@ -303,5 +304,21 @@ class ViewTerrainEdit:
             terrain.smooth_sculpt_at(wx, wz, radius, min(strength / 20.0, 1.0))
         elif mode == 'flatten':
             terrain.flatten_sculpt_at(wx, wz, radius, min(strength / 20.0, 1.0))
-        self.view.editor.state.terrain_data = terrain.to_dict()
+        # The terrain record is re-encoded once, when the stroke ends (or
+        # before a save, autosave or undo checkpoint reads it), not per dab.
+        self.view.editor.state.defer_terrain_sync(self._sync_terrain_data)
         self.view.update()
+
+    def _sync_terrain_data(self):
+        """Copy the live terrain into the editor's ``terrain_data``."""
+        editor = self.view.editor
+        terrain = getattr(editor, 'terrain', None)
+        if terrain is not None:
+            editor.state.terrain_data = terrain.to_dict()
+
+    def end_sculpt_stroke(self):
+        """The mouse button that sculpted is up: bring ``terrain_data`` up
+        to date with the stroke, once."""
+        state = getattr(self.view.editor, 'state', None)
+        if state is not None:
+            state.sync_terrain()
