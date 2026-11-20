@@ -250,11 +250,13 @@ assert QFontInfo(QFont("Fio UI", 16)).pixelSize() == 21
 from main import dark_stylesheet
 app.setStyleSheet(dark_stylesheet)
 label = QLabel("Styled text")
+label.show()
 for points, pixels, height in ((16, 21, 28), (11, 15, 20)):
     set_editor_font_size(app, points)
-    label.ensurePolished()
+    app.processEvents()
     assert QFontInfo(label.font()).pixelSize() == pixels
     assert label.fontMetrics().height() == height
+label.close()
 '''], cwd=Path(__file__).resolve().parents[2], env=dict(os.environ, QT_QPA_PLATFORM='offscreen'),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
