@@ -408,7 +408,7 @@ def set_editor_font_size(app, size):
     stylesheet = app.styleSheet()
     base = stylesheet.split(marker, 1)[0].rstrip()
     sized_stylesheet = (
-        f"{base}\\n{marker}\\nQWidget {{ font-size: {int(size)}pt; }}"
+        f"{base}\n{marker}\nQWidget {{ font-size: {int(size)}pt; }}"
     )
     if sized_stylesheet != stylesheet:
         app.setStyleSheet(sized_stylesheet)
