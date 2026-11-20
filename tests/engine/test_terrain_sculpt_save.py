@@ -7,7 +7,8 @@ dab). It is now cut into tiles, one compressed record each
 (``Terrain._encode_sculpt_tile``); a dab marks only the tiles under it for
 encoding again. Maps saved with the triples still load, to the same heights.
 
-The perf tests count encodes and bytes rather than time them.
+The perf tests count re-encoded tiles (a kept tile is the same record
+object) and bytes rather than time them.
 """
 
 import base64
@@ -162,60 +163,54 @@ def test_out_of_range_legacy_cells_are_dropped():
 # Work done
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def encodes(monkeypatch):
-    calls = []
-    real = Terrain._encode_sculpt_tile
-
-    def counted(self, tx, tz, local, values):
-        calls.append((tx, tz))
-        return real(self, tx, tz, local, values)
-
-    monkeypatch.setattr(Terrain, "_encode_sculpt_tile", counted)
-    return calls
+def _encoded(before, after):
+    """Tiles whose record in *after* was encoded afresh: a tile kept from
+    the previous save is the very same record object."""
+    kept = {tuple(entry["tile"]): entry for entry in before}
+    return [tuple(entry["tile"]) for entry in after
+            if kept.get(tuple(entry["tile"])) is not entry]
 
 
 @pytest.mark.perf
-def test_a_save_after_a_dab_encodes_only_the_tiles_under_it(encodes):
+def test_a_save_after_a_dab_encodes_only_the_tiles_under_it():
     terrain = _brushed(dabs=200)
-    data = terrain.to_dict()
-    tiles = len(data["sculpt_tiles"])
-    assert len(encodes) == tiles                 # the first save encodes all
-    encodes.clear()
-    terrain.to_dict()
-    assert encodes == []                         # nothing changed
+    before = terrain.to_dict()["sculpt_tiles"]
+    assert _encoded(before, terrain.to_dict()["sculpt_tiles"]) == []  # nothing changed
 
     shift = terrain.SCULPT_TILE_SHIFT
     for x in range(0, 400, 20):
         terrain.apply_sculpt_at(float(x), 30.0, 24.0, 1.0)
-        terrain.to_dict()
+        after = terrain.to_dict()["sculpt_tiles"]
+        encoded = _encoded(before, after)
         # A 24-unit brush (8 cells across at 4 units a cell) spans at most
         # two tiles a side.
-        assert len(encodes) <= 4, encodes
+        assert 1 <= len(encoded) <= 4, encoded
         cx, cz = int(x // 4.0), int(30.0 // 4.0)
         reach = int(np.ceil(24.0 / 4.0)) + 1
         assert all((cx - reach) >> shift <= tx <= (cx + reach) >> shift
                    and (cz - reach) >> shift <= tz <= (cz + reach) >> shift
-                   for tx, tz in encodes)
-        encodes.clear()
+                   for tx, tz in encoded)
+        before = after
 
     # And the tiles kept are what a full encode would write now.
-    incremental = terrain.to_dict()["sculpt_tiles"]
     terrain._sculpt_tile_cache = None
-    assert terrain.to_dict()["sculpt_tiles"] == incremental
+    assert terrain.to_dict()["sculpt_tiles"] == before
 
 
 @pytest.mark.perf
-def test_loading_then_saving_reuses_the_loaded_tiles(encodes):
-    data = _brushed().to_dict()
-    encodes.clear()
-    terrain = _reloaded(data)
-    assert terrain.to_dict()["sculpt_tiles"] == data["sculpt_tiles"]
-    assert encodes == []
+def test_loading_then_saving_reuses_the_loaded_tiles():
+    loaded = json.loads(json.dumps(_brushed().to_dict()))
+    terrain = Terrain(seed=SEED)
+    terrain.from_dict(loaded)
+    saved = terrain.to_dict()["sculpt_tiles"]
+    assert saved == loaded["sculpt_tiles"]
+    # Not encoded again: the very strings that were read.
+    assert all(out["data"] is read["data"]
+               for out, read in zip(saved, loaded["sculpt_tiles"]))
 
 
 @pytest.mark.perf
-def test_a_large_sculpt_saves_in_a_fraction_of_the_old_size(encodes):
+def test_a_large_sculpt_saves_in_a_fraction_of_the_old_size():
     terrain = Terrain(seed=SEED)
     rng = np.random.default_rng(5)
     values = rng.normal(0.0, 10.0, 300 * 300).tolist()
@@ -224,7 +219,7 @@ def test_a_large_sculpt_saves_in_a_fraction_of_the_old_size(encodes):
     terrain._touch_sculpt()
     data = terrain.to_dict()
     side = 1 << terrain.SCULPT_TILE_SHIFT
-    assert len(encodes) == len(data["sculpt_tiles"]) <= (300 // side + 2) ** 2
+    assert len(data["sculpt_tiles"]) <= (300 // side + 2) ** 2
     saved = len(json.dumps(data["sculpt_tiles"], indent=4))
     legacy = len(json.dumps(_legacy(terrain)["sculpt_offsets"], indent=4))
     # 8 bytes a cell is the floor for an exact double, random ones barely
