@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from player.tools.test_device import DeviceTest, ready_for_movement, startup_pid
+from player.tools.test_device import DeviceTest, PACKAGE, ready_for_movement, startup_pid
 
 
 def report(x, *, cutscene=False, paused=False):
@@ -38,7 +38,8 @@ class RecordedDevice(DeviceTest):
         return 'recorded acceptance-gate fixture'
 
     def nodes(self):
-        return []
+        # The world is already open; the Android app owns the foreground.
+        return [ET.Element('node', attrib={'package': PACKAGE})]
 
     def screenshot(self, name):
         return 640, 360
@@ -110,6 +111,29 @@ def test_picker_waits_for_downloads_without_restarting_provider_query(tmp_path, 
     test.adb = lambda *args: taps.append(args)
     test.select_world('_SHOWCASE.fiopak')
     assert taps == [('shell', 'input', 'tap', 310, 265)]
+
+
+def test_movement_preflight_clears_stacked_android_system_overlays(tmp_path, monkeypatch):
+    monkeypatch.setattr('player.tools.test_device.time.sleep', lambda _: None)
+    fullscreen = ET.Element('node', text='Got it', bounds='[10,20][110,70]',
+                            attrib={'package': 'com.android.systemui'})
+    title = ET.Element('node', text="Quickstep isn't responding", bounds='[70,713][1010,860]',
+                       attrib={'package': 'android'})
+    wait = ET.Element('node', text='Wait', bounds='[70,1000][1010,1120]',
+                      attrib={'package': 'android', 'resource-id': 'android:id/aerr_wait'})
+    foreground = ET.Element('node', attrib={'package': PACKAGE})
+    snapshots = iter([[fullscreen, title, wait], [title, wait], [foreground]])
+    test = DeviceTest('unused-adb', None, tmp_path / 'evidence')
+    test.nodes = lambda: next(snapshots)
+    taps = []
+    test.adb = lambda *args: taps.append(args)
+
+    test.clear_system_overlays()
+
+    assert taps == [
+        ('shell', 'input', 'tap', 60, 45),
+        ('shell', 'input', 'tap', 540, 1060),
+    ]
 
 
 def test_picker_waits_out_a_system_not_responding_dialog(tmp_path, monkeypatch):
