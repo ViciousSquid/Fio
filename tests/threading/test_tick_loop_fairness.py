@@ -17,7 +17,6 @@ bounded by a deadline.
 
 import threading
 import time
-from types import SimpleNamespace
 
 import pytest
 
@@ -321,30 +320,42 @@ def test_a_thread_that_dies_records_why(logic, monkeypatch):
     assert "loop bookkeeping failure" in thread.death_message
 
 
-def test_the_view_reports_a_dead_logic_thread_once_and_leaves_play(monkeypatch):
+def test_the_view_reports_a_dead_logic_thread_once_and_leaves_play(
+        logic, main_window, monkeypatch):
     from engine import qt_game_view
-    from engine.qt_game_view import QtGameView
 
     logged = []
     monkeypatch.setattr(qt_game_view, "debug_log",
                         lambda category, message: logged.append((category, message)))
-    exits, toasts = [], []
-    dead = SimpleNamespace(is_alive=lambda: False, running=True,
-                           death_message="Traceback: it broke")
-    view = SimpleNamespace(
-        logic_thread=dead, _thread_started=True, play_mode=True,
-        _play_mode_hint="",
-        editor=SimpleNamespace(_exit_play_mode=lambda: exits.append(1),
-                               show_toast=lambda *a, **k: toasts.append(a)),
-    )
+    monkeypatch.setattr(logic_thread_module, "debug_log", lambda *a: None)
+    monkeypatch.setattr(threading, "excepthook", lambda args: None)
+    dead = logic()
 
-    assert QtGameView._check_logic_thread_health(view) is False
-    assert QtGameView._check_logic_thread_health(view) is False
+    def broken_loop():
+        raise RuntimeError("it broke")
+
+    dead._run_loop = broken_loop
+    dead.start()
+    dead.join(timeout=DEADLINE)
+    assert not dead.is_alive() and dead.running
+
+    view = main_window.view_3d
+    window = main_window
+    exits, toasts = [], []
+    monkeypatch.setattr(view, "logic_thread", dead)
+    monkeypatch.setattr(view, "_thread_started", True)
+    monkeypatch.setattr(view, "play_mode", True)
+    monkeypatch.setattr(window, "_exit_play_mode", lambda: exits.append(1))
+    monkeypatch.setattr(window, "show_toast", lambda *a, **k: toasts.append(a))
+
+    assert view._check_logic_thread_health() is False
+    assert view._check_logic_thread_health() is False
     assert len(logged) == 1 and logged[0][0] == "Error"
     assert "it broke" in logged[0][1]
     assert exits == [1] and len(toasts) == 1
 
-    stopped = SimpleNamespace(is_alive=lambda: False, running=False)
-    view.logic_thread = stopped
-    assert QtGameView._check_logic_thread_health(view) is True, (
+    stopped = logic()
+    stopped.stop()                       # never started, stopped on purpose
+    monkeypatch.setattr(view, "logic_thread", stopped)
+    assert view._check_logic_thread_health() is True, (
         "a thread stopped on purpose was reported as dead")

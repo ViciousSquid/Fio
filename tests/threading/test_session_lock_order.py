@@ -284,13 +284,11 @@ def test_toggling_model_collision_holds_the_tick_then_the_monster_lock(logic, mo
         thread.session_runtime.apply_play_mode(False)
 
 
-def test_the_collision_overlay_never_rebuilds_the_session_from_paint(logic, monkeypatch):
+def test_the_collision_overlay_never_rebuilds_the_session_from_paint(
+        logic, main_window, monkeypatch):
     """With the overlay on and no model collision in the level, every paint
     used to call toggle_model_collision: a grid repopulate and a physics
     rebuild on the UI thread, unlocked, 60 times a second."""
-    from types import SimpleNamespace
-    from engine.qt_game_view import QtGameView
-
     thread = logic()
     thread.session_runtime.apply_play_mode(True)
     try:
@@ -305,14 +303,16 @@ def test_the_collision_overlay_never_rebuilds_the_session_from_paint(logic, monk
 
         monkeypatch.setattr(thread.collision_runtime, "build_model_collision_brushes",
                             counting_build)
-        view = SimpleNamespace(logic_thread=thread, play_mode=True)
+        view = main_window.view_3d       # the real view, drawing this session
+        monkeypatch.setattr(view, "logic_thread", thread)
+        monkeypatch.setattr(view, "play_mode", True)
         for _ in range(60):
-            assert QtGameView._collision_vis_brushes(view) == []
+            assert view._collision_vis_brushes() == []
         assert toggles == [], "paint changed the logic thread's collision state"
         assert builds == [True], "the overlay's set was built %d times" % len(builds)
 
         thread.editor_state.mark_world_changed()
-        QtGameView._collision_vis_brushes(view)
+        view._collision_vis_brushes()
         assert len(builds) == 2, "an edit did not refresh the overlay's set"
     finally:
         thread.session_runtime.apply_play_mode(False)
