@@ -1862,9 +1862,84 @@ class Terrain:
     #: sculpt falls back to per-point dictionary lookups.
     MAX_DENSE_SCULPT_CELLS = 16 * 1024 * 1024
 
+    def _sculpt_key(self):
+        """What the cached sculpt forms (dense grid, serialised list) are of."""
+        offsets = self.sculpt_offsets
+        return (id(offsets), len(offsets), getattr(self, '_sculpt_version', 0))
+
     def _touch_sculpt(self):
         """Invalidate the dense sculpt grid; call after any sculpt change."""
         self._sculpt_version = getattr(self, '_sculpt_version', 0) + 1
+        self._sculpt_cache = None
+
+    def _touch_sculpt_rect(self, before, gx0, gz0, gx1, gz1):
+        """Like :meth:`_touch_sculpt` for an edit confined to grid cells
+        ``gx0..gx1`` x ``gz0..gz1`` (inclusive); ``before`` is
+        :meth:`_sculpt_key` taken just before the edit.
+
+        A brush dab changes a few hundred cells, and rebuilding the dense grid
+        for it re-read the whole sculpt dict -- 150 ms at a million cells, on
+        the first sample after every dab of a drag. Instead the dab's
+        rectangle is copied from the dict into the grid in place. A dab past
+        the grid's edge grows it with a margin, so a drag along the edge does
+        not regrow it every dab. The padding is zeros, which sample exactly as
+        "not sculpted" does, so heights match a full rebuild bit for bit.
+
+        A chunk the builder thread is sampling meanwhile may see some of the
+        rectangle's cells old and some new; the dab has dirtied that chunk
+        (:meth:`_mark_sculpt_region_dirty`), so it is built again.
+        """
+        cache = getattr(self, '_sculpt_cache', None)
+        self._sculpt_version = getattr(self, '_sculpt_version', 0) + 1
+        if cache is None or cache[0] != before or cache[1] is None:
+            # Not built, already stale, or too wide for a dense grid: left
+            # to the next sample's full rebuild, which decides afresh.
+            self._sculpt_cache = None
+            return
+        min_gx, min_gz, grid = cache[1]
+        w, h = grid.shape
+        if (gx0 < min_gx or gz0 < min_gz
+                or gx1 >= min_gx + w or gz1 >= min_gz + h):
+            grown = self._grow_dense_sculpt(min_gx, min_gz, grid, gx0, gz0, gx1, gz1)
+            if grown is None:
+                self._sculpt_cache = None
+                return
+            min_gx, min_gz, grid = grown
+        get = self.sculpt_offsets.get
+        rw, rh = gx1 - gx0 + 1, gz1 - gz0 + 1
+        block = np.fromiter(
+            (get((gx, gz), 0.0) for gx in range(gx0, gx1 + 1)
+             for gz in range(gz0, gz1 + 1)),
+            dtype=np.float32, count=rw * rh).reshape(rw, rh)
+        grid[gx0 - min_gx:gx1 - min_gx + 1, gz0 - min_gz:gz1 - min_gz + 1] = block
+        self._sculpt_cache = (self._sculpt_key(), (min_gx, min_gz, grid))
+
+    def _grow_dense_sculpt(self, min_gx, min_gz, grid, gx0, gz0, gx1, gz1):
+        """``(min_gx, min_gz, grid)`` widened to hold cells ``gx0..gx1`` x
+        ``gz0..gz1``, or None when that would not fit a dense grid.
+
+        Each side that has to move moves half the grid's span again past the
+        cells, so growth is geometric; without the margin if that is what
+        fits. None when even the bare union is too big: the old grid can be
+        wider than what is sculpted now (margin, flattened-away cells), so
+        the full rebuild measures the true bounding box and decides.
+        """
+        w, h = grid.shape
+        max_gx, max_gz = min_gx + w - 1, min_gz + h - 1
+        lo_x, hi_x = min(min_gx, gx0), max(max_gx, gx1)
+        lo_z, hi_z = min(min_gz, gz0), max(max_gz, gz1)
+        pad_x, pad_z = (hi_x - lo_x + 1) // 2, (hi_z - lo_z + 1) // 2
+        padded = (lo_x - (pad_x if gx0 < min_gx else 0),
+                  lo_z - (pad_z if gz0 < min_gz else 0),
+                  hi_x + (pad_x if gx1 > max_gx else 0),
+                  hi_z + (pad_z if gz1 > max_gz else 0))
+        for nx0, nz0, nx1, nz1 in (padded, (lo_x, lo_z, hi_x, hi_z)):
+            nw, nh = nx1 - nx0 + 1, nz1 - nz0 + 1
+            if nw * nh <= self.MAX_DENSE_SCULPT_CELLS:
+                grown = np.zeros((nw, nh), dtype=np.float32)
+                grown[min_gx - nx0:min_gx - nx0 + w, min_gz - nz0:min_gz - nz0 + h] = grid
+                return nx0, nz0, grown
+        return None
 
     def _dense_sculpt(self):
         """``(min_gx, min_gz, grid)`` for the sculpt offsets, or None.
@@ -1873,10 +1948,12 @@ class Terrain:
         vertex at a time in Python cost ~6 ms per call -- twice per chunk, for
         every chunk streamed in anywhere in the world, sculpted or not. Packed
         once into a dense array over their bounding box, sampling a chunk is a
-        handful of NumPy operations. Rebuilt only when the offsets change.
+        handful of NumPy operations. Rebuilt only when the offsets change other
+        than by a brush dab (see :meth:`_touch_sculpt_rect`), so the grid may
+        extend past the bounding box; sampling it is the same either way.
         """
         offsets = self.sculpt_offsets
-        key = (id(offsets), len(offsets), getattr(self, '_sculpt_version', 0))
+        key = self._sculpt_key()
         cache = getattr(self, '_sculpt_cache', None)
         if cache is not None and cache[0] == key:
             return cache[1]
@@ -1944,6 +2021,7 @@ class Terrain:
 
     def apply_sculpt_at(self, world_x: float, world_z: float, radius: float, strength: float):
         """Raise/lower terrain in a circular area. Negative strength lowers."""
+        before = self._sculpt_key()
         res = self.sculpt_grid_resolution
         grid_radius = int(math.ceil(radius / res)) + 1
         center_gx = world_x / res
@@ -1963,10 +2041,11 @@ class Terrain:
                 key = (gx, gz)
                 current = self.sculpt_offsets.get(key, 0.0)
                 self.sculpt_offsets[key] = current + strength * falloff
-        self._mark_sculpt_region_dirty(world_x, world_z, radius)
+        self._mark_sculpt_region_dirty(world_x, world_z, radius, before)
 
     def smooth_sculpt_at(self, world_x: float, world_z: float, radius: float, strength: float):
         """Smooth sculpt offsets by averaging neighbours."""
+        before = self._sculpt_key()
         res = self.sculpt_grid_resolution
         grid_radius = int(math.ceil(radius / res)) + 1
         center_gx = int(math.floor(world_x / res))
@@ -1992,10 +2071,11 @@ class Terrain:
                 current = self.sculpt_offsets.get((gx, gz), 0.0)
                 new_offsets[(gx, gz)] = current + (avg - current) * strength * falloff
         self.sculpt_offsets.update(new_offsets)
-        self._mark_sculpt_region_dirty(world_x, world_z, radius)
+        self._mark_sculpt_region_dirty(world_x, world_z, radius, before)
 
     def flatten_sculpt_at(self, world_x: float, world_z: float, radius: float, strength: float):
         """Push sculpt offsets toward zero (flattening the deformation)."""
+        before = self._sculpt_key()
         res = self.sculpt_grid_resolution
         grid_radius = int(math.ceil(radius / res)) + 1
         center_gx = int(math.floor(world_x / res))
@@ -2018,7 +2098,7 @@ class Terrain:
                 # Clean up near-zero entries
                 if abs(self.sculpt_offsets[key]) < 0.01:
                     del self.sculpt_offsets[key]
-        self._mark_sculpt_region_dirty(world_x, world_z, radius)
+        self._mark_sculpt_region_dirty(world_x, world_z, radius, before)
 
     def clear_sculpt(self):
         """Remove all sculpt deformations."""
@@ -2026,9 +2106,24 @@ class Terrain:
         self._touch_sculpt()
         self.mark_all_dirty()
 
-    def _mark_sculpt_region_dirty(self, world_x: float, world_z: float, radius: float):
-        """Mark chunks overlapping a sculpted region as dirty."""
-        self._touch_sculpt()
+    def _mark_sculpt_region_dirty(self, world_x: float, world_z: float, radius: float,
+                                  before=None):
+        """Mark chunks overlapping a sculpted region as dirty.
+
+        ``before`` is :meth:`_sculpt_key` from before the edit: given it, the
+        dense grid is patched over the brush's cells (the same square the
+        brush tools loop over) instead of rebuilt.
+        """
+        if before is None:
+            self._touch_sculpt()
+        else:
+            res = self.sculpt_grid_resolution
+            grid_radius = int(math.ceil(radius / res)) + 1
+            center_gx = int(math.floor(world_x / res))
+            center_gz = int(math.floor(world_z / res))
+            self._touch_sculpt_rect(before,
+                                    center_gx - grid_radius, center_gz - grid_radius,
+                                    center_gx + grid_radius, center_gz + grid_radius)
         self.table.mark_dirty_region(world_x, world_z, radius)
 
     def _apply_csg_subtractions_scalar(self, world_x: float, world_z: float, height: float) -> float:
@@ -3310,7 +3405,7 @@ class Terrain:
         if self.sculpt_offsets:
             # Rebuilt only when the sculpt changes (same key as _dense_sculpt).
             offsets = self.sculpt_offsets
-            key = (id(offsets), len(offsets), getattr(self, '_sculpt_version', 0))
+            key = self._sculpt_key()
             if self._sculpt_serial_cache[0] != key:
                 self._sculpt_serial_cache = (
                     key, [[gx, gz, val] for (gx, gz), val in offsets.items()])
@@ -3506,9 +3601,13 @@ class Terrain:
         for entry in _as_list(data.get('sculpt_offsets')):
             try:
                 gx, gz, val = entry
-                self.sculpt_offsets[(int(gx), int(gz))] = float(val)
-            except (TypeError, ValueError):
+                key, val = (int(gx), int(gz)), float(val)
+            except (TypeError, ValueError, OverflowError):
                 continue
+            # Python's json reads NaN and Infinity; either would reach the
+            # heights, and from there collision.
+            if math.isfinite(val):
+                self.sculpt_offsets[key] = val
 
         # Terrain CSG cutters
         self.csg_subtractions = []

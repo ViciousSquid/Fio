@@ -68,3 +68,12 @@ def test_an_unusable_heightmap_is_dropped(blob):
 def test_malformed_sculpt_entries_are_skipped():
     terrain = _loaded(sculpt_offsets=[[1, 2, 0.5], [3, 4], "xyz", [5, "z", 1.0], None])
     assert terrain.sculpt_offsets == {(1, 2): 0.5}
+
+
+def test_non_finite_sculpt_entries_are_skipped():
+    # Python's json reads NaN/Infinity; a NaN offset became a NaN height,
+    # and an infinite coordinate raised out of int().
+    terrain = _loaded(sculpt_offsets=[[1, 2, 0.5], [3, 4, float("nan")],
+                                      [5, 6, float("inf")], [7, 8, float("-inf")],
+                                      [float("inf"), 0, 1.0], [0, float("nan"), 1.0]])
+    assert terrain.sculpt_offsets == {(1, 2): 0.5}
