@@ -339,7 +339,16 @@ class ViewDebugDraw:
         # PERF: accumulate every cell edge into one buffer and issue a single
         # draw call instead of one glBufferSubData + glDrawArrays per edge.
         pts = []
-        for (cx, cz) in grid.cells:
+        # The logic thread repopulates the grid (clear, then refill) while
+        # this paints: take its keys in one step -- one C-level copy, which
+        # no other Python thread can interleave with -- rather than walking
+        # the live dict, which raised "dictionary changed size during
+        # iteration". A copy taken mid-refill only draws fewer cells.
+        try:
+            cells = tuple(grid.cells)
+        except RuntimeError:
+            cells = ()
+        for (cx, cz) in cells:
             x0 = cx * cs
             z0 = cz * cs
             x1 = x0 + cs

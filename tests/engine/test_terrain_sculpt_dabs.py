@@ -264,9 +264,10 @@ def test_a_replaced_or_directly_edited_dict_is_not_patched():
 def test_a_dab_invalidates_the_saved_form():
     terrain = _sculpted(cells=10)
     _warm(terrain)
-    first = terrain.to_dict()["sculpt_offsets"]
+    first = terrain.to_dict()["sculpt_tiles"]
     terrain.apply_sculpt_at(0.0, 0.0, 6.0, 1.0)
-    second = terrain.to_dict()["sculpt_offsets"]
+    second = terrain.to_dict()["sculpt_tiles"]
     assert first != second
-    assert sorted(map(tuple, second)) == sorted(
-        (gx, gz, v) for (gx, gz), v in terrain.sculpt_offsets.items())
+    reloaded = Terrain(seed=SEED)
+    reloaded.from_dict(terrain.to_dict())
+    assert reloaded.sculpt_offsets == terrain.sculpt_offsets

@@ -115,6 +115,8 @@ def test_missing_settings_take_unarmed_defaults_not_another_items():
     ({"name": "X", "weapon": {"damage": math.nan}}, "finite"),
     ({"name": "X", "weapon": {"damage": True}}, "number"),
     ({"name": "X", "weapon": {"pellets": 0}}, "weapon.pellets"),
+    # The Item editor's own limit: past it is a typo, not a weapon.
+    ({"name": "X", "weapon": {"projectile_speed": 1e9}}, "at most"),
     ({"name": "X", "weapon": {"pellets": 1.5}}, "whole number"),
     ({"name": "X", "weapon": {"ammo_type": "shells"}}, "unknown settings"),
     ({"name": "X", "hud_align": "up"}, "hud_align"),
@@ -234,3 +236,10 @@ def test_definition_returns_a_copy():
     copy_ = definitions.definition("custom1")
     copy_["name"] = "Changed"
     assert definitions.name("custom1") == "Cigarette"
+
+
+def test_the_fastest_projectile_the_editor_offers_compiles():
+    from engine.items import MAX_PROJECTILE_SPEED
+    item = compile_definition("custom1", {"name": "Rail", "weapon": {
+        "mode": "projectile", "projectile_speed": MAX_PROJECTILE_SPEED}})
+    assert item.weapon.projectile_speed == MAX_PROJECTILE_SPEED

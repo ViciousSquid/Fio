@@ -43,6 +43,11 @@ class PackageExporter:
         self.editor_state = editor_state
         self.root_dir = os.path.abspath(root_dir)
         self.errors: List[str] = []
+        # Each map file read and parsed once an export: every step of it
+        # (dependencies, references, entity types, terrain, the player copy)
+        # used to read it again, five reads a map.
+        self._maps: Dict[str, Optional[dict]] = {}
+        self._minified: Dict[str, bool] = {}
 
     def export(self, output_path, metadata, current_map_path, parent_widget=None):
         """Export the current project as a .fiopak zip.
@@ -55,6 +60,8 @@ class PackageExporter:
         import traceback
 
         asset_sources = None
+        self._maps.clear()
+        self._minified.clear()
         try:
             root = self.root_dir
             if not os.path.isdir(root):
@@ -116,7 +123,8 @@ class PackageExporter:
                     if cutscene is not None:
                         referenced_assets |= self._cutscene_asset_references(cutscene)
 
-            from engine.package_assets import ProjectAssets, companion_assets
+            from engine.package_assets import (COMPANION_SUFFIXES, ProjectAssets,
+                                               companion_assets)
             sources = asset_sources = ProjectAssets(root)
             asset_entries = {}
             # Built-in gameplay sprites/audio are implicit references (monster
@@ -142,9 +150,13 @@ class PackageExporter:
                     continue
                 if name in asset_entries:
                     continue
-                raw = sources.read(name)
                 asset_entries[name] = sources.sources[name]
-                pending.extend(companion_assets(name, raw))
+                # Only a model or material library names other files; a
+                # texture or sound is read once, when it is written.
+                if posixpath.splitext(name)[1].lower() in COMPANION_SUFFIXES:
+                    # One odd model is reported, not the end of the export.
+                    pending.extend(companion_assets(name, sources.read(name),
+                                                    self.errors))
 
             # ---- 4. Assemble next to the destination, then swap it in ----
             with atomic_output(output_path, binary=True) as handle:
@@ -230,25 +242,36 @@ class PackageExporter:
         return export_world_level(data)
 
     def _read_map(self, map_file) -> Optional[dict]:
-        try:
-            with open(map_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception as e:
-            self.errors.append(f"Could not read {map_file}: {e}")
-            return None
-        if not isinstance(data, dict):
-            self.errors.append(f"Not a map document: {map_file}")
-            return None
-        return data
-
-    @staticmethod
-    def _is_minified(map_file) -> bool:
-        """Whether a map file is minified JSON: all on one line."""
+        """*map_file* parsed, or None (reported once). Read once an export;
+        callers share the document and do not change it."""
+        key = os.path.abspath(map_file)
+        if key in self._maps:
+            return self._maps[key]
+        data = None
         try:
             with open(map_file, 'rb') as f:
-                return b"\n" not in f.read().strip()
-        except OSError:
-            return False
+                raw = f.read()
+            self._minified[key] = b"\n" not in raw.strip()
+            data = json.loads(raw.decode('utf-8'))
+        except Exception as e:
+            self.errors.append(f"Could not read {map_file}: {e}")
+        else:
+            if not isinstance(data, dict):
+                self.errors.append(f"Not a map document: {map_file}")
+                data = None
+        self._maps[key] = data
+        return data
+
+    def _is_minified(self, map_file) -> bool:
+        """Whether a map file is minified JSON: all on one line."""
+        key = os.path.abspath(map_file)
+        if key not in self._minified:
+            try:
+                with open(map_file, 'rb') as f:
+                    self._minified[key] = b"\n" not in f.read().strip()
+            except OSError:
+                return False
+        return self._minified[key]
 
     def _stamp_file(self, map_file) -> Optional[dict]:
         """The paint file kept beside *map_file*, parsed; None when the map

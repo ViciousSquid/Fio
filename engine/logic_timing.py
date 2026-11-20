@@ -125,8 +125,14 @@ class LogicTiming:
         if not self.light_fade_states:
             return
 
+        # A finished fade's OnTurnedOff can start another fade at once (a
+        # zero-delay connection runs in place): another light's, which would
+        # grow the dict under the loop, or this light's own (A.OnTurnedOff ->
+        # A.FadeIn, a pulsing light), which replaces its entry. So the loop
+        # runs over a copy, the outputs fire after it, and a finished fade is
+        # removed only while its entry is still the state that finished.
         finished = []
-        for key, state in self.light_fade_states.items():
+        for key, state in list(self.light_fade_states.items()):
             entity = state["entity"]
             state["elapsed"] += delta
             duration = state["duration"]
@@ -145,11 +151,12 @@ class LogicTiming:
                 entity.properties["intensity"] = state["to"]
                 if state["end_off"]:
                     entity.properties["state"] = "off"
-                    if logic.io_manager:
-                        logic.io_manager.fire_output(
-                            entity, "OnTurnedOff"
-                        )
-                finished.append(key)
+                finished.append((key, state))
 
-        for key in finished:
-            self.light_fade_states.pop(key, None)
+        for key, state in finished:
+            if self.light_fade_states.get(key) is state:
+                del self.light_fade_states[key]
+        if logic.io_manager:
+            for _key, state in finished:
+                if state["end_off"]:
+                    logic.io_manager.fire_output(state["entity"], "OnTurnedOff")

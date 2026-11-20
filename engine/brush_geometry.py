@@ -41,6 +41,7 @@ import math
 import numpy as np
 
 from engine import brush_faces
+from engine.level_validation import MAX_BRUSH_PLANES
 
 # --------------------------------------------------------------------------
 # Tunables
@@ -1117,6 +1118,10 @@ def clip_brush(brush, clip_normal, clip_d, keep_positive=False, texture=None,
     """
     box_to_geometry(brush)
     existing = [_plane_from_json(p) for p in brush['geometry']['planes']]
+    if len(existing) >= MAX_BRUSH_PLANES:
+        # One more plane and the map could not be opened again
+        # (engine.level_validation refuses the brush).
+        return False
     # The cut is given in world space; the planes are in the brush's frame.
     # (clip_planes reads the plane as n-hat . p <= clip_d.)
     n = _normalize(clip_normal)

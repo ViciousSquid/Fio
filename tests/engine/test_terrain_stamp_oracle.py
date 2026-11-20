@@ -80,13 +80,26 @@ def _reference_dict_parts(terrain):
         base = _encode(terrain.texture_paint_base)
         if base:
             parts["texture_paint_base"] = base
-    if terrain.sculpt_offsets:
-        parts["sculpt_offsets"] = [[gx, gz, v] for (gx, gz), v in terrain.sculpt_offsets.items()]
     if terrain.heightmap_data is not None:
         buf = io.BytesIO()
         np.save(buf, terrain.heightmap_data)
         parts["heightmap_blob"] = base64.b64encode(buf.getvalue()).decode("ascii")
     return parts
+
+
+def _decode_sculpt(entries, shift):
+    """Saved sculpt tiles back to {(gx, gz): offset}, read independently of
+    the engine: uint16 cell indices, then float64 offsets by byte plane."""
+    cells = {}
+    for entry in entries:
+        tx, tz = entry["tile"]
+        raw = zlib.decompress(base64.b64decode(entry["data"]))
+        n = len(raw) // 10
+        index = np.frombuffer(raw[:2 * n], "<u2").tolist()
+        values = np.frombuffer(raw[2 * n:], np.uint8).reshape(8, n).T.copy().view("<f8").ravel()
+        for i, v in zip(index, values.tolist()):
+            cells[((tx << shift) + (i >> shift), (tz << shift) + (i & ((1 << shift) - 1)))] = v
+    return cells
 
 
 def _footprint_mask(terrain, key, stamps):
@@ -119,6 +132,13 @@ def _check(terrain, step):
                  "sculpt_offsets", "heightmap_blob"):
         if name not in _reference_dict_parts(terrain):
             assert name not in data, (step, name)
+    if terrain.sculpt_offsets:
+        tiles = [tuple(entry["tile"]) for entry in data["sculpt_tiles"]]
+        assert tiles == sorted(set(tiles)), step
+        decoded = _decode_sculpt(data["sculpt_tiles"], terrain.SCULPT_TILE_SHIFT)
+        assert decoded == terrain.sculpt_offsets, step
+    else:
+        assert "sculpt_tiles" not in data, step
 
     selected = [s for s in terrain.paint_stamps if s["id"] in terrain.selected_stamp_ids]
     if not selected:

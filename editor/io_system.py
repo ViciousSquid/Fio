@@ -550,6 +550,15 @@ class IOManager:
         if matching_count == 0:
             io_log(f"{source_name}.{output_name} (no connections)")
     
+    def claim_tick_thread(self, ident=None):
+        """Make *ident* (default: the calling thread) the tick thread.
+
+        For the thread building a play session under the tick lock: it is the
+        tick for that time, so the outputs it fires (OnPlayerSpawn) are
+        delivered in place, not queued to the next update().
+        """
+        self._tick_thread = threading.get_ident() if ident is None else ident
+
     def update(self, delta: float):
         self._tick_thread = threading.get_ident()
         foreign = self._foreign_outputs

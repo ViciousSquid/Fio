@@ -6,6 +6,7 @@ virtual scene. The camera maths comes from the core visibility helpers.
 
 import ctypes
 import math
+import time
 
 import glm
 import numpy as np
@@ -127,14 +128,38 @@ class PortalsMixin:
         return (getattr(self, '_portal_scene_pass', False)
                 or getattr(self, '_opaque_cull_pass', False))
 
+    #: Consecutive frames a portal view may fail before portals are turned
+    #: off for the rest of the session, and how often (seconds) a failure is
+    #: printed meanwhile.
+    PORTAL_FAILURE_LIMIT = 30
+    PORTAL_FAILURE_REPORT_INTERVAL = 5.0
+
     @timed_pass('portals (incl. their views)')
     def draw_portals(self, portal_table, portal_slots, projection, main_view, camera_pos, config, draw_scene_fn):
-        """Render portal views from dense EntityTable topology."""
-        if not self._portal_gl_ready:
+        """Render portal views from dense EntityTable topology.
+
+        A view that raises is contained here: every piece of GL state the
+        portals touch is put back (it used to stay set, so the rest of the
+        frame drew only inside the aperture), the failure is reported at most
+        every PORTAL_FAILURE_REPORT_INTERVAL seconds rather than every frame,
+        and after PORTAL_FAILURE_LIMIT failing frames in a row portals are
+        switched off for the session."""
+        if not self._portal_gl_ready or getattr(self, '_portals_disabled', False):
             return
         portal_slots = self._portal_candidate_slots(portal_table, portal_slots, camera_pos)
         if not len(portal_slots):
             return
+        try:
+            self._draw_portal_views(portal_table, portal_slots, projection, main_view,
+                                    camera_pos, config, draw_scene_fn)
+        except Exception as exc:
+            self._portal_failed(exc)
+        else:
+            self._portal_failures = 0
+        finally:
+            self._portal_restore_state(projection, main_view)
+
+    def _draw_portal_views(self, portal_table, portal_slots, projection, main_view, camera_pos, config, draw_scene_fn):
         pv = projection * main_view
         rendered = 0
         # Each aperture once: two portals linked both ways name each other's
@@ -159,12 +184,45 @@ class PortalsMixin:
             # behind the camera no longer crowds out one in front of it.
             if self._draw_one_portal(portal_table, aperture, target, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1):
                 rendered += 1
+
+    def _portal_restore_state(self, projection, main_view):
+        """Put back everything the portal pass may have left set, whether it
+        finished or a view raised part-way: the main camera's matrices, and
+        the scissor, stencil, colour/depth masks, depth function and range,
+        culling and blending the rest of the frame expects."""
+        self._portal_scene_pass = False
+        self._current_shader = None
+        self._proj_ptr = glm.value_ptr(projection)
+        self._view_ptr = glm.value_ptr(main_view)
         gl.glDisable(gl.GL_SCISSOR_TEST)
         gl.glDisable(gl.GL_STENCIL_TEST)
         gl.glStencilMask(0xFF)
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
         gl.glDepthMask(gl.GL_TRUE)
+        gl.glDepthRange(0.0, 1.0)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glCullFace(gl.GL_BACK)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl.glDisable(gl.GL_BLEND)
+        gl.glBindVertexArray(0)
         gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
+
+    def _portal_failed(self, exc):
+        """Report a failed portal frame (rate-limited) and, after
+        PORTAL_FAILURE_LIMIT in a row, turn portals off for the session."""
+        failures = getattr(self, '_portal_failures', 0) + 1
+        self._portal_failures = failures
+        now = time.monotonic()
+        last = getattr(self, '_portal_failure_reported', None)
+        if last is None or now - last >= self.PORTAL_FAILURE_REPORT_INTERVAL:
+            self._portal_failure_reported = now
+            print(f"[Portal] render error ({failures} frame(s) in a row): {exc!r}")
+        if failures >= self.PORTAL_FAILURE_LIMIT:
+            self._portals_disabled = True
+            print(f"[Portal] {failures} frames in a row failed; portals are "
+                  "off for the rest of this session")
 
     def _portal_flatten_depth(self, corners, projection, view, stencil_level):
         """Make the completed portal image occupy the source aperture's depth plane.
@@ -298,7 +356,7 @@ class PortalsMixin:
         The same plain colour copy the glass pass makes. Only a portal that
         is fading pays for it, and only while it fades.
         """
-        viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        viewport = getattr(self, '_frame_viewport', None) or gl.glGetIntegerv(gl.GL_VIEWPORT)
         if viewport is None or len(viewport) < 4 or not self._portal_fade_shader:
             return None
         x, y, width, height = (int(v) for v in viewport[:4])
@@ -371,7 +429,7 @@ class PortalsMixin:
         aperture is rejected when every corner is outside the same frustum
         plane, and otherwise clipped to the near plane, so the rect bounds only
         the part of it that can be seen."""
-        vp = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        vp = getattr(self, '_frame_viewport', None) or gl.glGetIntegerv(gl.GL_VIEWPORT)
         vx, vy, vw, vh = int(vp[0]), int(vp[1]), int(vp[2]), int(vp[3])
         off_screen = (vx, vy, 0, 0)
         polygon = []

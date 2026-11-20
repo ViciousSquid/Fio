@@ -57,6 +57,8 @@ class LogicCombat:
         #: the 3D view to outline (LogicRender, view_debug_draw).
         self.show_hitboxes = False
         self._monster_projectiles = ProjectileStore()
+        #: Projectile paths swept this session (_sweep_projectile): a work count.
+        self.projectile_sweeps = 0
         self.bullet_marks = []
         self.projectile_positions = NO_PROJECTILES
         self.items = DEFAULT_REGISTRY
@@ -695,6 +697,132 @@ class LogicCombat:
             hits.setdefault(q, []).append(r)
         return hits
 
+    #: A projectile that moves further than this in one tick is swept: its
+    #: path from where it was is tested against the walls, the player, the
+    #: monsters and explosive Props, and it is stopped at the first it meets,
+    #: so a fast shot cannot pass through a wall -- or an actor -- between two
+    #: ticks. 16 units is the thinnest wall the point tests alone are sure to
+    #: catch (a step no longer than the wall is thick lands inside it); the
+    #: default 900 u/s shot moves 15 a tick at 60 Hz and is never swept.
+    PROJECTILE_SWEEP_STEP = 16.0
+    #: How far into what it met a swept projectile is stopped, so that the
+    #: ordinary point tests that follow find the hit (their spheres are
+    #: strict at the surface).
+    PROJECTILE_SWEEP_BITE = 0.5
+
+    @staticmethod
+    def _ray_sphere(sx, sy, sz, ux, uy, uz, cx, cy, cz, radius):
+        """Distance along the unit ray to where it enters the sphere (0 when
+        it starts inside), or None if it misses or the sphere is behind it."""
+        ox, oy, oz = sx - cx, sy - cy, sz - cz
+        b = ox * ux + oy * uy + oz * uz
+        c = ox * ox + oy * oy + oz * oz - radius * radius
+        if c <= 0.0:
+            return 0.0
+        if b >= 0.0:
+            return None
+        disc = b * b - c
+        if disc < 0.0:
+            return None
+        return -b - math.sqrt(disc)
+
+    def _sweep_projectile(self, projectiles, i, prev, delta, rows, explosions):
+        """Stop row *i* at the first thing its path from *prev* meets this tick.
+
+        Only a step longer than :data:`PROJECTILE_SWEEP_STEP` is swept, and
+        only a straight one (a portal that moved the projectile this tick
+        leaves it where it came out). The walls are the solid brushes the
+        wall point test asks about, the spheres are the point tests' own --
+        the player's unless it is the player's own shot or the player cannot
+        be hit, every live monster but the owner and the owner's team -- and
+        the barrels are traced as hitscan traces them. When the path meets
+        one the projectile is put :data:`PROJECTILE_SWEEP_BITE` inside it, and
+        the point tests apply the hit as they always have. Returns whether it
+        was moved back.
+        """
+        logic = self.logic
+        pos = projectiles.pos[i]
+        vel = projectiles.vel[i]
+        sx, sy, sz = (float(v) for v in prev)
+        ex, ey, ez = float(pos[0]), float(pos[1]), float(pos[2])
+        dx, dy, dz = ex - sx, ey - sy, ez - sz
+        length = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if not (self.PROJECTILE_SWEEP_STEP < length < math.inf):
+            return False
+        # A portal moved it: the straight path is not the one it took.
+        tol = 1.0 + 1.0e-4 * length
+        if (abs(dx - float(vel[0]) * delta) > tol or abs(dy - float(vel[1]) * delta) > tol
+                or abs(dz - float(vel[2]) * delta) > tol):
+            return False
+        ux, uy, uz = dx / length, dy / length, dz / length
+        self.projectile_sweeps += 1
+        best = length
+
+        if rows is not None:
+            hit_rows, dists = rows.ray_hits((sx, sy, sz), (ux, uy, uz), best)
+            brushes = rows.brushes
+            for row, dist in zip(hit_rows.tolist(), dists.tolist()):
+                if is_solid_world_brush(brushes[row]):
+                    best = min(best, dist)
+                    break
+        else:
+            for brush in logic.collision_runtime._collision_brushes_cache:
+                if not is_solid_world_brush(brush):
+                    continue
+                b = world_bounds(brush)
+                hit, dist = self.intersect_ray_aabb(
+                    (sx, sy, sz), (ux, uy, uz), b[:3], b[3:], best)
+                if hit and dist < best:
+                    best = dist
+
+        owner_id = int(projectiles.owner_id[i])
+        runtime = logic.player_runtime
+        player = runtime.player
+        if (player is not None and owner_id != PLAYER_PROJECTILE_OWNER
+                and not runtime.god_mode and not runtime.player_dead):
+            t = self._ray_sphere(sx, sy, sz, ux, uy, uz,
+                                 float(player.pos[0]), float(player.pos[1]),
+                                 float(player.pos[2]), float(self.PROJECTILE_PLAYER_RADIUS))
+            if t is not None and t < best:
+                best = t
+
+        owner = logic.world_runtime.monster_by_id.get(owner_id)
+        owner_team = owner.properties.get('team', '') if owner is not None else None
+        radius = float(self.PROJECTILE_MONSTER_RADIUS)
+        lift = float(self.PROJECTILE_MONSTER_LIFT)
+        # The path's box, grown by the hit radius: most monsters are outside.
+        lo_x, hi_x = min(sx, ex) - radius, max(sx, ex) + radius
+        lo_z, hi_z = min(sz, ez) - radius, max(sz, ez) + radius
+        for candidate in logic.world_runtime.monster_things:
+            if id(candidate) == owner_id:
+                continue
+            cx, cz = float(candidate.pos[0]), float(candidate.pos[2])
+            if not (lo_x <= cx <= hi_x and lo_z <= cz <= hi_z):
+                continue
+            cp = candidate.properties
+            if cp.get('dead', False) or cp.get('hidden', False):
+                continue
+            team = cp.get('team', '')
+            if owner_team and team and owner_team == team:
+                continue
+            t = self._ray_sphere(sx, sy, sz, ux, uy, uz,
+                                 cx, float(candidate.pos[1]) + lift, cz, radius)
+            if t is not None and t < best:
+                best = t
+
+        if explosions is not None:
+            hit = explosions.trace((sx, sy, sz), (ux, uy, uz), best)
+            if hit is not None and hit[1] < best:
+                best = hit[1]
+
+        if best >= length:
+            return False
+        t = min(best + self.PROJECTILE_SWEEP_BITE, length)
+        pos[0] = sx + ux * t
+        pos[1] = sy + uy * t
+        pos[2] = sz + uz * t
+        return True
+
     # Below this count, the Python scalar path avoids allocating the batch
     # query/candidate arrays. Keep the threshold isolated so profiling can tune
     # the crossover without changing either implementation.
@@ -782,10 +910,14 @@ class LogicCombat:
         radius_sq = float(self.PROJECTILE_MONSTER_RADIUS) ** 2
         lift = float(self.PROJECTILE_MONSTER_LIFT)
 
+        sweep_sq = (self.PROJECTILE_SWEEP_STEP / delta) ** 2 if delta > 0.0 else math.inf
+        sweep_barrels = explosions if any_explosives else None
+
         for i in range(count):
             pos = projectiles.pos[i]
             vel = projectiles.vel[i]
-            if has_portals:
+            fast = float(vel[0]) ** 2 + float(vel[1]) ** 2 + float(vel[2]) ** 2 > sweep_sq
+            if has_portals or fast:
                 prev = (float(pos[0]), float(pos[1]), float(pos[2]))
             else:
                 prev = None
@@ -794,8 +926,11 @@ class LogicCombat:
             pos[1] += vel[1] * delta
             pos[2] += vel[2] * delta
 
-            if prev is not None:
+            if has_portals:
                 logic.portal_runtime.transit_projectile_through_portals(projectiles, i, prev)
+            if fast:
+                self._sweep_projectile(projectiles, i, prev, delta,
+                                       collision_rows, sweep_barrels)
 
             vx = float(projectiles.vel[i, 0])
             vy = float(projectiles.vel[i, 1])
@@ -927,11 +1062,23 @@ class LogicCombat:
         # no-portal path stays entirely in the persistent arrays.
         if logic.portal_runtime.portal_things:
             prev = pos.copy()
+        # Rows fast enough to step over a wall are swept below (see
+        # _sweep_projectile); at the default speed there are none.
+        step_sq = (vel[:, 0] * vel[:, 0] + vel[:, 1] * vel[:, 1]
+                   + vel[:, 2] * vel[:, 2]) * np.float32(delta * delta)
+        fast = np.flatnonzero(step_sq > np.float32(self.PROJECTILE_SWEEP_STEP ** 2))
+        fast_prev = pos[fast].copy() if len(fast) else None
         pos += vel * delta
         if prev is not None:
             for i in range(count):
                 logic.portal_runtime.transit_projectile_through_portals(
                     projectiles, i, tuple(prev[i]))
+        if fast_prev is not None:
+            rows = logic.collision_runtime.collision_rows()
+            barrels = logic.explosion_runtime
+            barrels = barrels if barrels.explosives() else None
+            for k, i in enumerate(fast.tolist()):
+                self._sweep_projectile(projectiles, i, fast_prev[k], delta, rows, barrels)
 
         speed = np.sqrt(
             vel[:, 0] * vel[:, 0]

@@ -558,7 +558,7 @@ class DecalsMixin:
         models, params = decals[0], decals[1]
         if not len(models) or not self._cube_vbo:
             return 0
-        viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        viewport = getattr(self, '_frame_viewport', None) or gl.glGetIntegerv(gl.GL_VIEWPORT)
         keep = visible_decals(models, projection, view, camera_pos, int(viewport[3]))
         self.decals_culled = len(models) - len(keep)
         count = len(keep)

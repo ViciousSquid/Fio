@@ -142,11 +142,17 @@ def _is_empty(data) -> bool:
 def write_map_stamps(map_path: str, data) -> Optional[str]:
     """Write a map's paint file beside it, minified. With no paint there is
     nothing to keep: no file is made, and one already there is emptied so it
-    cannot bring cleared paint back. Returns the path written, if any."""
+    cannot bring cleared paint back. Returns the path written, if any.
+
+    That includes an earlier build's ``.terrainstamps`` (LEGACY_EXTENSIONS):
+    it is read when no ``.paint`` is beside the map, so clearing the paint of
+    a map that still has one used to bring its stamps back on the next load.
+    An empty ``.paint`` is written over it instead, which is read first; the
+    legacy file itself is the user's and is left alone."""
     if data is None:
         return None
     path = default_stamp_path(map_path)
-    if _is_empty(data) and not os.path.exists(path):
+    if _is_empty(data) and paint_path(map_path) is None:
         return None
     write_json_atomic(path, data, separators=(",", ":"))
     return path

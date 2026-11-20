@@ -233,7 +233,7 @@ def test_cached_terrain_data_follows_every_change(texture):
     terrain.heightmap_data = np.ones((4, 4), np.float32)
     second = terrain.to_dict()
     assert second["texture_paint"] != first["texture_paint"]
-    assert len(second["sculpt_offsets"]) > len(first["sculpt_offsets"])
+    assert second["sculpt_tiles"] != first["sculpt_tiles"]
     assert second["heightmap_blob"] != first["heightmap_blob"]
 
     reloaded = Terrain(seed=1)
@@ -349,6 +349,32 @@ def test_removing_every_stamp_empties_the_file(tmp_path, texture):
 
     path = tmp_path / "forest.paint"
     assert json.loads(path.read_text())["stamps"] == []
+
+
+def test_clearing_the_paint_does_not_bring_back_an_earlier_build_s_stamps(
+        tmp_path, texture):
+    """A map with a legacy ``.terrainstamps`` beside it, saved with its paint
+    cleared: no ``.paint`` was written (there was nothing to keep and none to
+    empty), so the next load read the legacy file and the cleared stamps came
+    back. An empty ``.paint`` is written over it instead; the user's legacy
+    file itself is left alone."""
+    import json
+    terrain, level = _stamped_level(texture)
+    map_path = tmp_path / "forest.json"
+    legacy = tmp_path / "forest.terrainstamps"
+    legacy.write_text(json.dumps({"format": "terrain_stamp", "version": 1,
+                                  "stamps": level["terrain_data"]["paint_stamps"]}))
+    terrain.clear_texture_paint()
+    cleared = {"version": 5, "brushes": [], "things": [],
+               "terrain_data": terrain.to_dict()}
+
+    for_map, paint = terrain_stamp.split_level(cleared)
+    assert terrain_stamp.write_map_stamps(str(map_path), paint) is not None
+    reopened = terrain_stamp.join_level(json.loads(json.dumps(for_map)), str(map_path))
+
+    assert not reopened["terrain_data"].get("paint_stamps")
+    assert legacy.exists()
+    assert json.loads((tmp_path / "forest.paint").read_text())["stamps"] == []
 
 
 def test_a_map_with_no_stamps_gets_no_stamp_file(tmp_path):

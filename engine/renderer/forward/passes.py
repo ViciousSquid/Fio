@@ -369,6 +369,11 @@ class PassesMixin:
         sorted_slots = self._model_sorted_slots_scratch[:count]
         np.take(slots, order, out=sorted_slots)
 
+        # Every run's rows in one buffer, uploaded once (or not at all when
+        # unchanged); each run's draws are aimed at its first row.
+        stream = self._model_instance_stream(self._stream_key('models'))
+        self._fill_model_instance_stream(stream, table, sorted_slots)
+
         recipes = table.model_recipes()
         current_shader = None
         # 'Solid Lit': models shaded in their colours, no textures.
@@ -388,9 +393,10 @@ class PassesMixin:
 
             run_slots = sorted_slots[start:end]
             self.render_stats.visible_tris += (obj.vertex_count // 3) * len(run_slots)
-            self._fill_model_instance_buffer_numeric(table, run_slots)
             self._ensure_model_instance_vao(obj.vao)
             gl.glBindVertexArray(obj.vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
+            self._point_model_instances_at(start)
 
             groups = self._model_draw_groups(obj)
             if manual_texture:
@@ -789,8 +795,7 @@ class PassesMixin:
             data[:, 7] = layers
         else:
             data[:, 7] = 0.0
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+        self._upload_sprite_instances(data)
 
         program = 'sprite_layered' if layers is not None else 'sprite_instanced'
         shader, uniforms = self.shaders[program], self.uniforms[program]
@@ -850,8 +855,7 @@ class PassesMixin:
         data[:, 5] = -10000.0
         data[:, 6] = 1.0
         data[:, 7] = 0.0
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+        self._upload_sprite_instances(data)
         shader, uniforms = (self.shaders['sprite_instanced'],
                             self.uniforms['sprite_instanced'])
         gl.glUseProgram(shader)
@@ -1074,7 +1078,7 @@ class PassesMixin:
         if soft:
             gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
             gl.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
-            viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+            viewport = getattr(self, '_frame_viewport', None) or gl.glGetIntegerv(gl.GL_VIEWPORT)
             gl.glUniform4f(uniforms['uViewport'], float(viewport[0]),
                            float(viewport[1]), float(max(int(viewport[2]), 1)),
                            float(max(int(viewport[3]), 1)))
@@ -1422,8 +1426,7 @@ class PassesMixin:
         data[:, 6] = 1.0
         data[:, 7] = 0.0
 
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+        self._upload_sprite_instances(data)
 
         shader, uniforms = (
             self.shaders['sprite_instanced'],
@@ -1597,7 +1600,7 @@ class PassesMixin:
         # itself.
         scene_size = self._capture_glass_scene()
         if scene_size is None:
-            viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+            viewport = getattr(self, '_frame_viewport', None) or gl.glGetIntegerv(gl.GL_VIEWPORT)
             scene_size = (
                 max(int(viewport[2]), 1),
                 max(int(viewport[3]), 1),
@@ -1872,7 +1875,7 @@ class PassesMixin:
         samples the same scene behind it. GL 3.3 supports this without adding
         another permanent render target to the forward pipeline.
         """
-        viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        viewport = getattr(self, '_frame_viewport', None) or gl.glGetIntegerv(gl.GL_VIEWPORT)
         if viewport is None or len(viewport) < 4:
             return None
         x, y, width, height = (int(viewport[0]), int(viewport[1]),
@@ -1907,8 +1910,24 @@ class PassesMixin:
         """Whether the bound read framebuffer has a single-sampled depth buffer.
 
         Asked up front rather than by provoking a GL error, so an unrelated
-        error already queued by an earlier pass is never swallowed here.
-        """
+        error already queued by an earlier pass is never swallowed here --
+        and asked once per framebuffer and size (four queries every frame,
+        before), the read binding being the one render_scene noted at the
+        start of the view."""
+        fbo = getattr(self, '_frame_read_fbo', None)
+        viewport = getattr(self, '_frame_viewport', None)
+        if fbo is None or viewport is None:
+            return self._query_read_framebuffer_depth()
+        key = (fbo, int(viewport[2]), int(viewport[3]))
+        known = self.__dict__.setdefault('_read_fbo_depth', {})
+        has = known.get(key)
+        if has is None:
+            if len(known) >= 8:
+                known.clear()
+            has = known[key] = self._query_read_framebuffer_depth()
+        return has
+
+    def _query_read_framebuffer_depth(self):
         try:
             if int(gl.glGetIntegerv(gl.GL_SAMPLE_BUFFERS)) != 0:
                 return False
@@ -1934,7 +1953,7 @@ class PassesMixin:
         (and the water keeps its depth-less look) when there is no
         single-sampled depth buffer to copy from.
         """
-        viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        viewport = getattr(self, '_frame_viewport', None) or gl.glGetIntegerv(gl.GL_VIEWPORT)
         if viewport is None or len(viewport) < 4:
             return False
         x, y, width, height = (int(viewport[0]), int(viewport[1]),

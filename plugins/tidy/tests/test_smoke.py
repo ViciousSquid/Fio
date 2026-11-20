@@ -77,11 +77,25 @@ def test_plugin_loads_and_registers():
         "Tidy Goal exposes its gameplay properties",
     )
 
-    extras = mgr.extra_fields_for("prop")
-    _check(
-        any(getattr(spec, "name", "") == "tidy_category" for spec in extras),
-        "tidy_category registered as a Prop extension",
-    )
+    # The Prop field is Tidy's while Tidy is on, and every Prop panel's
+    # otherwise: off by default, it must not show.
+    tidy = mgr.find_plugin("tidy")
+    was_enabled = mgr.is_enabled(tidy)
+    try:
+        mgr.set_enabled(tidy, True)
+        extras = mgr.extra_fields_for("prop")
+        _check(
+            any(getattr(spec, "name", "") == "tidy_category" for spec in extras),
+            "tidy_category registered as a Prop extension",
+        )
+        mgr.set_enabled(tidy, False)
+        _check(
+            not any(getattr(spec, "name", "") == "tidy_category"
+                    for spec in mgr.extra_fields_for("prop")),
+            "a disabled Tidy adds no field to the Prop panel",
+        )
+    finally:
+        mgr.set_enabled(tidy, was_enabled)
 
 
 def test_demo_loader_respects_unsaved_changes(main_window, monkeypatch):

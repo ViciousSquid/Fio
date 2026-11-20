@@ -66,6 +66,13 @@ _WEAPON_DEFAULTS = {
     'projectile_speed': 900.0,
 }
 
+#: The fastest a weapon's projectile may fly (units a second): the Item
+#: editor's own limit. A shot this fast crosses a projectile's whole 2048-unit
+#: reach in two ticks; the projectile path is swept (LogicCombat
+#: ._sweep_projectile), so speed does not let it pass through walls, but a
+#: definition past this is a typo, not a weapon.
+MAX_PROJECTILE_SPEED = 100000.0
+
 _PICKUP_DEFAULTS = {
     'activation': 'walk_over',
     'effect': 'health',
@@ -194,13 +201,15 @@ def _choice(value, field, choices):
     return value
 
 
-def _number(value, field, minimum=0.0, integer=False):
+def _number(value, field, minimum=0.0, integer=False, maximum=None):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ItemDefinitionError(f"{field} must be a number, not {value!r}")
     if value != value or value in (float('inf'), float('-inf')):
         raise ItemDefinitionError(f"{field} must be finite")
     if value < minimum:
         raise ItemDefinitionError(f"{field} must be at least {minimum:g}, not {value!r}")
+    if maximum is not None and value > maximum:
+        raise ItemDefinitionError(f"{field} must be at most {maximum:g}, not {value!r}")
     if integer:
         if float(value) != int(value):
             raise ItemDefinitionError(f"{field} must be a whole number, not {value!r}")
@@ -260,7 +269,7 @@ def compile_definition(item_id, definition):
             noise=_number(w['noise'], 'weapon.noise'),
             muzzle_flash=_text(w['muzzle_flash'], 'weapon.muzzle_flash'),
             projectile_speed=_number(w['projectile_speed'], 'weapon.projectile_speed',
-                                     minimum=1.0),
+                                     minimum=1.0, maximum=MAX_PROJECTILE_SPEED),
         )
     else:
         p = _section(definition, 'pickup', _PICKUP_DEFAULTS)

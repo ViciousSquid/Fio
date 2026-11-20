@@ -13,6 +13,12 @@ from engine.spatial import set_live_flag
 from editor.selection import SelectionLookup
 from editor import brush_groups
 
+try:
+    from editor.io_system import io_revision as _io_revision
+except ImportError:                                  # pragma: no cover
+    def _io_revision():
+        return 0
+
 #: Item data: a grouped brush row's group colour ('#rrggbb') and which edges
 #: of its group's outline box it carries (1: first row, 2: last row).
 GROUP_COLOUR_ROLE = Qt.UserRole + 1
@@ -220,6 +226,16 @@ class SceneHierarchy(QWidget):
         #: for. A refresh whose key is unchanged only reselects rows.
         self._rows = None
         self._rows_key = None
+        #: ``(token, objects key)``: the per-object half of the structure key,
+        #: kept until the world says something changed (:meth:`_world_token`).
+        self._objects_key_cache = None
+        #: ``(token, rows, {id(obj): (item, obj)}, exact)``: which row stands
+        #: for which object, so a selection change touches only the rows whose
+        #: selection changed (:meth:`_rows_selected_by_identity`).
+        self._row_index = None
+        #: A refresh was skipped while the panel was out of sight; the next
+        #: show catches up (:meth:`showEvent`).
+        self._stale = False
 
         # Create sort button
         self.sort_button = QPushButton(f"Sort: {self.SORT_MODE_NAMES[self.sort_mode]}")
@@ -741,9 +757,14 @@ class SceneHierarchy(QWidget):
         terrain_data = self.main_window.state.terrain_data
         return terrain_data is not None
 
-    def refresh_list(self):
+    def refresh_list(self, selection_only=False):
         """Rebuild the tree (every selection change does, through the editor's
         update_all_ui) without the list moving under the cursor.
+
+        *selection_only*: the caller changed only the selection
+        (``MainWindow.set_selected_objects``), so the objects' names and flags
+        are re-read only if an editor transaction has happened since they last
+        were (:meth:`_objects_key`).
 
         The scroll position is kept across the rebuild. A selection made in
         the tree itself -- a click, a Ctrl-click adding a row, a Shift-click
@@ -753,6 +774,13 @@ class SceneHierarchy(QWidget):
         sight. Scrolling to the first selected row after every rebuild made
         the list jump to the top of a Ctrl-click selection on each click.
         """
+        if self._out_of_sight():
+            # A closed, collapsed or tabbed-away dock: nobody sees the rows,
+            # and every selection change used to rebuild or rescan all of
+            # them. Brought up to date once, when the panel is shown again.
+            self._stale = True
+            return
+        self._stale = False
         bar = self.tree.verticalScrollBar()
         scrolled = bar.value()
         current_obj = self._object_of(self.tree.currentItem())
@@ -761,7 +789,7 @@ class SceneHierarchy(QWidget):
         # and callers may already have blocked signals for a larger operation.
         was_blocked = self.tree.blockSignals(True)
         try:
-            key = self._structure_key()
+            key = self._structure_key(selection_only)
             if not self._reselect_rows(key):
                 self._rebuild_items(key)
                 # Lay the new rows out now, so the scroll range is the rebuilt
@@ -780,6 +808,18 @@ class SceneHierarchy(QWidget):
         first_selected = self.tree.selectedItems()
         if first_selected:
             self.tree.scrollToItem(first_selected[0], QAbstractItemView.EnsureVisible)
+
+    def _out_of_sight(self):
+        """Whether the panel is hidden inside its window (its dock closed,
+        collapsed to the strip, or behind another tab). A window that is not
+        shown yet does not count: the panel would be seen once it is."""
+        window = self.window()
+        return window is not self and not self.isVisibleTo(window)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._stale:
+            self.refresh_list()
 
     def _object_of(self, item):
         """The brush or Thing a tree row stands for, or None."""
@@ -809,7 +849,7 @@ class SceneHierarchy(QWidget):
             stack.extend(item.child(j) for j in range(item.childCount()))
         return None
 
-    def _structure_key(self):
+    def _structure_key(self, selection_only=False):
         """Everything a rebuild reads except the selection.
 
         Equal keys mean a rebuild would make the same rows, in the same
@@ -820,12 +860,45 @@ class SceneHierarchy(QWidget):
         exactly as a rebuild stores them. Building it costs a few
         milliseconds on thousands of brushes, against tens for a rebuild.
         """
-        state = self.main_window.state
-        group_key = brush_groups.GROUP_KEY
         terrain = None
         if self._has_terrain():
             terrain = (self._get_terrain_display_name(),
                        bool(self.main_window.terrain_locked()))
+        return (self.sort_mode, terrain, frozenset(self._search_matches),
+                self._objects_key(reuse=selection_only))
+
+    def _world_token(self):
+        """What says the scene's objects may have changed since a cached
+        answer about them: the world epoch every editor transaction bumps
+        (:meth:`EditorState.mark_world_changed`), the I/O revision a rename
+        bumps, and the lists themselves (held, so a replaced list is seen and
+        its id cannot be reused by another)."""
+        state = self.main_window.state
+        return (getattr(state, 'world_epoch', None), _io_revision(),
+                state.brushes, len(state.brushes), state.things, len(state.things))
+
+    @staticmethod
+    def _same_token(a, b):
+        return (a is not None and b is not None and a[0] == b[0] and a[1] == b[1]
+                and a[2] is b[2] and a[3] == b[3] and a[4] is b[4] and a[5] == b[5])
+
+    def _objects_key(self, reuse=False):
+        """The per-object part of :meth:`_structure_key`.
+
+        With *reuse* (a selection change) the last answer is kept while
+        :meth:`_world_token` has not moved: a selection change does not move
+        it, and reading every object's name and flags was most of the cost of
+        one on a big map (40 of 90 ms at 20k brushes). Every editor operation
+        that changes what a row shows checkpoints (or journals) first, which
+        moves the token. Any other refresh reads the objects afresh, so a
+        value written outside a transaction still shows on the next one.
+        """
+        token = self._world_token()
+        cached = self._objects_key_cache
+        if reuse and cached is not None and self._same_token(cached[0], token):
+            return cached[1]
+        state = self.main_window.state
+        group_key = brush_groups.GROUP_KEY
         brushes = tuple(
             (b.get('name'), b.get('is_trigger', False), b.get('hidden', False),
              b.get('lock', False), 'color' in b, b.get('color'), b.get(group_key))
@@ -835,8 +908,69 @@ class SceneHierarchy(QWidget):
             p = t.properties
             things.append((type(t), t.name, p.get('hidden', False), p.get('lock', False),
                            'color' in p, p.get('color'), p.get(group_key)))
-        return (self.sort_mode, terrain, frozenset(self._search_matches),
-                brushes, tuple(things))
+        value = (brushes, tuple(things))
+        self._objects_key_cache = (token, value)
+        return value
+
+    def _rows_selected_by_identity(self):
+        """The rows the selection selects, found through an object -> row
+        map, or None when only the full scan can say.
+
+        The full scan asks :class:`SelectionLookup` about every row, which
+        also matches by *equality* (a copied brush dict, an object with its
+        own ``__eq__``). The map answers by identity, which is the same
+        answer only when no row could be matched any other way: every
+        selected object is a row's own object, a plain dict whose id no other
+        row shares or an object compared by identity, and no row is of a type
+        that compares by value. Anything else falls back.
+        """
+        rows = self._rows
+        token = self._world_token()
+        index = self._row_index
+        if index is None or index[1] is not rows or not self._same_token(index[0], token):
+            index = (token, rows) + self._build_row_index(rows)
+            self._row_index = index
+        by_obj, duplicate_ids, exact = index[2], index[3], index[4]
+        if not exact:
+            return None
+        wanted = []
+        for obj in self.main_window.state.selected_objects:
+            entry = by_obj.get(id(obj))
+            if entry is None or entry[1] is not obj:
+                return None
+            if type(obj) is dict:
+                try:
+                    if obj.get('id') in duplicate_ids:
+                        return None
+                except TypeError:
+                    return None
+            elif type(obj).__eq__ is not object.__eq__:
+                return None
+            wanted.append(entry[0])
+        return wanted
+
+    def _build_row_index(self, rows):
+        """``(by_obj, duplicate brush ids, exact)`` for the rows *rows*."""
+        state = self.main_window.state
+        lists = {'brush': state.brushes, 'thing': state.things}
+        by_obj, seen, duplicates, exact = {}, set(), set(), True
+        for item, kind, index in rows[1]:
+            obj = lists[kind][index]
+            by_obj[id(obj)] = (item, obj)
+            if kind == 'brush':
+                if type(obj) is not dict:
+                    exact = False           # a dict subclass compares by value
+                    continue
+                try:
+                    brush_id = obj.get('id')
+                    if brush_id in seen:
+                        duplicates.add(brush_id)
+                    seen.add(brush_id)
+                except TypeError:
+                    exact = False
+            elif type(obj).__eq__ is not object.__eq__:
+                exact = False
+        return by_obj, duplicates, exact
 
     def _reselect_rows(self, key):
         """Bring the existing rows' selection up to date without rebuilding,
@@ -857,12 +991,26 @@ class SceneHierarchy(QWidget):
         self._clear_highlight()
         self._highlight_timer.stop()
         state = self.main_window.state
-        selected = SelectionLookup(state.selected_objects)
-        lists = {'brush': state.brushes, 'thing': state.things}
-        for item, kind, index in items:
-            want = lists[kind][index] in selected
-            if item.isSelected() != want:
-                item.setSelected(want)
+        wanted = self._rows_selected_by_identity()
+        if wanted is not None:
+            # Only the rows whose selection changed are touched: what Qt has
+            # selected now against what the selection wants.
+            # (Keyed by id: a QTreeWidgetItem is not hashable. Qt hands back
+            # the same wrappers, which self._rows keeps alive.)
+            wanted = {id(item): item for item in wanted}
+            for item in self.tree.selectedItems():
+                if item is not terrain_item and id(item) not in wanted:
+                    item.setSelected(False)
+            for item in wanted.values():
+                if not item.isSelected():
+                    item.setSelected(True)
+        else:
+            selected = SelectionLookup(state.selected_objects)
+            lists = {'brush': state.brushes, 'thing': state.things}
+            for item, kind, index in items:
+                want = lists[kind][index] in selected
+                if item.isSelected() != want:
+                    item.setSelected(want)
         if terrain_item is not None:
             want = bool(getattr(self.main_window, 'terrain_selected', False))
             if terrain_item.isSelected() != want:
@@ -874,6 +1022,7 @@ class SceneHierarchy(QWidget):
         # key that lets the next refresh skip rebuilding a half-built tree.
         self._rows = None
         self._rows_key = None
+        self._row_index = None
         self.tree.clear()
         headers, row_items, terrain_item = [], [], None
         

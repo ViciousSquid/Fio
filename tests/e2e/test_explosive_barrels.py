@@ -350,3 +350,56 @@ def test_a_barrel_lying_on_its_side_is_hit_along_its_whole_length(fio_session, c
     assert not _hits(session, barrel, (300.0, hi[1] + 15.0, 10.0), (-1.0, 0.0, 0.0))
     assert ex.point_hit(0.0, middle, hi[2] - 3.0) is barrel
     assert ex.point_hit(0.0, hi[1] + 15.0, 10.0) is None
+
+
+def _grid_of_barrels(n, spacing=110.0, **props):
+    side = int(n ** 0.5)
+    return [_barrel("g%d" % i, (i % side) * spacing - 300.0, (i // side) * spacing - 300.0,
+                    **props)
+            for i in range(n)]
+
+
+def test_a_chain_reaction_never_rescans_the_world(fio_session, clock):
+    """The standing barrels are listed once; a barrel that goes leaves the
+    list itself, and its fireball (a session Thing) does not empty the cache."""
+    session = _play(fio_session, clock, _grid_of_barrels(25, explosion_radius=260.0))
+    runtime = session.logic.explosion_runtime
+    assert len(runtime.explosives()) == 25
+    scans = runtime.scans
+    runtime.explode_prop(_named(session, "g0"))
+    _step(session, 120)
+    assert len(runtime.exploded) == 25 and runtime.explosives() == []
+    # Was one full scan of the things per explosion (25).
+    assert runtime.scans == scans
+
+
+def test_a_chain_reaction_tests_each_barrels_sight_until_it_is_caught(fio_session, clock):
+    """A barrel already waiting to go off is not looked at again by every
+    later blast that reaches it."""
+    session = _play(fio_session, clock, _grid_of_barrels(25, explosion_radius=260.0))
+    runtime = session.logic.explosion_runtime
+    runtime.explode_prop(_named(session, "g0"))
+    _step(session, 120)
+    assert len(runtime.exploded) == 25
+    # 25 blasts each reaching ~10 neighbours used to test ~150 lines of sight;
+    # now a barrel is tested only by blasts before the one that caught it.
+    assert runtime.sight_tests <= 60, runtime.sight_tests
+
+
+def test_out_of_range_blast_settings_are_clamped(fio_session, clock):
+    """``"inf"`` and absurd values neither fault the tick nor reach the
+    radius queries and physics as they are: a value that is not a finite
+    number is the default, one past its maximum is the maximum."""
+    from engine.explosions import BLAST_MAXIMUMS, EXPLOSIVE_DEFAULTS
+    session = _play(fio_session, clock, [
+        _barrel("b1", 0.0, 0.0, explosion_radius="inf", explosion_force=1e12,
+                explosion_damage=float("inf")),
+        _barrel("b2", 150.0, 0.0)])
+    runtime = session.logic.explosion_runtime
+    runtime.explode_prop(_named(session, "b1"))         # used to raise OverflowError
+    fireball = _named(session, "b1_explosion")
+    assert fireball.properties["explosion_radius"] == EXPLOSIVE_DEFAULTS["explosion_radius"]
+    assert fireball.properties["explosion_damage"] == EXPLOSIVE_DEFAULTS["explosion_damage"]
+    assert fireball.properties["explosion_force"] == BLAST_MAXIMUMS["explosion_force"]
+    _step(session, int(ExplosionRuntime.CHAIN_DELAY / TICK) + 2)
+    assert _exploded(session, _named(session, "b2"))

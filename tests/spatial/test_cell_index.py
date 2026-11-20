@@ -286,3 +286,49 @@ def test_the_reader_and_the_writer_agree_on_every_parkable_flag():
                 assert spatial.authored_flag(obj, flag) is value, (
                     "%s: wrote %r (parked=%s) and read back %r"
                     % (flag, value, parked, spatial.authored_flag(obj, flag)))
+
+
+def test_cells_within_survives_an_infinite_or_huge_radius():
+    """``math.ceil(inf)`` used to raise OverflowError and fault the tick; an
+    infinite radius reaches every occupied cell, NaN and negative none."""
+    index = spatial.CellIndex()
+    index.insert_point({"name": "a"}, 0.0, 0.0)
+    index.insert_point({"name": "b"}, 1.0e9, -1.0e9)
+    everything = set(index.cells)
+    assert index.cells_within(0.0, 0.0, math.inf) == everything
+    assert index.cells_within(0.0, 0.0, 1.0e300) == everything
+    assert index.cells_within(0.0, 0.0, math.nan) == set()
+    assert index.cells_within(0.0, 0.0, -5.0) == set()
+    assert index.cells_within(math.nan, 0.0, 100.0) == set()
+    assert index.cells_within(math.inf, 0.0, 100.0) == set()
+
+
+def test_a_huge_radius_walks_the_occupied_cells_not_the_square():
+    """The docstring's promise: the cost tracks what is filed. A sparse
+    index asked for a world-sized circle tests each occupied key once,
+    instead of every cell of the bounding square."""
+    tested = []
+
+    class Keys(dict):
+        def __contains__(self, key):
+            tested.append(key)
+            return dict.__contains__(self, key)
+
+    cells = Keys({(0, 0): [1], (40, -3): [2], (-7000, 7000): [3]})
+    found = spatial.cells_within(cells, 0.0, 0.0, 1.0e6)
+    assert found == {(0, 0), (40, -3)}
+    # The square would have been ~(2 * 1e6 / 512)^2 = 15M membership tests.
+    assert len(tested) == 0
+
+
+def test_both_strategies_agree():
+    """Square walk and occupied-key walk give the same circle."""
+    import random
+    rng = random.Random(7)
+    cells = {(rng.randint(-30, 30), rng.randint(-30, 30)): [0] for _ in range(400)}
+    for _ in range(50):
+        px, pz = rng.uniform(-9000, 9000), rng.uniform(-9000, 9000)
+        r = rng.uniform(0.0, 6000.0)
+        expected = {c for c in cells
+                    if spatial.cell_distance_sq(c[0], c[1], px, pz, CELL) <= r * r}
+        assert spatial.cells_within(cells, px, pz, r, CELL) == expected

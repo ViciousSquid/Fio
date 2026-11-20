@@ -212,7 +212,8 @@ class TerrainAppearance:
         self.custom_palette = _palette_list(self.custom_palette)
         if self.palette == 'custom' and self.custom_palette is None:
             self.palette = 'meadow'
-        if self.palette not in PALETTES and self.palette != 'custom':
+        if not isinstance(self.palette, str) or (
+                self.palette not in PALETTES and self.palette != 'custom'):
             self.palette = 'meadow'
         if not isinstance(self.preset, str):
             self.preset = 'custom'
@@ -276,9 +277,11 @@ def palette_colors(appearance: 'TerrainAppearance') -> List[Color]:
 
 def _num(v, default):
     try:
-        return float(v)
-    except (TypeError, ValueError):
+        v = float(v)
+    except (TypeError, ValueError, OverflowError):
         return default
+    # NaN survives every clamp (and int() of it raises); infinities clamp.
+    return default if v != v else v
 
 
 # ---------------------------------------------------------------------------

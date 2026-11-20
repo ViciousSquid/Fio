@@ -1,10 +1,11 @@
 import contextlib
+import itertools
 import os
 import sys
 import numpy as np
 import glm
 import ctypes
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import List, Dict, Tuple, Optional
 import math
 import time
@@ -320,10 +321,31 @@ class BiomeConfig:
 
     @classmethod
     def from_dict(cls, data):
-        instance = cls(name=data.get("name", "Custom"))
-        for k, v in data.items():
-            if hasattr(instance, k):
-                setattr(instance, k, v)
+        """A biome from a map file's ``custom_biome``.
+
+        The map is untrusted and its biome feeds every height sample: a field
+        of the wrong type (a string ``height_scale``, a gradient that is not
+        ``[position, [r, g, b]]`` stops) keeps its default instead of raising
+        on every chunk build.
+        """
+        if not isinstance(data, dict):
+            data = {}
+        name = data.get("name", "Custom")
+        instance = cls(name=name if isinstance(name, str) else "Custom")
+        for f in fields(cls):
+            if f.name == "name" or f.name not in data:
+                continue
+            value, default = data[f.name], getattr(instance, f.name)
+            if isinstance(default, bool):
+                value = _flag(value, default)
+            elif isinstance(default, float):
+                value = _finite_number(value, default, -1e9, 1e9)
+            elif f.name == "color_gradient":
+                value = _gradient_stops(value) or default
+            elif f.name == "blend_weights":
+                weights = _number_list(value, 4)
+                value = tuple(weights) if weights is not None else default
+            setattr(instance, f.name, value)
         return instance
 
 BIOMES = {
@@ -359,6 +381,29 @@ def _finite_number(value, default, lo, hi):
 def _as_list(value):
     """*value* when it is a list (a map field that holds records), else []."""
     return value if isinstance(value, list) else []
+
+
+def _flag(value, default):
+    """A map file's on/off field: a bool, or a finite number read as one;
+    anything else (a string, a list, NaN) is *default*."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return bool(value)
+    return default
+
+
+def _gradient_stops(value):
+    """The ``[position, [r, g, b]]`` stops of a saved colour gradient that
+    are well formed, as saved; None when *value* holds none."""
+    if not isinstance(value, (list, tuple)):
+        return None
+    stops = [stop for stop in value
+             if isinstance(stop, (list, tuple)) and len(stop) == 2
+             and _number_list([stop[0]], 1) is not None
+             and isinstance(stop[1], (list, tuple)) and len(stop[1]) == 3
+             and _number_list(stop[1], 3) is not None]
+    return stops or None
 
 
 def _number_list(value, length):
@@ -548,7 +593,9 @@ class Terrain:
         # place, see _bake_texture_rect).
         self._paint_serial_cache: Dict[Tuple[int, int], tuple] = {}
         self._base_serial_cache: Dict[Tuple[int, int], tuple] = {}
-        self._sculpt_serial_cache: tuple = (None, None)
+        # Sculpt tiles: (key, {tile: entry}, dirty tiles, entry list) for
+        # the sculpt as of key (see _sculpt_tile_entries); None when unknown.
+        self._sculpt_tile_cache: Optional[tuple] = None
         self._heightmap_blob_cache: tuple = (None, None)
         self._paint_map_versions: Dict[Tuple[int, int], int] = {}
         self._paint_version_counter = 0
@@ -1868,9 +1915,11 @@ class Terrain:
         return (id(offsets), len(offsets), getattr(self, '_sculpt_version', 0))
 
     def _touch_sculpt(self):
-        """Invalidate the dense sculpt grid; call after any sculpt change."""
+        """Invalidate the dense sculpt grid and the saved sculpt tiles; call
+        after any sculpt change."""
         self._sculpt_version = getattr(self, '_sculpt_version', 0) + 1
         self._sculpt_cache = None
+        self._sculpt_tile_cache = None
 
     def _touch_sculpt_rect(self, before, gx0, gz0, gx1, gz1):
         """Like :meth:`_touch_sculpt` for an edit confined to grid cells
@@ -1888,9 +1937,21 @@ class Terrain:
         A chunk the builder thread is sampling meanwhile may see some of the
         rectangle's cells old and some new; the dab has dirtied that chunk
         (:meth:`_mark_sculpt_region_dirty`), so it is built again.
+
+        The saved form is kept the same way: only the tiles under the
+        rectangle are encoded again, by the next :meth:`to_dict`.
         """
         cache = getattr(self, '_sculpt_cache', None)
         self._sculpt_version = getattr(self, '_sculpt_version', 0) + 1
+        tiles = getattr(self, '_sculpt_tile_cache', None)
+        if tiles is not None and tiles[0] == before:
+            shift = self.SCULPT_TILE_SHIFT
+            tiles[2].update((tx, tz)
+                            for tx in range(gx0 >> shift, (gx1 >> shift) + 1)
+                            for tz in range(gz0 >> shift, (gz1 >> shift) + 1))
+            self._sculpt_tile_cache = (self._sculpt_key(), tiles[1], tiles[2], None)
+        else:
+            self._sculpt_tile_cache = None
         if cache is None or cache[0] != before or cache[1] is None:
             # Not built, already stale, or too wide for a dense grid: left
             # to the next sample's full rebuild, which decides afresh.
@@ -1940,6 +2001,133 @@ class Terrain:
                 grown[min_gx - nx0:min_gx - nx0 + w, min_gz - nz0:min_gz - nz0 + h] = grid
                 return nx0, nz0, grown
         return None
+
+    #: Saved sculpt is cut into square tiles of ``1 << SCULPT_TILE_SHIFT``
+    #: cells a side, one record each, as texture paint is cut into chunks: a
+    #: save after a dab encodes only the tiles the dab touched.
+    SCULPT_TILE_SHIFT = 5
+    #: A sculpt cell index a map may name: beyond it the int64 arithmetic of
+    #: the dense grid and the tile codec would overflow. Far past any cell a
+    #: brush can reach.
+    MAX_SCULPT_CELL = 1 << 46
+
+    def _encode_sculpt_tile(self, tx, tz, local, values):
+        """The saved record of sculpt tile (*tx*, *tz*).
+
+        ``data`` is base64 of zlib of the tile's cells: their ``uint16``
+        indices within the tile (``lx << SCULPT_TILE_SHIFT | lz``, ascending),
+        then their ``float64`` offsets byte plane by byte plane -- all first
+        bytes, then all second bytes... -- which compresses where the plain
+        doubles would not. Little-endian; exact, so a round trip gives back
+        the very same heights.
+        """
+        import base64, zlib
+        n = len(local)
+        raw = (np.asarray(local, dtype='<u2').tobytes()
+               + np.asarray(values, dtype='<f8').view(np.uint8)
+               .reshape(n, 8).T.tobytes())
+        # Run-length matching only: the low bytes of a double are noise that
+        # a full match search spends twice the time on for ~2% of the size.
+        packer = zlib.compressobj(1, zlib.DEFLATED, 15, 9, zlib.Z_RLE)
+        packed = packer.compress(raw) + packer.flush()
+        return {'tile': [int(tx), int(tz)],
+                'data': base64.b64encode(packed).decode('ascii')}
+
+    def _decode_sculpt_tile(self, entry):
+        """``((tx, tz), gx, gz, values)`` of a saved sculpt tile record, or
+        None if it is damaged. Inflates at most one tile's worth of bytes, so
+        a small record cannot decompress to gigabytes."""
+        import base64, zlib
+        if not isinstance(entry, dict):
+            return None
+        tile, payload = entry.get('tile'), entry.get('data')
+        limit = self.MAX_SCULPT_CELL >> self.SCULPT_TILE_SHIFT
+        if (not isinstance(tile, (list, tuple)) or len(tile) != 2
+                or not all(isinstance(t, int) and not isinstance(t, bool)
+                           and abs(t) < limit for t in tile)
+                or not isinstance(payload, str) or not payload):
+            return None
+        shift = self.SCULPT_TILE_SHIFT
+        cells = 1 << (2 * shift)
+        try:
+            inflater = zlib.decompressobj()
+            raw = inflater.decompress(base64.b64decode(payload), 10 * cells + 1)
+        except (TypeError, ValueError, zlib.error, MemoryError):
+            return None
+        n = len(raw) // 10
+        if inflater.unconsumed_tail or len(raw) != 10 * n or n > cells:
+            return None
+        local = np.frombuffer(raw, dtype='<u2', count=n).astype(np.int64)
+        values = (np.frombuffer(raw, dtype=np.uint8, offset=2 * n)
+                  .reshape(8, n).T.copy().view('<f8').ravel())
+        if n and int(local.max()) >= cells:
+            return None
+        tx, tz = int(tile[0]), int(tile[1])
+        return ((tx, tz), (tx << shift) + (local >> shift),
+                (tz << shift) + (local & ((1 << shift) - 1)), values)
+
+    def _sculpt_tile_entries(self):
+        """The saved sculpt records, one per tile, in tile order.
+
+        Encoded in full once per sculpt change other than a dab -- one NumPy
+        sort of the cells, not a list of a million ``[gx, gz, offset]``
+        triples -- and after a dab only for the tiles it touched (see
+        :meth:`_touch_sculpt_rect`).
+        """
+        key = self._sculpt_key()
+        cache = self._sculpt_tile_cache
+        if cache is None or cache[0] != key:
+            cache = (key, self._encode_sculpt_tiles(), set(), None)
+        tiles, dirty, entries = cache[1], cache[2], cache[3]
+        if dirty:
+            shift = self.SCULPT_TILE_SHIFT
+            side = 1 << shift
+            get = self.sculpt_offsets.get
+            for tx, tz in dirty:
+                x0, z0 = tx << shift, tz << shift
+                found = [(lx << shift | lz, v)
+                         for lx in range(side) for lz in range(side)
+                         for v in (get((x0 + lx, z0 + lz)),) if v is not None]
+                if found:
+                    local, values = zip(*found)
+                    tiles[(tx, tz)] = self._encode_sculpt_tile(tx, tz, local, values)
+                else:
+                    tiles.pop((tx, tz), None)
+            dirty.clear()
+            entries = None
+        if entries is None:
+            entries = [tiles[t] for t in sorted(tiles)]
+        self._sculpt_tile_cache = (key, tiles, dirty, entries)
+        return entries
+
+    def _encode_sculpt_tiles(self):
+        """``{tile: record}`` for the whole sculpt."""
+        offsets = self.sculpt_offsets
+        n = len(offsets)
+        if not n:
+            return {}
+        shift = self.SCULPT_TILE_SHIFT
+        mask = (1 << shift) - 1
+        keys = np.fromiter(itertools.chain.from_iterable(offsets),
+                           dtype=np.int64, count=2 * n).reshape(n, 2)
+        values = np.fromiter(offsets.values(), dtype=np.float64, count=n)
+        tx, tz = keys[:, 0] >> shift, keys[:, 1] >> shift
+        local = (keys[:, 0] & mask) << shift | (keys[:, 1] & mask)
+        # Tile order, then cell order: one sort of a single int64 key (a
+        # third the time of a three-key lexsort) whenever the tiles' span
+        # lets it fit, as any brush-made sculpt's does.
+        rows, cols = tx - tx.min(), tz - tz.min()
+        span = int(cols.max()) + 1
+        if (int(rows.max()) + 1) * span < 1 << (62 - 2 * shift):
+            order = np.argsort((rows * span + cols) << (2 * shift) | local)
+        else:
+            order = np.lexsort((local, tz, tx))
+        tx, tz, local, values = tx[order], tz[order], local[order], values[order]
+        starts = np.flatnonzero(np.r_[True, (np.diff(tx) != 0) | (np.diff(tz) != 0)])
+        ends = np.r_[starts[1:], n]
+        return {(int(tx[a]), int(tz[a])):
+                self._encode_sculpt_tile(tx[a], tz[a], local[a:b], values[a:b])
+                for a, b in zip(starts.tolist(), ends.tolist())}
 
     def _dense_sculpt(self):
         """``(min_gx, min_gz, grid)`` for the sculpt offsets, or None.
@@ -2758,7 +2946,8 @@ class Terrain:
             }
         except (TypeError, ValueError):
             return None
-        numbers = (record['x'], record['z'], record['radius'], record['angle'])
+        numbers = (record['x'], record['z'], record['radius'], record['angle'],
+                   record['feather'], record['opacity'])
         if (not record['texture'] or record['radius'] <= 0.0
                 or not all(math.isfinite(v) for v in numbers)):
             return None
@@ -3401,15 +3590,11 @@ class Terrain:
             # Written only when set, so an unlocked terrain's record is
             # exactly what it was.
             data['lock'] = True
-        # Sculpt offsets — serialise sparse dict as list of [gx, gz, offset]
+        # Sculpt offsets, as compressed tiles (see _encode_sculpt_tile). Maps
+        # saved before them hold 'sculpt_offsets', [gx, gz, offset] triples:
+        # ~70 bytes of indented JSON a cell, where a tile spends ~13.
         if self.sculpt_offsets:
-            # Rebuilt only when the sculpt changes (same key as _dense_sculpt).
-            offsets = self.sculpt_offsets
-            key = self._sculpt_key()
-            if self._sculpt_serial_cache[0] != key:
-                self._sculpt_serial_cache = (
-                    key, [[gx, gz, val] for (gx, gz), val in offsets.items()])
-            data['sculpt_offsets'] = list(self._sculpt_serial_cache[1])
+            data['sculpt_tiles'] = list(self._sculpt_tile_entries())
             data['sculpt_grid_resolution'] = self.sculpt_grid_resolution
         if self.csg_subtractions:
             data['csg_subtractions'] = [list(cut) for cut in self.csg_subtractions]
@@ -3464,19 +3649,29 @@ class Terrain:
             return None
         return arr
 
+    #: Largest terrain seed: the noise seeds NumPy's generator with ``seed``
+    #: and ``seed + 2000`` (TerrainFeatures), which must fit 32 bits.
+    MAX_SEED = 2 ** 32 - 1 - 2000
+
     def from_dict(self, data: dict):
-        self.enabled = data.get('enabled', True)
+        # The map file is untrusted: every field is checked or converted
+        # here, so a damaged or hostile terrain_data -- a string seed, a list
+        # biome, a list where the record should be -- falls back to defaults
+        # instead of raising half-way through a load, raising every frame, or
+        # allocating the whole grid of a billion-chunk bounding box.
+        if not isinstance(data, dict):
+            data = {}
+        self.enabled = _flag(data.get('enabled'), True)
         self.locked = bool(data.get('lock', False))
-        self.solid = data.get('solid', True)
-        self.seed = data.get('seed', 42)
+        self.solid = _flag(data.get('solid'), True)
+        seed = _finite_number(data.get('seed'), 42, 0, self.MAX_SEED)
+        self.seed = int(seed) if seed == int(seed) else 42
         self.noise = PerlinNoise(self.seed)
         self.features = TerrainFeatures(self.noise, self.seed)
-        biome_name = data.get('biome', 'grassy_hills')
+        biome_name = data.get('biome')
+        if not isinstance(biome_name, str):
+            biome_name = 'grassy_hills'
         if biome_name in BIOMES: self.biome = BIOMES[biome_name]
-        # The map file is untrusted: every number that sizes an allocation or
-        # divides is checked here, so a damaged or hostile terrain_data falls
-        # back to defaults instead of raising every frame or allocating the
-        # whole grid of a billion-chunk bounding box.
         self.chunk_size = _finite_number(
             data.get('chunk_size'), self.DEFAULT_CHUNK_SIZE, 1.0, 65536.0)
         self.mesh_scale = _finite_number(
@@ -3503,17 +3698,19 @@ class Terrain:
         self._pending_prune = True
         # Texture blending is opt-in for terrain, including older maps that
         # do not contain an explicit use_textures field.
-        self.use_textures = data.get('use_textures', False)
-        self.flat_mode = data.get('flat_mode', False)
-        self.grass_enabled = data.get('grass_enabled', False)
-        self.grass_density = float(np.clip(data.get('grass_density', 0.02), 0.0, MAX_GRASS_DENSITY))
-        self.set_grass(self.grass_enabled, height=data.get('grass_height', DEFAULT_GRASS_HEIGHT))
+        self.use_textures = _flag(data.get('use_textures'), False)
+        self.flat_mode = _flag(data.get('flat_mode'), False)
+        self.grass_enabled = _flag(data.get('grass_enabled'), False)
+        self.grass_density = float(np.clip(_finite_number(
+            data.get('grass_density'), 0.02, -math.inf, math.inf), 0.0, MAX_GRASS_DENSITY))
+        self.set_grass(self.grass_enabled, height=_finite_number(
+            data.get('grass_height'), DEFAULT_GRASS_HEIGHT, -math.inf, math.inf))
         saved_grass_color = _number_list(data.get('grass_color'), 3)
         if saved_grass_color is not None:
             self.grass_color = tuple(float(np.clip(c, 0.0, 1.0)) for c in saved_grass_color[:3])
         else:
             self.grass_color = tuple(self.biome.color_gradient[0][1])
-        self.grass_color_custom = bool(data.get('grass_color_custom', saved_grass_color is not None))
+        self.grass_color_custom = _flag(data.get('grass_color_custom'), saved_grass_color is not None)
         saved_tip = _number_list(data.get('grass_tip_color'), 3)
         if saved_tip is not None:
             self.grass_tip_color = tuple(float(np.clip(c, 0.0, 1.0)) for c in saved_tip[:3])
@@ -3534,7 +3731,7 @@ class Terrain:
         try:
             saved_res = int(data.get('texture_paint_resolution',
                                      self.LEGACY_PAINT_RESOLUTION))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             saved_res = self.LEGACY_PAINT_RESOLUTION
         if saved_res <= 0 or saved_res > 4096:
             saved_res = self.LEGACY_PAINT_RESOLUTION
@@ -3547,6 +3744,10 @@ class Terrain:
             texture = str(stamp.get('texture', '')).replace('\\', '/').strip()
             bounds = _number_list(stamp.get('bounds'), 4)
             if bounds is None or not texture:
+                continue
+            cx0, cz0, cx1, cz1 = (math.floor((v - o) / self.chunk_size) for v, o in zip(
+                bounds, (self.offset_x, self.offset_z) * 2))
+            if (cx1 - cx0 + 1) * (cz1 - cz0 + 1) > self.MAX_BOUNDED_CHUNKS:
                 continue
             try:
                 self._bake_texture_rect(
@@ -3575,7 +3776,12 @@ class Terrain:
                     raw.get('texture', ''), raw.get('feather', 0.25),
                     raw.get('opacity', 1.0), raw.get('angle', 0.0),
                     stamp_id=raw.get('id'), tiled=raw.get('tiled', True))
-                if stamp is not None:
+                if stamp is None:
+                    continue
+                # Baked into every chunk it covers: a radius of 1e30 is a set
+                # of 1e57 chunks.
+                cx0, cx1, cz0, cz1 = self._stamp_range(stamp)
+                if (cx1 - cx0 + 1) * (cz1 - cz0 + 1) <= self.MAX_BOUNDED_CHUNKS:
                     self.paint_stamps.append(stamp)
         if self.paint_stamps:
             self.texture_paint_base = self._decode_texture_paint(
@@ -3598,7 +3804,9 @@ class Terrain:
         self._touch_sculpt()
         self.sculpt_grid_resolution = _finite_number(
             data.get('sculpt_grid_resolution'), 4.0, 0.05, 4096.0)
-        for entry in _as_list(data.get('sculpt_offsets')):
+        limit = self.MAX_SCULPT_CELL
+        legacy = _as_list(data.get('sculpt_offsets'))
+        for entry in legacy:
             try:
                 gx, gz, val = entry
                 key, val = (int(gx), int(gz)), float(val)
@@ -3606,17 +3814,38 @@ class Terrain:
                 continue
             # Python's json reads NaN and Infinity; either would reach the
             # heights, and from there collision.
-            if math.isfinite(val):
+            if math.isfinite(val) and abs(key[0]) < limit and abs(key[1]) < limit:
                 self.sculpt_offsets[key] = val
+        # The records just read are the saved form of what they decode to, so
+        # the next save reuses them -- unless anything was dropped or merged.
+        tiles, reusable = {}, not legacy
+        for entry in _as_list(data.get('sculpt_tiles')):
+            decoded = self._decode_sculpt_tile(entry)
+            if decoded is None:
+                reusable = False
+                continue
+            tile, gx, gz, values = decoded
+            finite = np.isfinite(values)
+            if not finite.all():
+                reusable = False
+                gx, gz, values = gx[finite], gz[finite], values[finite]
+            if tile in tiles:
+                reusable = False
+            tiles[tile] = {'tile': list(tile), 'data': entry['data']}
+            self.sculpt_offsets.update(
+                zip(zip(gx.tolist(), gz.tolist()), values.tolist()))
+        if reusable and tiles:
+            self._sculpt_tile_cache = (self._sculpt_key(), tiles, set(), None)
 
         # Terrain CSG cutters
         self.csg_subtractions = []
         for cut in _as_list(data.get('csg_subtractions')):
             try:
                 values = [float(v) for v in cut]
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
-            if len(values) != 6:
+            # An infinite face would lower the surface to -inf.
+            if len(values) != 6 or not all(math.isfinite(v) for v in values):
                 continue
             lo = np.minimum(values[:3], values[3:])
             hi = np.maximum(values[:3], values[3:])
@@ -3629,8 +3858,10 @@ class Terrain:
         # Heightmap
         if 'heightmap_blob' in data:
             self.heightmap_data = self._decode_heightmap_blob(data['heightmap_blob'])
-            self.heightmap_strength = data.get('heightmap_strength', 100.0)
-            self.heightmap_blend = data.get('heightmap_blend', 'additive')
+            self.heightmap_strength = _finite_number(
+                data.get('heightmap_strength'), 100.0, -1e7, 1e7)
+            blend = data.get('heightmap_blend')
+            self.heightmap_blend = blend if blend in ('additive', 'replace') else 'additive'
         else:
             self.heightmap_data = None
         self.mark_all_dirty()

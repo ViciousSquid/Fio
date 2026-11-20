@@ -32,6 +32,12 @@ except ImportError:
     PlayerStart = None
 
 
+def _thread_alive(logic) -> bool:
+    """Whether *logic* is a started, running thread (a test may tick it by hand)."""
+    is_alive = getattr(logic, 'is_alive', None)
+    return bool(is_alive is not None and is_alive())
+
+
 class LogicSession:
     """Runtime lifecycle for a LogicThread play session."""
 
@@ -113,8 +119,16 @@ class LogicSession:
         *spawn_start* is the PlayerStart the player was placed at; without one,
         the level's primary start (see :mod:`engine.player_starts`).
         """
-        with self.logic._tick_lock:
-            return self._apply_play_mode_unlocked(enabled, spawn_start)
+        logic = self.logic
+        with logic._tick_lock:
+            try:
+                return self._apply_play_mode_unlocked(enabled, spawn_start)
+            finally:
+                # Building or tearing down the session is not game time: the
+                # loop must not run it off in catch-up ticks afterwards.
+                resync = getattr(logic, 'request_clock_resync', None)
+                if resync is not None:
+                    resync()
 
     def _primary_start(self):
         if not PlayerStart:
@@ -160,6 +174,9 @@ class LogicSession:
         logic.camera.overhead_height_limit = None
 
         if enabled:
+            # A Play restarted without a Stop: the old session's AI must not
+            # run through this one's setup (it is started again at the end).
+            self.stop_monster_ai()
             # A new Play session clears any previous fault marker.
             logic._tick_faulted = False
             logic._gui_fault_teardown_requested = False
@@ -316,10 +333,24 @@ class LogicSession:
             logic.combat_runtime._gunfire_events.clear()
 
             # Spawn I/O is deliberately before timers and AI, matching the
-            # original LogicThread ordering.
+            # original LogicThread ordering. This thread holds the tick lock,
+            # so for now it is the I/O system's tick thread: spawn outputs are
+            # delivered here, in place, in every session. (Before, the first
+            # Play delivered them here and every later one queued them to the
+            # next tick -- after the timers armed below.)
+            claim = getattr(logic.io_manager, 'claim_tick_thread', None)
+            if claim is not None:
+                claim()
             self.fire_player_spawn_outputs()
             logic.timing_runtime.init_logic_timers()
-            self.start_monster_ai()
+            if claim is not None and _thread_alive(logic):
+                # Setup is done: from here on the running loop is the tick
+                # thread again, and outputs from this one are queued to it.
+                claim(logic.ident)
+            # Player events a previous session's AI queued are not this one's.
+            discard = getattr(logic.trigger_runtime, 'discard_deferred_events', None)
+            if discard is not None:
+                discard()
 
         else:
             if (
@@ -332,6 +363,9 @@ class LogicSession:
                 )
 
             self.stop_monster_ai()
+            discard = getattr(logic.trigger_runtime, 'discard_deferred_events', None)
+            if discard is not None:
+                discard()
             # An explosion still playing goes back to its type now: a FIRE
             # stopped mid-explosion is a FIRE in the editor, as authored.
             self.effect_store.cancel_returns()
@@ -410,6 +444,12 @@ class LogicSession:
                 )
             logic._plugin_emit("play_start" if enabled else "play_stop")
 
+        # The AI thread starts last, once the session -- plugins' play-start
+        # included -- is complete: it reads the world under the monster lock
+        # alone, not the tick lock held for the rest of this.
+        if enabled:
+            self.start_monster_ai()
+
     #: What the player intentionally carries through a level change: the
     #: weapons they have, the one in hand, and their ammunition.
     LOADOUT_FIELDS = ("active_weapon", "weapons", "player_ammo")
@@ -452,10 +492,16 @@ class LogicSession:
         try:
             from engine import savegame
 
-            session = logic.plugins.services.get("bigworld")
+            # No plugin system (FIO_NO_PLUGINS, or it failed to load) means no
+            # Big World session -- not a save that fails on None.
+            # The tick lock, then the monster lock (the engine's lock order):
+            # the MonsterAI thread inserts into monster_states, which the
+            # snapshot reads, and a load replaces it under the thread.
+            session = (logic.plugins.services.get("bigworld")
+                       if logic.plugins is not None else None)
             if (session is not None and session.logic is logic
                     and session.streaming and session._started):
-                with logic._tick_lock:
+                with logic._tick_lock, self.monster_lock:
                     session.commit_all()
                     snapshot = savegame.build_snapshot(
                         logic,
@@ -465,7 +511,7 @@ class LogicSession:
                         base_world=session.base_identity(map_name),
                     )
             else:
-                with logic._tick_lock:
+                with logic._tick_lock, self.monster_lock:
                     snapshot = savegame.build_snapshot(
                         logic,
                         map_name=map_name,
@@ -499,7 +545,11 @@ class LogicSession:
             from engine import savegame
 
             data = savegame.read(path)
-            with logic._tick_lock:
+            with logic._tick_lock, self.monster_lock:
+                # Restoring is not game time either (see apply_play_mode).
+                logic_resync = getattr(logic, 'request_clock_resync', None)
+                if logic_resync is not None:
+                    logic_resync()
                 report = savegame.restore_auto(
                     logic,
                     data,

@@ -8,7 +8,6 @@ the result is a loaded :class:`~engine.glb_loader.GLBLoader` or
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 
@@ -28,11 +27,9 @@ def load_model(path, assets=None):
             raw = assets.read_asset(path)
             if raw is None:
                 return None
-            if suffix == '.gltf':
-                loader._filepath_hint, loader._asset_reader = path, assets.read_asset
-                loader.json_data = json.loads(raw)
-                loader._parse_json_structure()
-                return loader
+            # A .gltf goes through load_bytes too: it used to be parsed here
+            # directly, with no decode budget and no error handling, so a
+            # malformed packaged .gltf raised into the caller.
             return loader if loader.load_bytes(raw, path, assets.read_asset) else None
         return loader if loader.load(path) else None
     return None

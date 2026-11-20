@@ -311,3 +311,49 @@ def test_real_gl_a_straddling_camera_sees_through_the_aperture(ctx):
     drawn, pixel = _render_real(ctx, glm.vec3(0, 40, 6), glm.vec3(0, 40, -500))
     assert drawn == [0]
     assert pixel[2] > 200 and pixel[0] < 50, pixel
+
+
+# ---------------------------------------------------------------------------
+# A failing portal view
+# ---------------------------------------------------------------------------
+
+def _failing_frame(renderer, table, eye, target):
+    view = glm.lookAt(eye, target, glm.vec3(0, 1, 0))
+
+    def broken(view_state, cfg):
+        raise RuntimeError("view failed")
+
+    renderer.draw_portals(table, table.portal_slots, PROJECTION, view, eye,
+                          {"play_mode": True, "entity_table": table}, broken)
+
+
+def test_a_failing_view_puts_the_frames_state_back(renderer, pair, capsys):
+    pos, normal = _basis(pair)
+    recorder = portals.gl
+    _failing_frame(renderer, pair, pos + normal * 300.0, pos)
+    tail = recorder.calls[recorder.calls.index('glDisable', -20):]
+    for call in ('glDisable', 'glStencilMask', 'glColorMask', 'glDepthMask',
+                 'glDepthRange', 'glDepthFunc', 'glClear'):
+        assert call in tail, call
+    assert renderer._portal_scene_pass is False
+    assert renderer._proj_ptr is not None
+    assert "view failed" in capsys.readouterr().out
+
+
+def test_failures_are_reported_rate_limited_then_portals_turn_off(renderer, pair, capsys):
+    pos, normal = _basis(pair)
+    for _ in range(renderer.PORTAL_FAILURE_LIMIT):
+        _failing_frame(renderer, pair, pos + normal * 300.0, pos)
+    out = capsys.readouterr().out
+    assert out.count("render error") == 1
+    assert "off for the rest of this session" in out
+    assert _frame(renderer, pair, pos + normal * 300.0, pos) == []
+
+
+def test_a_good_frame_resets_the_failure_count(renderer, pair):
+    pos, normal = _basis(pair)
+    for _ in range(renderer.PORTAL_FAILURE_LIMIT - 1):
+        _failing_frame(renderer, pair, pos + normal * 300.0, pos)
+    assert _frame(renderer, pair, pos + normal * 300.0, pos) == [0]
+    _failing_frame(renderer, pair, pos + normal * 300.0, pos)
+    assert not getattr(renderer, '_portals_disabled', False)

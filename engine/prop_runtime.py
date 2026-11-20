@@ -663,6 +663,17 @@ class PropSession:
 
         # Dropped props fall by the live physics' gravity, as bodies do.
         drop_gravity = -world_gravity(physics)
+        # Nothing under it at all: it stops falling at the level's kill
+        # height (LogicPlayer.kill_height) instead of falling for ever.
+        players = getattr(self.logic, "player_runtime", None)
+        kill_height = getattr(players, "kill_height", None)
+        try:
+            kill_y = float(kill_height()) if callable(kill_height) else None
+        except Exception:
+            kill_y = None
+        if kill_y is None:
+            from .player import Player
+            kill_y = Player.KILL_HEIGHT_DEFAULT
         finished = []
         for pid, state in tuple(self._falling.items()):
             prop = state.get("entity")
@@ -712,6 +723,15 @@ class PropSession:
                 io = self.logic.io_manager
                 if io is not None:
                     io.fire_output(prop, "OnRest")
+                continue
+
+            if not math.isfinite(new_y) or new_y < kill_y:
+                # Out of the world: retired where it left it, no longer
+                # updated. It does not rest on anything, so no OnRest.
+                if math.isfinite(new_y):
+                    prop.pos = [prop.pos[0], kill_y, prop.pos[2]]
+                    self.moved(prop)
+                finished.append(pid)
                 continue
 
             prop.pos = [prop.pos[0], new_y, prop.pos[2]]

@@ -150,6 +150,24 @@ def test_non_physics_prop_still_falls_to_ground_on_drop(real_logic):
     assert 'OnRest' in _event_names(events)
 
 
+def test_a_prop_dropped_over_nothing_is_retired_at_the_kill_height(real_logic):
+    """Nothing under it at all: it used to fall -- and be updated every tick
+    -- for ever. It stops at the level's kill height, without an OnRest."""
+    prop = Prop(pos=[5000.0, 40.0, 5000.0], properties={'carry_enabled': True})
+    logic, session, events = real_logic([prop], grid=_floor_grid())
+    kill_y = logic.player_runtime.kill_height()
+    session._falling[id(prop)] = {'entity': prop, 'velocity': 0.0}
+
+    for _ in range(60 * 60):                      # a minute is plenty
+        session.tick(1 / 60, use_pressed=False)
+        if id(prop) not in session._falling:
+            break
+
+    assert id(prop) not in session._falling
+    assert prop.pos[1] == pytest.approx(kill_y)
+    assert 'OnRest' not in _event_names(events)
+
+
 def test_respawn_fades_in_over_two_seconds(real_logic):
     prop = Prop(pos=[0.0, 0.0, 0.0], properties={
         'collect_enabled': True,

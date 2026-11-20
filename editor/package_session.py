@@ -6,6 +6,8 @@ start map and any map a level change names, cutscenes, and -- through
 :func:`engine.asset_archives.set_package` -- the assets it carries, after
 the project's own. The archive is opened per read and never held, so the
 file stays free (and is never written: it is an input, not an output).
+A read does not parse the package's directory again: it is indexed once per
+version of the file (:func:`engine.asset_archives.read_zip_entry`).
 
 A package is checked when the session opens, before anything changes: the
 player's own reader (``engine.fiopak.FioPackage``: no bundled plugin code, a
@@ -58,19 +60,21 @@ class PackageSession:
 
     def read(self, member) -> bytes:
         """The bytes of *member* (a name from :attr:`names`)."""
+        from engine.asset_archives import read_zip_entry
         if member not in self.names:
             raise KeyError(member)
-        with zipfile.ZipFile(self.path) as archive:
-            return archive.read(member)
+        return read_zip_entry(self.path, member)
 
     def load_json(self, member):
         """*member* parsed as JSON (a map or a cutscene)."""
         import engine.fiopak as fiopak
-        with zipfile.ZipFile(self.path) as archive:
-            info = archive.getinfo(member)
-            if info.file_size > fiopak.MAX_DOCUMENT_BYTES:
-                raise ValueError(f"'{member}' is over the document size limit")
-            return json.loads(archive.read(info).decode('utf-8-sig'))
+        from engine.asset_archives import read_zip_member, zip_member_info
+        info = zip_member_info(self.path, member)
+        if info is None:
+            raise KeyError(f"There is no item named {member!r} in the archive")
+        if info.file_size > fiopak.MAX_DOCUMENT_BYTES:
+            raise ValueError(f"'{member}' is over the document size limit")
+        return json.loads(read_zip_member(self.path, info).decode('utf-8-sig'))
 
 
 def load_map(session, member):

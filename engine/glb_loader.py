@@ -39,6 +39,27 @@ def _non_negative_int(value) -> Optional[int]:
     return value
 
 
+def _finite_float(value, default: float) -> float:
+    """*value* as a finite float when it is a JSON number, else *default*."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    value = float(value)
+    return value if math.isfinite(value) else default
+
+
+def _finite_floats(value, default: List[float]) -> List[float]:
+    """A material factor as ``len(default)`` finite floats.
+
+    A factor of the wrong type or length (``[1]``, ``"red"``, ``["r", ...]``)
+    would load and then raise from ``float(colour[1])`` on every frame, so a
+    bad component falls back to its default, as the MTL path's ``Kd`` does.
+    """
+    if not isinstance(value, (list, tuple)):
+        return list(default)
+    return [_finite_float(value[i] if i < len(value) else None, d)
+            for i, d in enumerate(default)]
+
+
 def _read_bounded(path: str) -> Optional[bytes]:
     """A regular file's bytes, or None if missing, special, or too large.
 
@@ -144,7 +165,14 @@ class GLBLoader:
         self._decode_budget = min(MAX_DECODED_BYTES,
                                   max(64 * 1024 * 1024, 4 * len(data)))
         try:
-            self._parse_glb(data)
+            if str(source).lower().endswith('.gltf'):
+                # A .gltf is the same JSON without the binary container; its
+                # buffers are external files or data URIs.
+                self.json_data = json.loads(data)
+            else:
+                self._parse_glb(data)
+            if not isinstance(self.json_data, dict):
+                raise ValueError("the glTF document is not a JSON object")
             self._parse_json_structure()
             return True
         except Exception as e:
@@ -209,6 +237,8 @@ class GLBLoader:
         """Resolve buffer data from binary blob or external URIs."""
         self.buffers = []
         for i, buf in enumerate(self.buffers_json):
+            if not isinstance(buf, dict):
+                buf = {}
             uri = buf.get('uri', '')
             if not isinstance(uri, str):
                 uri = ''
@@ -239,11 +269,31 @@ class GLBLoader:
                     continue
                 reader = getattr(self, "_asset_reader", None)
                 self.buffers.append((reader(ext_path) if reader else _read_bounded(ext_path)) or b'')
+        # The budget was set from the file's own size (load_bytes). A .gltf's
+        # data is all in buffers like these, so a real model's budget scales
+        # with them the same way.
+        budget = getattr(self, '_decode_budget', None)
+        if budget is not None:
+            self._decode_budget = min(MAX_DECODED_BYTES, max(
+                budget, 4 * sum(len(b) for b in self.buffers)))
 
     def _parse_materials(self):
-        """Extract material properties (PBR, textures, colors)."""
-        for i, mat in enumerate(self.materials_json):
+        """Extract material properties (PBR, textures, colors).
+
+        Factors are model data the renderer reads every frame: each one is
+        coerced to finite floats of the right length here, so a malformed
+        material draws with defaults instead of loading and then faulting
+        every paintGL.
+        """
+        self._material_names = []
+        materials = self.materials_json if isinstance(self.materials_json, list) else []
+        for i, mat in enumerate(materials):
+            if not isinstance(mat, dict):
+                mat = {}
             name = mat.get('name', f'material_{i}')
+            if not isinstance(name, str):
+                name = f'material_{i}'
+            self._material_names.append(name)
             parsed = {
                 'name': name,
                 'color': [0.8, 0.8, 0.8],
@@ -251,7 +301,7 @@ class GLBLoader:
                 'roughness': 0.5,
                 'emissive': [0.0, 0.0, 0.0],
                 'alpha': 1.0,
-                'double_sided': mat.get('doubleSided', False),
+                'double_sided': mat.get('doubleSided', False) is True,
                 'texture': None,
                 'normal_texture': None,
                 'metallic_roughness_texture': None,
@@ -259,57 +309,56 @@ class GLBLoader:
                 'occlusion_texture': None,
             }
 
+            def _tex(key, source=mat):
+                info = source.get(key)
+                return self._resolve_texture(info.get('index')) if isinstance(info, dict) and info else None
+
             # PBR metallic-roughness
             pbr = mat.get('pbrMetallicRoughness', {})
-            if pbr:
-                base_color = pbr.get('baseColorFactor', [1.0, 1.0, 1.0, 1.0])
+            if isinstance(pbr, dict) and pbr:
+                base_color = _finite_floats(pbr.get('baseColorFactor', [1.0, 1.0, 1.0, 1.0]),
+                                            [1.0, 1.0, 1.0, 1.0])
                 parsed['color'] = base_color[:3]
-                parsed['alpha'] = base_color[3] if len(base_color) > 3 else 1.0
-                parsed['metallic'] = pbr.get('metallicFactor', 0.0)
-                parsed['roughness'] = pbr.get('roughnessFactor', 0.5)
+                parsed['alpha'] = max(0.0, min(1.0, base_color[3]))
+                parsed['metallic'] = _finite_float(pbr.get('metallicFactor', 0.0), 0.0)
+                parsed['roughness'] = _finite_float(pbr.get('roughnessFactor', 0.5), 0.5)
 
                 # Base color texture
-                bc_tex = pbr.get('baseColorTexture', {})
-                if bc_tex:
-                    parsed['texture'] = self._resolve_texture(bc_tex.get('index'))
+                parsed['texture'] = _tex('baseColorTexture', pbr)
 
                 # Metallic-roughness texture
-                mr_tex = pbr.get('metallicRoughnessTexture', {})
-                if mr_tex:
-                    parsed['metallic_roughness_texture'] = self._resolve_texture(mr_tex.get('index'))
+                parsed['metallic_roughness_texture'] = _tex('metallicRoughnessTexture', pbr)
 
             # Normal map
-            normal_tex = mat.get('normalTexture', {})
-            if normal_tex:
-                parsed['normal_texture'] = self._resolve_texture(normal_tex.get('index'))
+            parsed['normal_texture'] = _tex('normalTexture')
 
             # Emissive
-            parsed['emissive'] = mat.get('emissiveFactor', [0.0, 0.0, 0.0])
-            emissive_tex = mat.get('emissiveTexture', {})
-            if emissive_tex:
-                parsed['emissive_texture'] = self._resolve_texture(emissive_tex.get('index'))
+            parsed['emissive'] = _finite_floats(mat.get('emissiveFactor', [0.0, 0.0, 0.0]),
+                                                [0.0, 0.0, 0.0])
+            parsed['emissive_texture'] = _tex('emissiveTexture')
 
             # Occlusion
-            occ_tex = mat.get('occlusionTexture', {})
-            if occ_tex:
-                parsed['occlusion_texture'] = self._resolve_texture(occ_tex.get('index'))
+            parsed['occlusion_texture'] = _tex('occlusionTexture')
 
             self.materials[name] = parsed
 
     def _resolve_texture(self, texture_index: Optional[int]) -> Optional[str]:
         """Resolve texture index to image source path or data URI."""
+        texture_index = _non_negative_int(texture_index)
         if texture_index is None or texture_index >= len(self.textures):
             return None
         tex = self.textures[texture_index]
-        source_idx = tex.get('source')
+        source_idx = _non_negative_int(tex.get('source')) if isinstance(tex, dict) else None
         if source_idx is None or source_idx >= len(self.images):
             return None
         img = self.images[source_idx]
+        if not isinstance(img, dict):
+            return None
         uri = img.get('uri')
-        if uri:
+        if uri and isinstance(uri, str):
             return uri
         # Check for bufferView-based image (embedded in GLB)
-        bv_idx = img.get('bufferView')
+        bv_idx = _non_negative_int(img.get('bufferView'))
         if bv_idx is not None and bv_idx < len(self.buffer_views):
             # Return a marker that the renderer can use to extract from buffer
             return f"__glb_embedded__{bv_idx}__{img.get('mimeType', 'image/png')}"
@@ -361,10 +410,10 @@ class GLBLoader:
                 return None
 
         # Material
-        mat_idx = prim.get('material')
-        material_name = None
-        if mat_idx is not None and mat_idx < len(self.materials_json):
-            material_name = self.materials_json[mat_idx].get('name', f'material_{mat_idx}')
+        # The name _parse_materials gave that material (its own, when usable).
+        mat_idx = _non_negative_int(prim.get('material'))
+        names = getattr(self, '_material_names', ())
+        material_name = names[mat_idx] if mat_idx is not None and mat_idx < len(names) else None
 
         # Mode: 0=POINTS, 1=LINES, 2=LINE_LOOP, 3=LINE_STRIP, 4=TRIANGLES, 5=TRIANGLE_STRIP, 6=TRIANGLE_FAN
         mode = prim.get('mode', 4)
@@ -478,14 +527,28 @@ class GLBLoader:
 
     def get_flattened_vertices(self) -> List[Tuple[float, float, float]]:
         """Get all vertex positions flattened for CPU storage / 2D projection."""
+        vertices = self._vertex_array()
+        if vertices is None:
+            return []
+        return [tuple(v) for v in vertices.tolist()]
+
+    def _vertex_array(self) -> Optional[np.ndarray]:
+        """:meth:`get_flattened_vertices` as one ``(N, 3)`` array, or None."""
         blocks = [prim['positions'] for prim in self._primitives()
                   if prim['positions'] is not None]
         if not blocks:
-            return []
-        return [tuple(v) for v in np.concatenate(blocks)[:, :3].tolist()]
+            return None
+        return np.concatenate(blocks)[:, :3]
 
     def get_flattened_triangles(self) -> List[Tuple[int, int, int]]:
         """Get all triangle indices flattened (complete triangles only)."""
+        triangles = self._triangle_array()
+        if triangles is None:
+            return []
+        return [tuple(t) for t in triangles.tolist()]
+
+    def _triangle_array(self) -> Optional[np.ndarray]:
+        """:meth:`get_flattened_triangles` as one ``(T, 3)`` array, or None."""
         blocks = []
         base = 0
         for prim in self._primitives():
@@ -502,8 +565,8 @@ class GLBLoader:
                 blocks.append(tri.reshape(-1, 3) + base)
             base += n_verts
         if not blocks:
-            return []
-        return [tuple(t) for t in np.concatenate(blocks).tolist()]
+            return None
+        return np.concatenate(blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -728,57 +791,85 @@ def render_glb_thumbnail(filepath: str, width: int, height: int):
         return None
 
 
+#: Most triangles a thumbnail draws. A thumbnail is at most 90 pixels across,
+#: so past a few thousand triangles more lines only fill it in; drawing every
+#: edge of a 400,000-triangle model one Python call at a time froze the editor
+#: for over three seconds. A larger mesh draws an evenly spaced sample.
+MAX_THUMBNAIL_TRIANGLES = 20_000
+
+
+def _thumbnail_lines(vertices, triangles, width, height):
+    """The wireframe's lines as an ``(L, 4)`` array of ``x1, y1, x2, y2``.
+
+    The model is centred, scaled to fit and turned to an isometric-ish view
+    (45 degrees about Y, then 30 about X); each triangle gives its three
+    edges, in order. Edges with an endpoint out of range or not finite are
+    dropped. None when there is nothing to draw.
+
+    The arithmetic is the per-vertex loop it replaced, in the same order on
+    the same float64 values, so a model draws exactly as it did.
+    """
+    vertices = np.asarray(vertices, dtype=np.float64).reshape(-1, 3)
+    finite = np.isfinite(vertices).all(axis=1)
+    if not finite.any():
+        return None
+    bounds = vertices[finite]
+    min_v, max_v = bounds.min(axis=0), bounds.max(axis=0)
+    center = (min_v + max_v) / 2
+    scale = max(0.0, float(((max_v - min_v) / 2).max()))
+    if scale == 0:
+        scale = 1
+
+    angle_y = math.radians(45)
+    angle_x = math.radians(30)
+    cos_y, sin_y = math.cos(angle_y), math.sin(angle_y)
+    cos_x, sin_x = math.cos(angle_x), math.sin(angle_x)
+
+    x = (vertices[:, 0] - center[0]) / scale
+    y = (vertices[:, 1] - center[1]) / scale
+    z = (vertices[:, 2] - center[2]) / scale
+    rx = x * cos_y - z * sin_y
+    rz = x * sin_y + z * cos_y
+    ry = y * cos_x - rz * sin_x
+    screen = np.empty((len(vertices), 2))
+    screen[:, 0] = width / 2 + rx * (width * 0.4)
+    screen[:, 1] = height / 2 - ry * (height * 0.4)
+
+    if triangles is None or not len(triangles):
+        return None
+    triangles = np.asarray(triangles, dtype=np.int64).reshape(-1, 3)
+    if len(triangles) > MAX_THUMBNAIL_TRIANGLES:
+        triangles = triangles[::-(-len(triangles) // MAX_THUMBNAIL_TRIANGLES)]
+    # Edges (0, 1), (1, 2), (2, 0) of each triangle, triangle by triangle.
+    edges = np.stack((triangles, np.roll(triangles, -1, axis=1)), axis=2).reshape(-1, 2)
+    count = len(vertices)
+    usable = ((edges >= 0) & (edges < count)).all(axis=1)
+    edges = edges[usable]
+    drawable = np.isfinite(screen).all(axis=1)
+    edges = edges[drawable[edges].all(axis=1)]
+    if not len(edges):
+        return None
+    return np.concatenate((screen[edges[:, 0]], screen[edges[:, 1]]), axis=1)
+
+
 def _render_glb_thumbnail_impl(filepath: str, width: int, height: int):
     """
     Generate a wireframe thumbnail from a GLB file for the asset browser.
-    Falls back to bounding-box preview if mesh is too complex.
+    A mesh of more than MAX_THUMBNAIL_TRIANGLES draws an evenly spaced sample
+    of its triangles (see _thumbnail_lines).
     """
     from PyQt5.QtGui import QPixmap, QColor, QPainter, QPen
-    from PyQt5.QtCore import QPointF
-    import math
+    from PyQt5.QtCore import QLineF
 
     loader = GLBLoader()
     loader._filepath_hint = filepath
     if not loader.load(filepath):
         return None
 
-    vertices = loader.get_flattened_vertices()
-    if not vertices:
+    vertices = loader._vertex_array()
+    if vertices is None or not len(vertices):
         return None
-
-    # Normalize vertices to -1..1 range
-    min_v = [float('inf')] * 3
-    max_v = [float('-inf')] * 3
-    for v in vertices:
-        for i in range(3):
-            if v[i] < min_v[i]: min_v[i] = v[i]
-            if v[i] > max_v[i]: max_v[i] = v[i]
-
-    center = [(min_v[i] + max_v[i]) / 2 for i in range(3)]
-    scale = 0
-    for i in range(3):
-        scale = max(scale, (max_v[i] - min_v[i]) / 2)
-    if scale == 0: scale = 1
-
-    # 3D Transformation (isometric-ish view)
-    angle_y = math.radians(45)
-    angle_x = math.radians(30)
-    cos_y, sin_y = math.cos(angle_y), math.sin(angle_y)
-    cos_x, sin_x = math.cos(angle_x), math.sin(angle_x)
-
-    projected_points = []
-    for v in vertices:
-        x = (v[0] - center[0]) / scale
-        y = (v[1] - center[1]) / scale
-        z = (v[2] - center[2]) / scale
-
-        rx = x * cos_y - z * sin_y
-        rz = x * sin_y + z * cos_y
-        ry = y * cos_x - rz * sin_x
-
-        screen_x = width/2 + rx * (width * 0.4)
-        screen_y = height/2 - ry * (height * 0.4)
-        projected_points.append(QPointF(screen_x, screen_y))
+    lines = _thumbnail_lines(vertices, loader._triangle_array(), width, height)
 
     # Draw
     pixmap = QPixmap(width, height)
@@ -791,14 +882,8 @@ def _render_glb_thumbnail_impl(filepath: str, width: int, height: int):
     pen = QPen(QColor(0, 200, 255))
     pen.setWidthF(1.0)
     painter.setPen(pen)
-
-    tris = loader.get_flattened_triangles()
-    for tri in tris:
-        for j in range(3):
-            i1 = tri[j]
-            i2 = tri[(j + 1) % 3]
-            if 0 <= i1 < len(projected_points) and 0 <= i2 < len(projected_points):
-                painter.drawLine(projected_points[i1], projected_points[i2])
+    if lines is not None:
+        painter.drawLines([QLineF(*line) for line in lines.tolist()])
 
     painter.end()
     return pixmap

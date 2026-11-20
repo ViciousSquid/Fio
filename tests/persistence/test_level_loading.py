@@ -56,7 +56,7 @@ def test_a_load_failing_midway_detaches_the_previous_map(main_window, tmp_path, 
     path = tmp_path / "level.json"
     path.write_text(json.dumps(LEVEL))
     window = main_window
-    def fail_apply(data):
+    def fail_apply(data, **_kw):
         window.state.load_from_data(data)
         raise RuntimeError("entity failed to build")
     monkeypatch.setattr(window, "_apply_level_data", fail_apply)

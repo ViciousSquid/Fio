@@ -55,6 +55,7 @@ def test_the_2d_views_own_timers_stand_down_in_play(fio_session):
     view = session.window.view_top
     asked = []
     view.update = lambda *a: asked.append(1)
+    view._request_overlay_frame = lambda: asked.append(1)   # the camera cone
     try:
         view._last_camera_pos = None               # "the camera has moved"
         view._check_camera_changed()
@@ -68,3 +69,4 @@ def test_the_2d_views_own_timers_stand_down_in_play(fio_session):
         session.stop_play()
     finally:
         del view.update
+        del view._request_overlay_frame
