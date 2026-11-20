@@ -151,6 +151,7 @@ def test_host_tick_survives_hostile_field_values(hosted, monkeypatch):
     fields = dict(input=("keys", "angle", "pitch", "weapon", "shoot", "use", "glasses"),
                   spectate=("enabled", "target", "glasses"),
                   hello=("protocol", "name", "team", "glasses"))
+    sent = 0
     for kind, names in fields.items():
         for name in names:
             for value in HOSTILE:
@@ -158,8 +159,16 @@ def test_host_tick_survives_hostile_field_values(hosted, monkeypatch):
                                weapon="gun1", enabled=False)
                 message[name] = value
                 # json.dumps writes NaN, Infinity and 401-digit integers as
-                # Python's own reader accepts them.
+                # Python's own reader accepts them. Keep the host's bounded
+                # event queue moving while preserving a high-rate hostile burst:
+                # more than 256 queued frames would otherwise be dropped before
+                # the next tick, and an unread welcome can back-pressure the peer.
                 assert wire.send(message)
+                sent += 1
+                if sent % 16 == 0:
+                    tick()
+                    wire.read()
+    wire.read()
     for value in HOSTILE:
         wire.send(dict(type="input", keys=[value] * 10))
         wire.send(dict(type=value))
