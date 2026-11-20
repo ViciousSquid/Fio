@@ -239,7 +239,7 @@ def test_file_picker_size_does_not_depend_on_sidebar_entries(qt_app):
 
 def test_fresh_startup_converts_points_to_windows_logical_pixels():
     result = subprocess.run([sys.executable, '-c', '''
-from editor.desktop_style import prepare_qt, install_editor_style
+from editor.desktop_style import prepare_qt, install_editor_style, set_editor_font_size
 prepare_qt()
 from PyQt5.QtWidgets import QApplication, QLabel
 from PyQt5.QtGui import QFont, QFontInfo
@@ -249,13 +249,12 @@ assert QFontInfo(QFont("Fio UI", 11)).pixelSize() == 15
 assert QFontInfo(QFont("Fio UI", 16)).pixelSize() == 21
 from main import dark_stylesheet
 app.setStyleSheet(dark_stylesheet)
-font = app.font()
-font.setPointSize(16)
-app.setFont(font)
 label = QLabel("Styled text")
-label.ensurePolished()
-assert QFontInfo(label.font()).pixelSize() == 21
-assert label.fontMetrics().height() == 28
+for points, pixels, height in ((16, 21, 28), (11, 15, 20)):
+    set_editor_font_size(app, points)
+    label.ensurePolished()
+    assert QFontInfo(label.font()).pixelSize() == pixels
+    assert label.fontMetrics().height() == height
 '''], cwd=Path(__file__).resolve().parents[2], env=dict(os.environ, QT_QPA_PLATFORM='offscreen'),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
