@@ -33,7 +33,6 @@ dark_stylesheet = """
     QWidget {
         background-color: #2b2b2b;
         color: #e0e0e0;
-        font-family: "Fio UI";
     }
     QPushButton {
         background-color: #3c3f41;
