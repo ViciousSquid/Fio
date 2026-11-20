@@ -399,16 +399,3 @@ def set_editor_font_size(app, size):
     if QToolTip.font() != font:
         QToolTip.setFont(font)
 
-    # The global application stylesheet sets QWidget's font family. On Cocoa,
-    # changing the family without also specifying a point size falls back to
-    # the native 13pt default, overriding QApplication.font(). Keep the
-    # configured logical size explicit in the stylesheet too. The marker lets
-    # a later Settings change replace this rule instead of accumulating rules.
-    marker = "/* Fio editor font size */"
-    stylesheet = app.styleSheet()
-    base = stylesheet.split(marker, 1)[0].rstrip()
-    sized_stylesheet = (
-        f"{base}\n{marker}\nQWidget {{ font-size: {int(size)}pt; }}"
-    )
-    if sized_stylesheet != stylesheet:
-        app.setStyleSheet(sized_stylesheet)
