@@ -19,7 +19,6 @@ import numpy as np
 import pytest
 
 from engine import spatial_grid as grid_module
-from engine.physics.soma import Soma
 from engine.spatial_grid import SpatialGrid, _CellRows
 from tests.physics.test_dynamic_bodies import _drum_brush, _floor, _prop, _world
 
@@ -49,18 +48,18 @@ def cell_lookups(monkeypatch):
     return calls
 
 
-@pytest.fixture
-def repacks(monkeypatch):
-    """How many times the rows are actually rebuilt (a clean _pack is free)."""
+def _count_repacks(monkeypatch, world):
+    """How many times *world*'s rows are actually rebuilt (a clean _pack is
+    free)."""
     calls = []
-    real = Soma._pack
+    real = world._pack
 
-    def counted(self):
-        if self._dirty:
-            calls.append(len(self._entities))
-        return real(self)
+    def counted():
+        if world._dirty:
+            calls.append(len(world._entities))
+        return real()
 
-    monkeypatch.setattr(Soma, '_pack', counted)
+    monkeypatch.setattr(world, '_pack', counted)
     return calls
 
 
@@ -101,23 +100,23 @@ def test_a_vast_body_does_not_make_every_body_walk_its_reach(monkeypatch):
         world.wake(prop, [30.0, 0.0, 0.0])
 
     scanned = []
-    real = Soma._bodies_spanned
+    real = world._bodies_spanned
 
-    def counted(self, wide, *args):
+    def counted(wide, *args):
         scanned.append(len(wide))
-        return real(self, wide, *args)
+        return real(wide, *args)
 
-    monkeypatch.setattr(Soma, '_bodies_spanned', counted)
+    monkeypatch.setattr(world, '_bodies_spanned', counted)
     world.step(STEP)
     # Each awake body's box, grown by the vast one's reach, is about twenty
     # columns square: tested against the bodies, not walked cell by cell.
     assert scanned and scanned[0] >= len(props)
 
 
-def test_removing_many_bodies_repacks_once(repacks):
+def test_removing_many_bodies_repacks_once(monkeypatch):
     props = [_prop((float(i % 20) * 80, 0.0, float(i // 20) * 80)) for i in range(200)]
     world = _build(*props)
-    repacks.clear()
+    repacks = _count_repacks(monkeypatch, world)
 
     for prop in props[:50]:
         assert world.remove_body(prop) is True

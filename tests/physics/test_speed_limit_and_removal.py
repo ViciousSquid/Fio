@@ -158,7 +158,7 @@ def test_a_body_too_wide_to_walk_meets_the_same_bodies(monkeypatch):
     lo, hi = centre - half, centre + half
 
     found = _pair_set(*world._bodies_near(lo, hi))
-    monkeypatch.setattr(Soma, '_WALK_CELLS', 10 ** 9)
+    monkeypatch.setattr(world, '_WALK_CELLS', 10 ** 9)
     walked = _pair_set(*world._bodies_near(lo, hi))
 
     assert found == walked
