@@ -18,6 +18,24 @@ from ..core.diagnostics import timed_pass
 from ..core.visibility import RenderView
 
 
+def _clip_polygon(polygon, distance):
+    """Clip a convex polygon of homogeneous points to ``distance(p) >= 0``,
+    a plane linear in clip space (Sutherland-Hodgman)."""
+    out = []
+    count = len(polygon)
+    for i in range(count):
+        a = polygon[i]
+        b = polygon[(i + 1) % count]
+        da = distance(a)
+        db = distance(b)
+        if da >= 0.0:
+            out.append(a)
+        if (da >= 0.0) != (db >= 0.0):
+            t = da / (da - db)
+            out.append(tuple(pa + (pb - pa) * t for pa, pb in zip(a, b)))
+    return out
+
+
 class PortalsMixin:
     """ForwardRenderer's stencil portal rendering."""
 
@@ -119,17 +137,27 @@ class PortalsMixin:
             return
         pv = projection * main_view
         rendered = 0
+        # Each aperture once: two portals linked both ways name each other's
+        # view as well as their own, and a second draw of the same aperture
+        # finds its mask already flattened to its depth -- a whole virtual
+        # scene for no fragment.
+        views = []
         for portal_a in portal_slots:
             portal_a = int(portal_a)
             portal_b = int(portal_table.portal_target_slot[portal_a])
             if portal_b < 0:
                 continue
             direction = self._portal_direction(portal_table, portal_a)
-            if direction in (entity_projection.PORTAL_DIRECTION_FORWARD, entity_projection.PORTAL_DIRECTION_BOTH) and rendered < self.MAX_PORTALS:
-                self._draw_one_portal(portal_table, portal_a, portal_b, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1)
-                rendered += 1
-            if direction in (entity_projection.PORTAL_DIRECTION_REVERSE, entity_projection.PORTAL_DIRECTION_BOTH) and rendered < self.MAX_PORTALS:
-                self._draw_one_portal(portal_table, portal_b, portal_a, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1)
+            if direction in (entity_projection.PORTAL_DIRECTION_FORWARD, entity_projection.PORTAL_DIRECTION_BOTH):
+                views.append((portal_a, portal_b))
+            if direction in (entity_projection.PORTAL_DIRECTION_REVERSE, entity_projection.PORTAL_DIRECTION_BOTH):
+                views.append((portal_b, portal_a))
+        for aperture, target in dict.fromkeys(views):
+            if rendered >= self.MAX_PORTALS:
+                break
+            # Only a view actually drawn counts against the budget: one
+            # behind the camera no longer crowds out one in front of it.
+            if self._draw_one_portal(portal_table, aperture, target, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1):
                 rendered += 1
         gl.glDisable(gl.GL_SCISSOR_TEST)
         gl.glDisable(gl.GL_STENCIL_TEST)
@@ -170,6 +198,8 @@ class PortalsMixin:
         gl.glDepthFunc(gl.GL_LESS)
 
     def _draw_one_portal(self, portal_table, portal_a, portal_b, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1):
+        """Draw one aperture and the virtual scene behind it. Returns whether
+        it drew: an aperture faded out or out of view draws nothing."""
         corners_a = self._portal_slot_corners(
             portal_table, portal_a, self.PORTAL_APERTURE_INSET)
         proj_ptr = glm.value_ptr(projection)
@@ -180,27 +210,31 @@ class PortalsMixin:
             # view over what is behind the portal, at that opacity.
             fade_a *= self._portal_distance_fade(portal_table, portal_a, camera_pos)
             if fade_a <= 0.001:
-                return
-        # A portal fading in or out shows its view at that opacity over what
-        # is behind it: keep that picture before the view replaces it.
-        behind = self._capture_behind_portal() if depth == 1 and fade_a < 0.999 else None
-        rect = self._portal_screen_rect(corners_a, pv)
-        if rect is not None:
-            if rect[2] <= 0 or rect[3] <= 0:
-                return
-            gl.glEnable(gl.GL_SCISSOR_TEST)
-            gl.glScissor(*rect)
+                return False
         nrm = portal_table.portal_basis[portal_a, 2]
         apos = portal_table.pos[portal_a]
         cam_d = ((float(camera_pos.x)-apos[0])*nrm[0] + (float(camera_pos.y)-apos[1])*nrm[1] + (float(camera_pos.z)-apos[2])*nrm[2])
         straddle = (depth == 1 and self.PORTAL_NEAR_STRADDLE > 0.0 and abs(cam_d) < self.PORTAL_NEAR_STRADDLE and
                     self._portal_slot_contains(portal_table, portal_a,
                         (float(camera_pos.x)-cam_d*nrm[0], float(camera_pos.y)-cam_d*nrm[1], float(camera_pos.z)-cam_d*nrm[2])))
+        # A camera straddling the aperture draws its mask across the screen,
+        # whatever the aperture's own corners project to: they can all be
+        # behind it in the step before transit. Anywhere else an aperture with
+        # no pixel on screen -- behind the camera, off to one side -- is
+        # skipped before anything is copied, culled or drawn for it.
+        rect = None if straddle else self._portal_screen_rect(corners_a, pv)
+        if rect is not None and (rect[2] <= 0 or rect[3] <= 0):
+            return False
+        # A portal fading in or out shows its view at that opacity over what
+        # is behind it: keep that picture before the view replaces it.
+        behind = self._capture_behind_portal() if depth == 1 and fade_a < 0.999 else None
         if straddle:
             gl.glDisable(gl.GL_SCISSOR_TEST)
             mask_quad=[(-1.0,-1.0,0.0),(1.0,-1.0,0.0),(1.0,1.0,0.0),(-1.0,1.0,0.0)]
             id_ptr=glm.value_ptr(self._identity_mat4); mask_proj_ptr,mask_view_ptr=id_ptr,id_ptr
         else:
+            gl.glEnable(gl.GL_SCISSOR_TEST)
+            gl.glScissor(*rect)
             mask_quad=corners_a; mask_proj_ptr,mask_view_ptr=proj_ptr,view_ptr
         parent_level=depth-1
         gl.glDisable(gl.GL_CULL_FACE); gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilMask(0xFF)
@@ -256,6 +290,7 @@ class PortalsMixin:
         # after all portal colour/rim/fade work is complete.
         self._portal_flatten_depth(corners_a, projection, main_view, depth)
         gl.glDisable(gl.GL_STENCIL_TEST); gl.glDisable(gl.GL_SCISSOR_TEST); gl.glBindVertexArray(0)
+        return True
 
     def _capture_behind_portal(self):
         """Copy the frame drawn so far; returns the viewport, or None.
@@ -326,19 +361,40 @@ class PortalsMixin:
 
     def _portal_screen_rect(self, corners, pv):
         """Screen-space integer AABB (x, y, w, h) of the aperture, clamped to the
-        viewport, for use as a scissor rect.  Returns None when any corner is at
-        or behind the near plane (the rect would be unreliable — caller falls
-        back to no scissor / straddle handling)."""
+        viewport, for use as a scissor rect; zero width and height when no part
+        of it is in view.
+
+        Any corner at or behind the camera used to give up on the rect
+        altogether (None, so no scissor), and an aperture wholly behind the
+        camera, or beside it with one corner behind, then rendered its whole
+        virtual scene for a stencil that masked every fragment of it. Now the
+        aperture is rejected when every corner is outside the same frustum
+        plane, and otherwise clipped to the near plane, so the rect bounds only
+        the part of it that can be seen."""
         vp = gl.glGetIntegerv(gl.GL_VIEWPORT)
         vx, vy, vw, vh = int(vp[0]), int(vp[1]), int(vp[2]), int(vp[3])
-        minx = miny = float('inf')
-        maxx = maxy = float('-inf')
+        off_screen = (vx, vy, 0, 0)
+        polygon = []
         for c in corners:
             clip = pv * glm.vec4(float(c[0]), float(c[1]), float(c[2]), 1.0)
-            if clip.w <= 1e-5:
-                return None
-            sx = vx + (clip.x / clip.w * 0.5 + 0.5) * vw
-            sy = vy + (clip.y / clip.w * 0.5 + 0.5) * vh
+            polygon.append((clip.x, clip.y, clip.z, clip.w))
+        # Inside the frustum is -w <= x, y, z <= w.
+        for axis in range(3):
+            if (all(p[axis] < -p[3] for p in polygon)
+                    or all(p[axis] > p[3] for p in polygon)):
+                return off_screen
+        # The near plane (z >= -w), and w > 0 so every vertex left projects:
+        # the oblique near plane of a portal's own view can pass behind its
+        # camera.
+        for distance in (lambda p: p[2] + p[3], lambda p: p[3] - 1e-5):
+            polygon = _clip_polygon(polygon, distance)
+            if not polygon:
+                return off_screen
+        minx = miny = float('inf')
+        maxx = maxy = float('-inf')
+        for x, y, _z, w in polygon:
+            sx = vx + (x / w * 0.5 + 0.5) * vw
+            sy = vy + (y / w * 0.5 + 0.5) * vh
             minx = min(minx, sx); maxx = max(maxx, sx)
             miny = min(miny, sy); maxy = max(maxy, sy)
         pad = 2.0
@@ -347,7 +403,7 @@ class PortalsMixin:
         maxx = min(vx + vw, maxx + pad)
         maxy = min(vy + vh, maxy + pad)
         if maxx <= minx or maxy <= miny:
-            return (vx, vy, 0, 0)  # off-screen
+            return off_screen
         return (int(minx), int(miny),
                 int(math.ceil(maxx - minx)), int(math.ceil(maxy - miny)))
 
