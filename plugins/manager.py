@@ -127,8 +127,10 @@ class PluginManager:
         # Editor-UI extensions plugins register; native editor owners consume these:
         # extra property fields appended to an entity's panel, and whole custom
         # property tabs. Both keyed/filtered by normalised entity type.
-        self._extra_fields: dict = {}       # type -> list[PropertySpec]
-        self._property_tabs: list = []      # list[(label, factory, type_or_None)]
+        # Each recorded with its owning plugin (None: registered by the host),
+        # so a disabled plugin's contributions drop out.
+        self._extra_fields: dict = {}       # type -> list[(plugin, PropertySpec)]
+        self._property_tabs: list = []      # list[(plugin, label, factory, type_or_None)]
         # API 1.5.0 editor extensions, each recorded with its owning plugin so
         # a disabled plugin's contributions drop out (as Tools actions do).
         self._property_sections: list = []  # [(plugin, label, factory, type|None, expanded)]
@@ -351,6 +353,16 @@ class PluginManager:
         (its event handlers, I/O inputs and entity placement).
         """
         plugin.enabled = False
+        # Everything it recorded, editor UI included: a tab or field factory
+        # left behind would still run against every entity panel built.
+        self._extra_fields = {
+            key: kept for key, specs in self._extra_fields.items()
+            if (kept := [e for e in specs if e[0] is not plugin])}
+        self._property_tabs = [e for e in self._property_tabs if e[0] is not plugin]
+        self._property_sections = [e for e in self._property_sections if e[0] is not plugin]
+        self._kv_suggestion_providers = [
+            e for e in self._kv_suggestion_providers if e[0] is not plugin]
+        self._entity_inspectors = [e for e in self._entity_inspectors if e[0] is not plugin]
         self._menu_entries = [e for e in self._menu_entries if e[0] is not plugin]
         self._tools_actions = [e for e in self._tools_actions if e[0] is not plugin]
         self._menu_actions = [e for e in self._menu_actions if e[0] is not plugin]
@@ -932,7 +944,7 @@ class PluginManager:
         return self._tick_work
 
     # -- editor-UI extensions ------------------------------------------------
-    def register_extra_fields(self, entity_type: str, specs):
+    def register_extra_fields(self, entity_type: str, specs, plugin=None):
         """Append extra editable fields to *entity_type*'s property panel.
 
         Unlike a full property schema (which drives a plugin entity's whole
@@ -943,13 +955,22 @@ class PluginManager:
         if not specs:
             return
         key = self._normalise_type(entity_type)
-        self._extra_fields.setdefault(key, []).extend(specs)
+        self._extra_fields.setdefault(key, []).extend((plugin, spec) for spec in specs)
+
+    def _contributes(self, plugin) -> bool:
+        """Whether a UI contribution recorded for *plugin* is live: the
+        host's own (None) always, a plugin's while it is enabled."""
+        return plugin is None or self.is_enabled(plugin)
 
     def extra_fields_for(self, entity_type: str):
-        """Extra field specs registered for *entity_type* (possibly empty)."""
-        return self._extra_fields.get(self._normalise_type(entity_type), [])
+        """Extra field specs registered for *entity_type* (possibly empty).
+        Fields of a disabled plugin are left out."""
+        return [spec for plugin, spec
+                in self._extra_fields.get(self._normalise_type(entity_type), ())
+                if self._contributes(plugin)]
 
-    def register_property_tab(self, label: str, factory, entity_type=None):
+    def register_property_tab(self, label: str, factory, entity_type=None,
+                              plugin=None):
         """Register a custom property-panel tab.
 
         *factory(thing)* returns a widget; *label* names the tab. If
@@ -957,14 +978,15 @@ class PluginManager:
         entity. Consumed by PropertyEditor when it builds a panel.
         """
         self._property_tabs.append(
-            (label, factory,
+            (plugin, label, factory,
              self._normalise_type(entity_type) if entity_type else None))
 
     def property_tabs_for(self, entity_type: str):
-        """List of ``(label, factory)`` custom tabs that apply to *entity_type*."""
+        """List of ``(label, factory)`` custom tabs that apply to *entity_type*.
+        Tabs of a disabled plugin are left out."""
         norm = self._normalise_type(entity_type)
-        return [(label, factory) for (label, factory, t) in self._property_tabs
-                if t is None or t == norm]
+        return [(label, factory) for (plugin, label, factory, t) in self._property_tabs
+                if (t is None or t == norm) and self._contributes(plugin)]
 
     # -- API 1.5.0: property sections, key suggestions, entity inspectors ----
     def _record_property_section(self, plugin, label: str, factory,

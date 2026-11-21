@@ -451,10 +451,17 @@ class QtGameView(QOpenGLWidget):
 
 
     def _poll_gamepad(self):
-        """Read gamepad state and send to game_state for Player 2."""
-        if not self.gamepad:
+        """Read gamepad state and send to game_state for Player 2.
+
+        Only Player 2 reads it, and only in split-screen Play; otherwise SDL
+        is left alone. Pumping it every 16 ms regardless queued an axis
+        event per stick wobble that nothing ever took off the queue. The
+        events are drained here: the state is read from the device below.
+        """
+        if not self.gamepad or not (self.play_mode and self.splitscreen_mode):
             return
         pygame.event.pump()  # Update joystick state
+        pygame.event.clear()
 
         # Axes: 0=left X, 1=left Y, 2=right X, 3=right Y
         move_x = self.gamepad.get_axis(0)
@@ -1079,6 +1086,7 @@ class QtGameView(QOpenGLWidget):
         # a fresh, successfully painted frame; this timer is not a frame clock.
         self.audio._process_sound_queue()
         self._process_console_command_queue()
+        self._check_logic_thread_health()
 
         if self.logic_thread:
             keys = (set() if self.console_overlay_active or self.pause_menu is not None
@@ -1099,6 +1107,63 @@ class QtGameView(QOpenGLWidget):
         else:
             self.repaint()
 
+
+    def _check_logic_thread_health(self):
+        """Notice a logic thread that has died, and say so once.
+
+        The loop guards everything a frame does, so this should never fire;
+        if it does, the view would otherwise show its last frame for ever
+        with nothing to say why. Play is ended (its teardown needs no running
+        thread) and the reason goes to the console. Returns whether the
+        thread is healthy.
+        """
+        thread = self.logic_thread
+        if thread is None or not self._thread_started:
+            return True
+        if thread.is_alive() or not thread.running:
+            return True
+        if getattr(self, '_logic_thread_death_reported', None) is thread:
+            return False
+        self._logic_thread_death_reported = thread
+        reason = getattr(thread, 'death_message', None) or "no exception was recorded"
+        debug_log("Error", "The logic thread has stopped; the 3D view will not "
+                           "update until the editor is restarted.\n" + reason)
+        if self.play_mode:
+            self.editor._exit_play_mode()
+        self._play_mode_hint = "Logic thread stopped; see the console"
+        show_toast = getattr(self.editor, 'show_toast', None)
+        if show_toast is not None:
+            show_toast("The logic thread stopped; see the console", level='error')
+        return False
+
+    def _collision_vis_brushes(self):
+        """The model collision records the collision overlay draws.
+
+        The session's own when it has some. Otherwise (the editor, or a
+        level with no model collision) a set built for the overlay alone,
+        once per mode and world edit, and kept: this runs in every paint,
+        and it used to call toggle_model_collision there -- repopulating the
+        spatial grid and rebuilding physics on the UI thread, unlocked,
+        every frame, under the logic and AI threads reading them. Nothing of
+        the logic thread's is changed from here.
+        """
+        logic = self.logic_thread
+        if logic is None:
+            return []
+        runtime = logic.collision_runtime
+        brushes = runtime._model_collision_brushes
+        if brushes:
+            return brushes
+        key = (id(logic), bool(self.play_mode),
+               getattr(logic.editor_state, 'world_epoch', 0))
+        cached = getattr(self, '_collision_vis_cache', None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        # Reads the things the logic thread may be adding to: between ticks.
+        with logic._tick_lock:
+            brushes = runtime.build_model_collision_brushes()
+        self._collision_vis_cache = (key, brushes)
+        return brushes
 
     def set_paint_on_publish(self, enabled):
         """Paint each frame the moment the logic thread publishes it (in
@@ -1549,14 +1614,7 @@ class QtGameView(QOpenGLWidget):
             # Collision visualization
             if getattr(self, '_collision_vis_mode', 'off') != 'off':
                 # Get collision brushes from logic thread
-                collision_brushes = []
-                if self.logic_thread is not None:
-                    collision_brushes = self.logic_thread.collision_runtime._model_collision_brushes
-                    # Build collision brushes on demand if not already built
-                    # (needed for editor mode where they aren't auto-built on play start)
-                    if not collision_brushes:
-                        self.logic_thread.collision_runtime.toggle_model_collision(True)
-                        collision_brushes = self.logic_thread.collision_runtime._model_collision_brushes
+                collision_brushes = self._collision_vis_brushes()
                 if collision_brushes:
                     mode = self._collision_vis_mode
                     filtered = []
@@ -1845,6 +1903,11 @@ class QtGameView(QOpenGLWidget):
 
             self.hud._reload_hud_settings()
             self._hud_runtime_visible = None
+            # The level's speaker sounds and music, decoded now (Play is
+            # starting under the loading bar) rather than in the frame that
+            # first plays one; what the last level loaded and this one does
+            # not use is let go.
+            self.audio.begin_level(self.editor.state.things)
             if self.logic_thread:
                 self.logic_thread.player_runtime.player = self.player
                 self.logic_thread.render_runtime.set_hud_fade_enabled(self._hud_fade_enabled)
@@ -1892,6 +1955,10 @@ class QtGameView(QOpenGLWidget):
             if self.logic_thread:
                 self.logic_thread.session_runtime.apply_play_mode(False)
                 self.logic_thread.player_runtime.player = None
+            # Again, now that the session is gone: the last frame and the AI
+            # thread could still queue sounds after the first stop, and a
+            # looping speaker started from that queue played on in the editor.
+            self.audio.stop_all_sounds()
             self.player = None
             self.player2 = None
             if self.logic_thread:
@@ -2570,6 +2637,9 @@ class QtGameView(QOpenGLWidget):
         if event.button() == Qt.LeftButton and self._stamp_drag is not None:
             self.terrain_edit._end_stamp_drag()
             return
+        if (event.button() == Qt.LeftButton and self.terrain_sculpt_active
+                and not self.play_mode):
+            self.terrain_edit.end_sculpt_stroke()
         if event.button() == Qt.LeftButton and self.decal_tool.dragging():
             self.decal_tool.release()
             return

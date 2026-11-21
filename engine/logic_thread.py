@@ -87,6 +87,62 @@ from .monster_ai import MonsterAI
 _WATER_LOUDNESS = 0.7
 
 
+class TickLock:
+    """The logic thread's re-entrant tick lock, which knows who is waiting.
+
+    CPython's locks are not fair: a thread that releases a lock and takes it
+    again microseconds later wins nearly every time against one already
+    blocked on it. The run loop does exactly that whenever a frame overruns,
+    so with a busy map the UI thread could wait seconds -- in a synthetic
+    test, for ever -- to stop, save, load or edit. Every other thread that
+    has to block here is counted, and the loop steps aside until they have
+    had their turn (LogicThread._yield_to_waiters).
+
+    Otherwise an ``RLock``: ``with``, ``acquire(blocking, timeout)`` and
+    ``release()`` behave the same, and the same thread may nest.
+    """
+
+    __slots__ = ("_lock", "_count_lock", "_waiters")
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._count_lock = threading.Lock()
+        self._waiters = 0
+
+    def acquire(self, blocking=True, timeout=-1):
+        lock = self._lock
+        if lock.acquire(False):
+            return True
+        if not blocking:
+            return False
+        with self._count_lock:
+            self._waiters += 1
+        try:
+            return lock.acquire(True, timeout)
+        finally:
+            with self._count_lock:
+                self._waiters -= 1
+
+    def release(self):
+        self._lock.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self._lock.release()
+
+    def _is_owned(self):
+        """Whether the calling thread holds the lock (as ``RLock._is_owned``)."""
+        return self._lock._is_owned()
+
+    @property
+    def waiters(self) -> int:
+        """Threads blocked waiting for the lock right now."""
+        return self._waiters
+
+
 class LogicThread(threading.Thread):
     """
     Unified logic thread for both editor and play mode.
@@ -98,6 +154,19 @@ class LogicThread(threading.Thread):
     #: How far past a tick's due time the loop wakes (seconds): an early
     #: wake would run no tick. The accumulator carries it, so it never drifts.
     WAKE_MARGIN = 0.0002
+    #: Most ticks one frame runs to catch up. A frame further behind than
+    #: this drops the rest: under sustained overload the game slows down
+    #: instead of running ever longer frames (15 ticks in one lock hold at
+    #: the old 0.25 s clamp), which also starved the UI thread of the lock.
+    MAX_CATCHUP_TICKS = 4
+    #: The loop always sleeps at least this long between frames, overrun or
+    #: not, so a thread waiting for the tick lock is scheduled.
+    MIN_FRAME_SLEEP = 0.0005
+    #: Longest the loop waits for blocked threads to take the tick lock.
+    MAX_YIELD_SECONDS = 0.1
+    #: Waiting longer than this for the tick lock means another thread held
+    #: the world (play start, a load): that time is not simulated.
+    LOCK_WAIT_RESYNC = 2.0 / TICK_RATE
 
     # Construction-time host contracts for the extracted Logic runtimes.
     #
@@ -200,7 +269,7 @@ class LogicThread(threading.Thread):
         # saving or restoring a session (all called from the UI thread) hold it
         # for their whole duration, so a tick never sees a half-built or
         # half-torn-down session.  Reentrant: the same thread may nest.
-        self._tick_lock = threading.RLock()
+        self._tick_lock = TickLock()
         self.game_state = game_state
         self.editor_state = editor_state
         self.running = False
@@ -313,6 +382,18 @@ class LogicThread(threading.Thread):
         self._pause_menu_announced = False
         self._gui_fault_teardown_requested = False
         self._tick_fault_message = ""
+        #: Last line of the last tick traceback logged: a tick failing the
+        #: same way every frame is logged once, not 60 times a second.
+        self._last_tick_error = None
+        #: Set (under the tick lock) by whatever replaced the world while the
+        #: loop waited -- entering play, a load: the next frame starts its
+        #: clock afresh instead of simulating the wait.
+        self._clock_resync = False
+        self._clock_resynced = False
+        #: Why the run loop ended, when an exception escaped it; None while
+        #: it runs or after an ordinary stop(). Read by the GUI's health check.
+        self.death_message = None
+        self._last_loop_error = None
 
         # Fail immediately if the extraction changed construction order or
         # forgot a host-owned attribute needed by one of the runtimes.
@@ -369,20 +450,50 @@ class LogicThread(threading.Thread):
         super().start()
 
     def run(self):
+        try:
+            self._run_loop()
+        except BaseException:
+            # _run_loop catches everything a frame raises; reaching here means
+            # the loop's own bookkeeping failed. Say so: a thread that ends
+            # silently leaves the editor showing its last frame for ever.
+            import traceback
+            self.death_message = traceback.format_exc()
+            debug_log("LogicThread", "The logic thread stopped:\n" + self.death_message)
+            raise
+
+    def _run_loop(self):
         last_time = time.perf_counter()
         accumulator = 0.0
-        
+
         while self.running:
             current_time = time.perf_counter()
-            frame_time = current_time - last_time
-            last_time = current_time
-            
-            if frame_time > 0.25:
-                frame_time = 0.25
-                
-            accumulator += frame_time
-            accumulator = self._step_frame(accumulator)
-            self._publish_frame()
+            try:
+                frame_time = current_time - last_time
+                last_time = current_time
+
+                if frame_time > 0.25:
+                    frame_time = 0.25
+
+                accumulator += frame_time
+                accumulator = self._step_frame(accumulator)
+                if self._clock_resynced:
+                    # The world was held by another thread (or replaced) while
+                    # this frame waited for it: that wait is not game time.
+                    self._clock_resynced = False
+                    last_time = current_time = time.perf_counter()
+                self._publish_frame()
+            except Exception:
+                # _step_frame guards the tick and the projection; anything
+                # else that raises (publication, the clock) must not end the
+                # thread either. Logged once per kind; the frame's debt goes.
+                import traceback
+                trace = traceback.format_exc()
+                key = trace.strip().splitlines()[-1]
+                if key != self._last_loop_error:
+                    self._last_loop_error = key
+                    debug_log("LogicThread", "Unhandled exception in the logic loop:\n" + trace)
+                accumulator = 0.0
+                last_time = time.perf_counter()
 
             # Sleep until the accumulator next holds a whole tick -- the next
             # tick's due time, less what stepping and publishing took -- and
@@ -391,12 +502,35 @@ class LogicThread(threading.Thread):
             # this iteration's start instead overshot whenever an iteration
             # began just short of a tick: ticks then landed up to ~14 ms off
             # their 60 Hz slots (p95), and with no interpolation the picture
-            # moved unevenly.
+            # moved unevenly. Never less than MIN_FRAME_SLEEP, and never
+            # straight back to the lock past a thread waiting for it.
             sleep_time = (self.TICK_DURATION - accumulator
                           - (time.perf_counter() - current_time) + self.WAKE_MARGIN)
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-                
+            time.sleep(max(sleep_time, self.MIN_FRAME_SLEEP))
+            self._yield_to_waiters()
+
+    def _yield_to_waiters(self) -> int:
+        """Let threads blocked on the tick lock take it before the next frame.
+
+        Returns how many polls it took (0 when nobody was waiting). Bounded
+        by MAX_YIELD_SECONDS, so a waiter that never wakes cannot stop the
+        simulation.
+        """
+        lock = self._tick_lock
+        if not getattr(lock, 'waiters', 0):
+            return 0
+        polls = 0
+        deadline = time.perf_counter() + self.MAX_YIELD_SECONDS
+        while lock.waiters and self.running and time.perf_counter() < deadline:
+            time.sleep(self.MIN_FRAME_SLEEP)
+            polls += 1
+        return polls
+
+    def request_clock_resync(self):
+        """The world was just rebuilt or restored: don't catch up on the time
+        that took. Call with the tick lock held."""
+        self._clock_resync = True
+
     def _publish_frame(self) -> bool:
         """Hand the frame just prepared to the renderer, if it is not reading.
 
@@ -418,56 +552,35 @@ class LogicThread(threading.Thread):
         save/restore from the UI thread lands between frames, never inside one.
         Returns the time left over for the next frame.
         """
+        entered = time.perf_counter()
         with self._tick_lock:
+            if time.perf_counter() - entered > self.LOCK_WAIT_RESYNC:
+                # Another thread held the world for a while (play start, a
+                # load, a long edit): the time it held it is not simulated.
+                self._clock_resync = True
+            if self._clock_resync:
+                self._clock_resync = False
+                self._clock_resynced = True
+                accumulator = min(accumulator, self.TICK_DURATION)
             if self._tick_faulted and self.session_runtime.play_mode:
                 # A tick failed and the GUI teardown is queued but has not run
                 # yet: the world is half-advanced, so it must not be ticked
                 # again (each attempt would also log another fatal traceback).
                 accumulator = 0.0
+            ticks = 0
             while accumulator >= self.TICK_DURATION:
+                if ticks >= self.MAX_CATCHUP_TICKS:
+                    # Too far behind to catch up: drop the rest.
+                    accumulator %= self.TICK_DURATION
+                    break
+                ticks += 1
                 started = time.perf_counter()
                 try:
                     self._tick(self.TICK_DURATION)
                 except Exception:
-                    # Never continue a failed simulation tick. By this point the
-                    # authoritative world may be only partially advanced, so
-                    # silently executing another tick would compound corruption.
-                    import traceback
-                    trace = traceback.format_exc()
-                    self._tick_faulted = True
-                    self._tick_fault_message = trace
-                    debug_log(
-                        "LogicThread",
-                        "Fatal simulation tick failure; ending play session:\n" + trace,
-                    )
-                    # Qt/editor teardown must not run on this worker thread.
-                    # Stop gameplay immediately, then let the GUI thread run
-                    # the normal QtGameView play-mode teardown path.
-                    callback = self._gui_fault_teardown
-                    if callback is not None and not self._gui_fault_teardown_requested:
-                        self._gui_fault_teardown_requested = True
-                        try:
-                            callback(trace)
-                        except Exception:
-                            debug_log(
-                                "LogicThread",
-                                "Could not queue GUI teardown after tick failure:\n"
-                                + traceback.format_exc(),
-                            )
-                    else:
-                        # Standalone/headless hosts have no Qt lifecycle to marshal
-                        # through, so they still need the native engine teardown.
-                        try:
-                            self.session_runtime.apply_play_mode(False)
-                        except Exception:
-                            debug_log(
-                                "LogicThread",
-                                "Play-session teardown after tick failure also failed:\n"
-                                + traceback.format_exc(),
-                            )
-                    # Discard accumulated play-mode time. The next frame starts
-                    # from a clean editor-mode state rather than replaying stale
-                    # simulation debt.
+                    self._tick_failed()
+                    # Discard accumulated time. The next frame starts from a
+                    # clean state rather than replaying stale simulation debt.
                     accumulator = 0.0
                     break
                 accumulator -= self.TICK_DURATION
@@ -492,6 +605,58 @@ class LogicThread(threading.Thread):
                     debug_log("LogicThread",
                               "Unhandled exception preparing a frame:\n" + trace)
         return accumulator
+
+    def _tick_failed(self):
+        """Handle a tick that raised (call inside ``except``).
+
+        Never continue a failed play tick: by this point the authoritative
+        world may be only partially advanced, so the session is ended -- on
+        the GUI thread when there is one. A failed editor tick has no session
+        to end: it is logged and the next tick runs. Either way the traceback
+        is logged once per distinct error, not once a frame.
+        """
+        import traceback
+        trace = traceback.format_exc()
+        key = trace.strip().splitlines()[-1] if trace.strip() else ""
+        playing = self.session_runtime.play_mode
+        # A play fault is logged every time: it ends its session, so it
+        # happens once per Play.
+        if playing or key != self._last_tick_error:
+            self._last_tick_error = key
+            debug_log(
+                "LogicThread",
+                ("Fatal simulation tick failure; ending play session:\n"
+                 if playing else "Editor tick failed:\n") + trace,
+            )
+        if not playing:
+            return
+        self._tick_faulted = True
+        self._tick_fault_message = trace
+        callback = self._gui_fault_teardown
+        if callback is not None:
+            # Qt/editor teardown must not run on this worker thread: the GUI
+            # thread runs the normal QtGameView play-mode teardown path, once.
+            if not self._gui_fault_teardown_requested:
+                self._gui_fault_teardown_requested = True
+                try:
+                    callback(trace)
+                except Exception:
+                    debug_log(
+                        "LogicThread",
+                        "Could not queue GUI teardown after tick failure:\n"
+                        + traceback.format_exc(),
+                    )
+            return
+        # Standalone/headless hosts have no Qt lifecycle to marshal through,
+        # so they still need the native engine teardown.
+        try:
+            self.session_runtime.apply_play_mode(False)
+        except Exception:
+            debug_log(
+                "LogicThread",
+                "Play-session teardown after tick failure also failed:\n"
+                + traceback.format_exc(),
+            )
 
     def set_gui_fault_teardown(self, callback):
         """Register the GUI callback used to marshal fatal-tick teardown.
@@ -529,6 +694,9 @@ class LogicThread(threading.Thread):
         # again), in a game and after a preview in the editor alike.
         finish_explosions(self)
         if self.session_runtime.play_mode:
+            # Player events the MonsterAI thread raised since the last tick,
+            # delivered here: under the tick lock, not its monster lock.
+            self.trigger_runtime.drain_deferred_events()
             self._tick_play_mode(delta)
             self.collision_runtime.rebuild_if_dirty()
         else:

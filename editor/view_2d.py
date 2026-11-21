@@ -16,6 +16,7 @@ from engine.constants import brush_aabb_bounds, PLAYER_HULL_SIZE
 from engine.entity_models import (model_path as entity_model_path,
                                   model_rotation, model_scale)
 from editor import component_edit as ce  # shared object/face/edge/vertex model
+from editor import brush_groups
 from editor.selection import SelectionLookup
 
 # How close (in screen pixels) the cursor has to be before a press grabs a
@@ -157,11 +158,16 @@ class View2D(QWidget):
         # Runs only while animated links are drawn in this view, which must be
         # on screen: started by draw_logic_connections, stopped by the tick
         # that finds nothing left to animate, and by hideEvent.
-        # The scene below the links, kept while links animate (paintEvent).
+        # The scene below the camera cone, the tool overlays and the links,
+        # kept as one image between repaints (paintEvent).
         self._base_layer = None
         self._base_key = None
         self._base_layer_valid = False
-        self._arrow_frame = False
+        self._base_painter_state = None
+        self._overlay_frame = False
+        # The brushes' bounds in one array, for draw_brushes' cull
+        # (_brush_cull_index).
+        self._brush_cull = None
 
         # ---- Arrow-key nudge undo coalescing ----
         # A rapid burst of nudges (tapping or holding an arrow key) should be a
@@ -259,6 +265,7 @@ class View2D(QWidget):
         super().hideEvent(event)
         self.animation_timer.stop()
         self._base_layer = None             # not kept while out of sight
+        self._brush_cull = None
 
     def reset_state(self):
         # A drag in flight owns the views: update_views() reaches every 2D view
@@ -546,7 +553,8 @@ class View2D(QWidget):
         if self._component_mode() == ce.MODE_OBJECT:
             return
         if self._components().set_hover(self._pick_component(world_pos)):
-            self.update()
+            # The handles are drawn over the scene (_paint_link_layers).
+            self._request_overlay_frame()
 
     # ------------------------------------------------------------------
     # Clone-and-place  (select -> Shift+Space -> move -> click)
@@ -1433,42 +1441,56 @@ class View2D(QWidget):
         grid = self.grid_size
         return QPointF(round(pos.x() / grid) * grid, round(pos.y() / grid) * grid)
 
-    # -- the link layer ----------------------------------------------------
+    # -- the layers ----------------------------------------------------------
     #
-    # With animated I/O links on, the arrows travelling along them asked for
-    # a repaint of the whole view 60 times a second, for as long as a link
-    # was in view: every brush, model and sprite drawn again to move a few
-    # arrowheads. While links animate, everything painted *below* them is
-    # kept as one image; a frame that only moves the arrows draws that image
-    # and the layers from the links up. Any other repaint -- every update()
-    # from the editor, a resize, a pan, a camera move, an edit, a selection
-    # change -- paints the scene in full, as before.
+    # A repaint of a 2D view draws every brush, model and sprite in sight
+    # (40-110 ms on a 20 000-brush map), and most repaints asked for it to
+    # move something small: the 3D camera's cone, in all three 2D views on
+    # every frame the 3D camera moved; the arrows travelling along animated
+    # I/O links, 60 times a second; the clip line or the component
+    # highlight following the cursor. So the scene -- grid, terrain,
+    # brushes, entities and decal handles -- is kept as one image, and a
+    # frame that only moves what is drawn over it (_request_overlay_frame)
+    # draws that image and the layers above it: the camera cone and the
+    # clip and rotate overlays (_paint_overlays), then the links and
+    # everything over them (_paint_link_layers). Any other repaint -- every
+    # update() from the editor, an edit, a selection change, a pan, a zoom,
+    # a resize -- paints the scene afresh, as before.
 
     def update(self, *args):
-        """Repaint, with the scene below the links painted afresh."""
+        """Repaint, with the scene painted afresh."""
         self._base_layer_valid = False
-        self._arrow_frame = False
+        self._overlay_frame = False
         super().update(*args)
 
-    def _request_arrow_frame(self):
-        """Repaint only to move the link arrows: the image of the scene below
-        the links is reused if nothing else has asked for a repaint."""
-        self._arrow_frame = True
+    def _request_overlay_frame(self):
+        """Repaint only what is drawn over the scene (the camera cone, the
+        tool overlays, the links and above): the image of the scene is
+        reused if nothing else has asked for a repaint."""
+        self._overlay_frame = True
         QWidget.update(self)
 
+    def _request_arrow_frame(self):
+        """Repaint only to move the link arrows."""
+        self._request_overlay_frame()
+
     def _base_layer_key(self):
-        """What the cached scene below the links depends on beyond the
-        editor's update() calls (a safety net for any change made without
-        one)."""
+        """What the cached scene depends on beyond the editor's update()
+        calls (a safety net for any change made without one). Not the 3D
+        camera: its cone is drawn over the scene."""
         state = self.editor.state
-        camera = self.editor.view_3d.camera if self.editor.view_3d else None
-        cam = ((round(float(camera.pos.x), 2), round(float(camera.pos.y), 2),
-                round(float(camera.pos.z), 2), round(float(camera.yaw), 2),
-                round(float(camera.pitch), 2)) if camera is not None else None)
+        config = self.main_window.config
         return (self.width(), self.height(), self.devicePixelRatioF(),
                 self.zoom_factor, self.pan_offset.x(), self.pan_offset.y(),
                 getattr(state, 'world_epoch', None),
-                tuple(id(o) for o in state.selected_objects), cam)
+                getattr(state.brushes, 'row_version', None),
+                getattr(state.things, 'row_version', None),
+                tuple(id(o) for o in state.selected_objects),
+                getattr(state.view_filters, 'version', None),
+                self.grid_size, self.grid_visible,
+                bool(self.editor.view_3d.play_mode),
+                tuple(config.get('GridColours', name, fallback=None)
+                      for name in ('background', 'minor', 'major')))
 
     def _animating_links(self):
         return bool(self.editor.show_logic_links and self.main_window.config.getboolean(
@@ -1476,35 +1498,51 @@ class View2D(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        arrow_frame, self._arrow_frame = self._arrow_frame, False
-        if not self._animating_links():
-            self._base_layer = None
-            visible_bounds = self._paint_base_layer(painter)
-        else:
-            key = self._base_layer_key()
-            if (arrow_frame and self._base_layer_valid and self._base_layer is not None
-                    and self._base_key == key):
-                painter.drawPixmap(0, 0, self._base_layer)
-                visible_bounds = self.get_visible_world_bounds()
-                if visible_bounds.width() <= 0 or visible_bounds.height() <= 0:
-                    visible_bounds = None
-            else:
-                ratio = self.devicePixelRatioF()
-                layer = QPixmap(max(1, int(round(self.width() * ratio))),
-                                max(1, int(round(self.height() * ratio))))
-                layer.setDevicePixelRatio(ratio)
-                base_painter = QPainter(layer)
-                visible_bounds = self._paint_base_layer(base_painter)
-                base_painter.end()
-                painter.drawPixmap(0, 0, layer)
-                self._base_layer, self._base_key = layer, key
-                self._base_layer_valid = True
-        if visible_bounds is not None:
-            self._paint_link_layers(painter, visible_bounds)
+        overlay_frame, self._overlay_frame = self._overlay_frame, False
+        key = self._base_layer_key()
+        if not (overlay_frame and self._base_layer_valid and self._base_layer is not None
+                and self._base_key == key):
+            self._paint_scene_layer(key)
+        painter.drawPixmap(0, 0, self._base_layer)
+        visible_bounds = self.get_visible_world_bounds()
+        if visible_bounds.width() <= 0 or visible_bounds.height() <= 0:
+            return          # the view shows nothing: only the background
+        # Go on with the pen, brush and font the scene's painter was left
+        # with, as when one painter drew the lot: the layers above draw
+        # exactly what they drew then.
+        pen, brush, font = self._base_painter_state
+        painter.setPen(pen)
+        painter.setBrush(brush)
+        painter.setFont(font)
+        self._paint_overlays(painter)
+        self._paint_link_layers(painter, visible_bounds)
+
+    def _paint_scene_layer(self, key):
+        """Paint the scene into a new image of the view, kept for the frames
+        that only move what is drawn over it."""
+        ratio = self.devicePixelRatioF()
+        layer = QPixmap(max(1, int(round(self.width() * ratio))),
+                        max(1, int(round(self.height() * ratio))))
+        layer.setDevicePixelRatio(ratio)
+        painter = QPainter(layer)
+        # What a painter begun on the widget starts with (QPainter::initFrom),
+        # not a pixmap's defaults: the widget's font, its foreground pen and
+        # its background.
+        palette = self.palette()
+        painter.setPen(QPen(palette.brush(self.foregroundRole()), 1))
+        painter.setBackground(palette.brush(self.backgroundRole()))
+        painter.setFont(self.font())
+        self._paint_base_layer(painter)
+        state = (QPen(painter.pen()), QBrush(painter.brush()), QFont(painter.font()))
+        painter.end()
+        self._base_layer, self._base_key = layer, key
+        self._base_painter_state = state
+        self._base_layer_valid = True
 
     def _paint_base_layer(self, painter):
-        """Everything below the I/O links. Returns the visible world bounds,
-        or None when the view shows nothing (only the background)."""
+        """The scene: everything below the camera cone, the tool overlays and
+        the I/O links. Returns the visible world bounds, or None when the
+        view shows nothing (only the background)."""
         # Use the custom grid background colour (or fallback to dark grey)
         bg_hex = self.main_window.config.get('GridColours', 'background', fallback='#2b2b2b')
         painter.fillRect(self.rect(), QColor(bg_hex))
@@ -1518,12 +1556,17 @@ class View2D(QWidget):
         self.draw_brushes(painter, visible_bounds)
         self.draw_things(painter, visible_bounds)
         self.draw_decal_handles(painter)
+        return visible_bounds
+
+    def _paint_overlays(self, painter):
+        """Over the scene, below the I/O links: the 3D camera's cone and the
+        clip and rotate tools' overlays -- what moves with the 3D camera or
+        the cursor, drawn on every frame instead of kept in the scene."""
         self.draw_camera(painter)
         if self._clip_active():
             self.draw_clip_overlay(painter)
         if self._rotate_active():
             self.draw_rotate_overlay(painter)
-        return visible_bounds
 
     def _paint_link_layers(self, painter, visible_bounds):
         """The I/O links and everything drawn over them."""
@@ -1691,29 +1734,47 @@ class View2D(QWidget):
         axis1_idx = ax_map[ax1]
         axis2_idx = ax_map[ax2]
         
+        # The objects with outputs first: a look at each object's connection
+        # list is cheap, where the view filters' test is not, and the target
+        # lookup below -- which filters every object in the map -- is built
+        # only when there is a link to draw. This runs on every frame drawn
+        # over the kept scene (the camera moving, the arrows travelling).
+        brush_sources = []
+        thing_sources = []
+        if IO_AVAILABLE:
+            for brush in self.editor.state.brushes:
+                io_conns = get_connections(brush)
+                if io_conns and not self._filtered(brush):
+                    brush_sources.append((brush, io_conns))
+            for thing in self.editor.state.things:
+                io_conns = get_connections(thing)
+                if io_conns and not self._filtered(thing):
+                    thing_sources.append((thing, io_conns))
+
         # Resolve targets by stable id first. Names remain the fallback for
         # older maps that predate target_id.
         pos_by_id = {}
         pos_by_name = {}
-        for b in self.editor.state.brushes:
-            if self._filtered(b):
-                continue
-            b_id = b.get('id')
-            b_name = b.get('name')
-            if b_id:
-                pos_by_id[b_id] = b['pos']
-            if b_name and b_name not in pos_by_name:
-                pos_by_name[b_name] = b['pos']
-        for t in self.editor.state.things:
-            if self._filtered(t):
-                continue
-            props = getattr(t, 'properties', {})
-            t_id = props.get('id')
-            t_name = props.get('name', '')
-            if t_id:
-                pos_by_id[t_id] = t.pos
-            if t_name and t_name not in pos_by_name:
-                pos_by_name[t_name] = t.pos
+        if brush_sources or thing_sources:
+            for b in self.editor.state.brushes:
+                if self._filtered(b):
+                    continue
+                b_id = b.get('id')
+                b_name = b.get('name')
+                if b_id:
+                    pos_by_id[b_id] = b['pos']
+                if b_name and b_name not in pos_by_name:
+                    pos_by_name[b_name] = b['pos']
+            for t in self.editor.state.things:
+                if self._filtered(t):
+                    continue
+                props = getattr(t, 'properties', {})
+                t_id = props.get('id')
+                t_name = props.get('name', '')
+                if t_id:
+                    pos_by_id[t_id] = t.pos
+                if t_name and t_name not in pos_by_name:
+                    pos_by_name[t_name] = t.pos
 
         def get_target_pos(conn):
             target_id = getattr(conn, 'target_id', '') or ''
@@ -1738,10 +1799,7 @@ class View2D(QWidget):
         # Collect I/O System Connections
         if IO_AVAILABLE:
             # From brushes
-            for brush in self.editor.state.brushes:
-                if self._filtered(brush):
-                    continue
-                io_conns = get_connections(brush)
+            for brush, io_conns in brush_sources:
                 for conn in io_conns:
                     target_pos = get_target_pos(conn)
                     if target_pos:
@@ -1756,10 +1814,7 @@ class View2D(QWidget):
                         })
             
             # From things
-            for thing in self.editor.state.things:
-                if self._filtered(thing):
-                    continue
-                io_conns = get_connections(thing)
+            for thing, io_conns in thing_sources:
                 for conn in io_conns:
                     target_pos = get_target_pos(conn)
                     if target_pos:
@@ -1973,6 +2028,95 @@ class View2D(QWidget):
             p2 = self.world_to_screen(QPointF(bottom_right_world.x(), y))
             painter.drawLine(p1, p2)
 
+    # -- the brush cull --------------------------------------------------------
+    #
+    # draw_brushes tested every brush in the map against the view on every
+    # repaint: 20 000 brushes, one by one in Python, to draw the dozen a
+    # zoomed-in view shows. The brushes' derived bounds are kept in one array
+    # instead, worked out again when the world changes (its epoch, or its row
+    # set), and one vectorised test picks the brushes that may be in view;
+    # only those go on to is_brush_visible, the exact test, in map order.
+    #
+    # A tool writes the brushes it edits in place for many frames after one
+    # undo checkpoint (EditorState.edited_objects): the selection, the group
+    # mates a move carries with it (MainWindow.movable_with_mates), and what
+    # a drag in any 2D view moves (View2D.drag_group). Those, and the movers
+    # and doors (their runtime transform moves them with no edit at all), are
+    # tested on every repaint from where they are now, as before.
+
+    #: A row no view intersects (a brush the array does not place).
+    _NO_BOUNDS = (math.inf, math.inf, math.inf, -math.inf, -math.inf, -math.inf)
+
+    def _brush_cull_index(self, brushes):
+        """``(key, bounds, always, groups, rows)`` for *brushes*: their
+        derived world bounds as an (n, 6) array; the rows tested every repaint
+        whatever the array says; each group's rows; each brush's row by id."""
+        state = self.editor.state
+        key = (getattr(state, 'world_epoch', None), id(brushes),
+               getattr(brushes, 'row_version', None), len(brushes))
+        cull = self._brush_cull
+        if cull is not None and cull[0] == key:
+            return cull
+        bounds = np.empty((len(brushes), 6), dtype=np.float64)
+        always, groups, rows = [], {}, {}
+        world_bounds = brush_placement.world_bounds
+        for i, brush in enumerate(brushes):
+            rows[id(brush)] = i
+            name = brush_groups.group_of(brush)
+            if name:
+                groups.setdefault(name, []).append(i)
+            if brush_placement.is_dynamic(brush):
+                always.append(i)
+                bounds[i] = self._NO_BOUNDS
+                continue
+            try:
+                bounds[i] = world_bounds(brush)
+            except Exception:
+                # Left to is_brush_visible, as every brush was.
+                always.append(i)
+                bounds[i] = self._NO_BOUNDS
+        cull = (key, bounds, always, groups, rows)
+        self._brush_cull = cull
+        return cull
+
+    def _edited_rows(self, brushes, groups, rows):
+        """The rows of the brushes a tool may be writing in place now."""
+        edited = list(self.editor.state.selected_objects)
+        # A drag in any of the 2D views: this one draws what it moves too.
+        for name in ('view_top', 'view_front', 'view_side'):
+            view = getattr(self.main_window, name, None)
+            if isinstance(view, View2D):
+                edited.extend(view.drag_group)
+                if view.drag_primary is not None:
+                    edited.append(view.drag_primary)
+        found, names = [], set()
+        for obj in edited:
+            i = rows.get(id(obj))
+            if i is not None and brushes[i] is obj:
+                found.append(i)
+            name = brush_groups.group_of(obj)
+            if name:
+                names.add(name)
+        for name in names:
+            found.extend(groups.get(name, ()))
+        return found
+
+    def _brushes_in_view(self, visible_bounds, axis1_idx, axis2_idx):
+        """The brushes that may be in view, in map (drawing) order: every
+        brush is_brush_visible passes, and a few more."""
+        brushes = self.editor.state.brushes
+        _key, bounds, always, groups, rows = self._brush_cull_index(brushes)
+        # Touching counts here: is_brush_visible draws the exact line.
+        hit = ((bounds[:, axis1_idx] <= visible_bounds.right())
+               & (bounds[:, axis1_idx + 3] >= visible_bounds.left())
+               & (bounds[:, axis2_idx] <= visible_bounds.bottom())
+               & (bounds[:, axis2_idx + 3] >= visible_bounds.top()))
+        picked = np.flatnonzero(hit)
+        extra = always + self._edited_rows(brushes, groups, rows)
+        if extra:
+            picked = np.union1d(picked, np.asarray(extra, dtype=np.intp))
+        return [brushes[i] for i in picked.tolist()]
+
     def draw_brushes(self, painter, visible_bounds):
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
@@ -1991,7 +2135,7 @@ class View2D(QWidget):
                      self.pan_offset.x(), self.pan_offset.y(), self.zoom_factor,
                      self.view_type in ('front', 'side'))
 
-        for brush in self.editor.state.brushes:
+        for brush in self._brushes_in_view(visible_bounds, axis1_idx, axis2_idx):
             # CULL brush if not visible
             if not self.is_brush_visible(brush, visible_bounds, axis1_idx, axis2_idx):
                 continue
@@ -2978,7 +3122,9 @@ class View2D(QWidget):
     def _check_camera_changed(self):
         """
         Check if the 3D camera has moved/rotated since last frame.
-        If so, schedule a repaint of this 2D view (only the camera indicator).
+        If so, schedule a repaint of this 2D view's overlays: the camera cone
+        is drawn over the kept image of the scene, which a camera move leaves
+        as it is (_request_overlay_frame).
         Called by the 3D view on each frame it draws in editor mode
         (MainWindow.notify_camera_moved), and repaints only when the camera
         actually changed.
@@ -3012,8 +3158,8 @@ class View2D(QWidget):
             self._last_camera_pos = current_pos
             self._last_camera_yaw = current_yaw
             self._last_camera_pitch = current_pitch
-            # Schedule repaint - Qt will coalesce multiple update() calls
-            self.update()
+            # Schedule repaint - Qt will coalesce multiple requests
+            self._request_overlay_frame()
 
     def draw_camera(self, painter):
         """Optimized camera drawing with early exit for off-screen cameras."""
@@ -3720,6 +3866,7 @@ class View2D(QWidget):
                 self._update_decal_resize(world_pos)
                 return
             self._end_decal_resize()
+            self.update()
 
         # Clone-and-place: the copies ride the cursor until a click drops them.
         if self.main_window.clone_placement_active():
@@ -3742,7 +3889,8 @@ class View2D(QWidget):
             self.clip_hover = self.snap_to_grid(world_pos)
             self._update_clip_keep_side()
             if self.clip_points:
-                self.update()
+                # The line and the kept side are drawn over the scene.
+                self._request_overlay_frame()
             # fall through so panning (right/middle drag) still works below
 
         # Handle connection mode first - works with or without button pressed
@@ -3757,7 +3905,8 @@ class View2D(QWidget):
             else:
                 self.connection_snap_target = None
                 self.connection_drag_pos = world_pos
-            self.update()
+            # The line being dragged is drawn over the scene.
+            self._request_overlay_frame()
             return
         
         if not event.buttons():
@@ -3782,6 +3931,11 @@ class View2D(QWidget):
                 self.setCursor(Qt.SizeAllCursor)
             else:
                 self.setCursor(Qt.ArrowCursor)
+            # Nothing else drawn follows a bare hover: the component highlight
+            # and the clip preview asked for their own frames above, and the
+            # handle under the cursor shows in the cursor's shape. Repainting
+            # here drew the whole view again on every mouse move.
+            return
 
         elif (event.buttons() & Qt.RightButton) or \
              (event.buttons() & Qt.MiddleButton and middle_click_pan_enabled):
@@ -3805,6 +3959,9 @@ class View2D(QWidget):
             enclose = bool(event.modifiers() & Qt.AltModifier)  # Alt = enclose-only
             rect = QRectF(self.marquee_start, self.marquee_current)
             self.marquee_hits = self._objects_in_rect(rect, enclose=enclose)
+            # The box and its catch are drawn over the scene.
+            self._request_overlay_frame()
+            return
 
         elif self.is_group_resizing:
             self._update_group_resize(world_pos)
@@ -3818,6 +3975,9 @@ class View2D(QWidget):
 
         elif self.is_drawing_brush:
             self.draw_current_pos = self.snap_to_grid(world_pos)
+            # So is the box being drawn.
+            self._request_overlay_frame()
+            return
 
         elif self.is_dragging_object:
             # The "grab" object stays under the cursor; every other member of

@@ -724,7 +724,19 @@ class LogicCollision:
 
     def toggle_model_collision(self, enabled: bool = None) -> bool:
         """Toggle model collision on/off. If enabled is None, flip current state.
-        Returns the new state. Works in both play mode and editor mode."""
+        Returns the new state. Works in both play mode and editor mode.
+
+        Called from the UI thread (F6, showcollision): it repopulates the
+        session's spatial grid and rebuilds its physics, which the logic tick
+        and the monster AI read, so it holds the tick lock and then the
+        monster lock -- the engine's lock order -- for the whole change.
+        """
+        logic = self.logic
+        session = logic.session_runtime
+        with logic._tick_lock, session.monster_lock:
+            return self._toggle_model_collision_locked(enabled)
+
+    def _toggle_model_collision_locked(self, enabled):
         logic = self.logic
         if enabled is None:
             self.model_collision_enabled = not self.model_collision_enabled

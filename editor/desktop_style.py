@@ -386,8 +386,16 @@ def install_editor_style(app):
 def set_editor_font_size(app, size):
     font = QFont(UI_FONT, int(size))
     font.setHintingPreference(QFont.PreferNoHinting)
-    app.setFont(font)
+    # QApplication.setFont synchronously sends FontChange events through the
+    # entire widget tree. MainWindow applies the saved setting after building
+    # its UI; repeating the startup value there needlessly re-enters every
+    # widget (including a live QOpenGLWidget) during construction.
+    if app.font() != font:
+        app.setFont(font)
     # QMdiSubWindowTitleBar is the font QMessageBox measures its title with.
     for widget_class in ('QMenu', 'QMenuBar', 'QMessageBox', 'QMdiSubWindowTitleBar'):
-        app.setFont(font, widget_class)
-    QToolTip.setFont(font)
+        if app.font(widget_class) != font:
+            app.setFont(font, widget_class)
+    if QToolTip.font() != font:
+        QToolTip.setFont(font)
+

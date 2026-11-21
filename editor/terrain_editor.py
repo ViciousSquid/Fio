@@ -1599,6 +1599,7 @@ class TerrainEditorPanel(QWidget):
     
     def show_progress(self, message="Generating terrain..."):
         """Show a progress dialog."""
+        self.hide_progress()            # never two: the first would be orphaned
         self.progress = QProgressDialog(message, None, 0, 0, self)
         self.progress.setWindowTitle("Please Wait")
         self.progress.setWindowModality(Qt.WindowModal)
@@ -1617,6 +1618,9 @@ class TerrainEditorPanel(QWidget):
         """Hide the progress dialog."""
         if hasattr(self, 'progress') and self.progress:
             self.progress.close()
+            # Deleted, not just closed: a closed dialog stays this panel's
+            # child, and one piled up per terrain operation.
+            self.progress.deleteLater()
             self.progress = None
     
 

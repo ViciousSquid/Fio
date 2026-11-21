@@ -315,3 +315,36 @@ def test_the_sound_plays_from_the_explosion_at_its_volume():
     effect.properties["explosion_volume"] = 0.0
     queue_explosion_sound(sounds, effect)
     assert len(sounds.queued) == 1                     # 0 % is silent
+
+
+# ---------------------------------------------------------------------------
+# The blast's settings: finite, and no bigger than their maximums
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("props, expected", [
+    ({}, (0.0, 192.0, 0.0)),
+    ({"explosion_damage": 50, "explosion_radius": 300, "explosion_force": 900},
+     (50.0, 300.0, 900.0)),
+    # Not a finite number: the default (``"inf"`` used to pass, and fault the
+    # tick in the radius query).
+    ({"explosion_radius": "inf"}, (0.0, 192.0, 0.0)),
+    ({"explosion_radius": float("nan")}, (0.0, 192.0, 0.0)),
+    ({"explosion_damage": float("inf"), "explosion_force": "-inf"},
+     (0.0, 192.0, 0.0)),
+    ({"explosion_radius": "nonsense"}, (0.0, 192.0, 0.0)),
+    # Past the maximum: the maximum.
+    ({"explosion_damage": 1e30, "explosion_radius": 1e9, "explosion_force": 1e12},
+     (1.0e6, 4096.0, 20000.0)),
+    ({"explosion_radius": -5}, (0.0, 0.0, 0.0)),
+])
+def test_blast_settings_are_finite_and_bounded(props, expected):
+    from engine.explosions import blast_settings
+    assert blast_settings(props) == pytest.approx(expected)
+
+
+def test_a_barrels_settings_are_bounded_the_same_way():
+    from engine.explosions import BLAST_MAXIMUMS, _number
+    props = {"explosion_radius": "inf", "explosion_force": 1e12, "explosive_health": "nan"}
+    assert _number(props, "explosion_radius") == 192.0
+    assert _number(props, "explosion_force") == BLAST_MAXIMUMS["explosion_force"]
+    assert _number(props, "explosive_health") == 20.0

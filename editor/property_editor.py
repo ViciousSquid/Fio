@@ -641,6 +641,17 @@ class PropertyEditor(QWidget):
         # on the hot path.
         self._tooltips_enabled = True
 
+        # A multi-selection edit checkpoints the whole scene for undo. A
+        # slider or spin box sends valueChanged on every step, so one drag is
+        # one undo step: the checkpoint stays open across a run of edits to
+        # the same property of the same objects until they pause, as the
+        # Surface Inspector's spin boxes and the 2D views' nudges do.
+        self._shared_edit_burst = None    # (key, object ids, undo entry)
+        self._shared_edit_idle = QTimer(self)
+        self._shared_edit_idle.setSingleShot(True)
+        self._shared_edit_idle.setInterval(self.SHARED_EDIT_IDLE_MS)
+        self._shared_edit_idle.timeout.connect(self._close_shared_edit_burst)
+
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
         self.main_layout.setSpacing(2)
@@ -6854,6 +6865,38 @@ class PropertyEditor(QWidget):
             if isinstance(rot, list) and len(rot) > 0:
                 rot[0] = float(value)
 
+    #: Milliseconds without a further edit that end a multi-selection edit
+    #: burst (see :meth:`_checkpoint_shared_edit`).
+    SHARED_EDIT_IDLE_MS = 500
+
+    def _checkpoint_shared_edit(self, key, objects):
+        """One undo checkpoint for a run of edits of *key* on *objects*.
+
+        Every valueChanged of a slider used to checkpoint the whole scene:
+        60 ticks of one drag on a 20k-brush map took 3.4 s, and filled the
+        undo stack with near-identical steps that pushed the user's real
+        history off the bottom. The checkpoint is reused while the edits
+        keep coming (:attr:`SHARED_EDIT_IDLE_MS`), to the same property of
+        the same objects, and nothing else has checkpointed, undone or
+        redone since (the newest undo entry is still the one taken here).
+        Anything else starts a new step, so a single edit is still one.
+        """
+        stack = self.editor.state.undo_stack
+        signature = (key, tuple(id(obj) for obj in objects))
+        burst = self._shared_edit_burst
+        if (burst is None or burst[0] != signature or not stack
+                or stack[-1] is not burst[1]):
+            self.editor.save_state()
+            stack = self.editor.state.undo_stack
+            burst = (signature, stack[-1] if stack else None)
+        self._shared_edit_burst = burst
+        self._shared_edit_idle.start()
+
+    def _close_shared_edit_burst(self):
+        """End the current multi-selection edit burst: the next edit
+        checkpoints again."""
+        self._shared_edit_burst = None
+
     def update_object_prop(self, key, value, component=None):
         """Set *key* to *value* on the object on the panel, and on every other
         selected object sharing the property (:meth:`_shared_edit_targets`).
@@ -6866,8 +6909,9 @@ class PropertyEditor(QWidget):
             return
         shared = self._shared_edit_targets(key)
         if shared:
-            # One undo step puts every object the edit reaches back.
-            self.editor.save_state()
+            # One undo step puts every object the edit reaches back -- one per
+            # gesture, not one per valueChanged.
+            self._checkpoint_shared_edit(key, [self.current_object] + shared)
         if isinstance(self.current_object, dict):
             self.current_object[key] = value
         elif isinstance(self.current_object, Thing):

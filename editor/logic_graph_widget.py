@@ -1117,6 +1117,56 @@ class LogicGraphScene(QGraphicsScene):
             ci.conn_obj.fire_once = dlg.fire_once()
             self.connections_changed.emit()
 
+    def _live_lookup(self):
+        """``(live objects by id(), live objects by stable id)`` for the
+        scene as it is now."""
+        by_ident, by_uuid = {}, {}
+        for entity in list(self.editor_state.things) + list(self.editor_state.brushes):
+            by_ident[id(entity)] = entity
+            eid = self._entity_id(entity)
+            if eid:
+                by_uuid.setdefault(eid, entity)
+        return by_ident, by_uuid
+
+    def _resolve_live(self, entity, lookup):
+        """*entity* if it is in the scene, else the live object with its
+        stable id, else None (it was deleted, or has no id to be found by)."""
+        by_ident, by_uuid = lookup
+        if by_ident.get(id(entity)) is entity:
+            return entity
+        try:
+            eid = self._entity_id(entity)
+        except Exception:
+            return None
+        return by_uuid.get(eid) if eid else None
+
+    def rebind_entities(self) -> int:
+        """Re-point the graph at the objects now in the scene; returns how
+        many entities it represents are no longer there.
+
+        Undo and redo rebuild every brush dict and Thing, so a graph built
+        before one holds objects nothing draws or saves. Each is replaced by
+        the live object with the same stable id. One that has none stays as
+        it is and is left out of :meth:`apply_to_entities`.
+        """
+        lookup = self._live_lookup()
+        detached = 0
+        for node in self._nodes.values():
+            live = self._resolve_live(node.entity, lookup)
+            if live is None:
+                detached += 1
+            else:
+                node.entity = live
+        undrawable = {}
+        for key, (entity, conns) in self._undrawable.items():
+            live = self._resolve_live(entity, lookup)
+            if live is None:
+                undrawable[key] = (entity, conns)
+            else:
+                undrawable[id(live)] = (live, conns)
+        self._undrawable = undrawable
+        return detached
+
     def apply_to_entities(self) -> int:
         """Write the graph back to the scene. Returns how many wires were written.
 
@@ -1133,20 +1183,35 @@ class LogicGraphScene(QGraphicsScene):
         original order relative to each other, so a round trip through this
         window is a no-op for anything it did not touch.
         """
+        self.skipped_entities = 0
         if not IO_AVAILABLE:
             return 0
+
+        # Every entity is found again in the scene as it is now, by stable
+        # id: after an undo or redo the graph's own references are detached
+        # copies, and Apply wrote into those -- reporting success while the
+        # map kept its old connections. One no longer in the scene is skipped.
+        self.skipped_entities = self.rebind_entities()
+        lookup = self._live_lookup()
+
+        def live(entity):
+            return self._resolve_live(entity, lookup)
 
         drawn: Dict[int, List] = {}
         touched: Dict[int, object] = {}
         for node in self._nodes.values():
-            touched[id(node.entity)] = node.entity
-            drawn[id(node.entity)] = []
+            entity = live(node.entity)
+            if entity is not None:
+                touched[id(entity)] = entity
+                drawn[id(entity)] = []
 
         count = 0
         for ci in self._connections:
             if ci.conn_obj is None:
                 continue
-            src_entity = ci.src_pin.node.entity
+            src_entity = live(ci.src_pin.node.entity)
+            if src_entity is None:
+                continue
             drawn.setdefault(id(src_entity), []).append(ci.conn_obj)
             touched[id(src_entity)] = src_entity
             count += 1
@@ -1154,6 +1219,8 @@ class LogicGraphScene(QGraphicsScene):
         # Entities that only carry connections the graph could not draw are
         # rewritten too — with exactly what they had.
         for key, (entity, conns) in self._undrawable.items():
+            if live(entity) is None:
+                continue
             touched.setdefault(key, entity)
             drawn.setdefault(key, [])
 
@@ -1367,6 +1434,8 @@ class LogicGraphWindow(QWidget):
         self.editor_state = editor_state
         self._dirty = False
         self._first_show = True
+        #: An undo/redo happened while the window was hidden: rebuild on show.
+        self._stale = False
         self.setWindowTitle("Logic Graph Editor")
         self.resize(1200, 750)
         self.setMinimumSize(800, 500)
@@ -1567,6 +1636,8 @@ class LogicGraphWindow(QWidget):
         """Auto-fit nodes into view on first show so the user doesn't
         have to click Reload to see them."""
         super().showEvent(event)
+        if self._stale and not self._dirty:
+            self._rebuild_from_scene()
         if self._first_show:
             self._first_show = False
             # Defer fit_all so the view geometry is fully resolved first
@@ -1593,11 +1664,57 @@ class LogicGraphWindow(QWidget):
         self._btn_apply.setStyleSheet("")
         self._refresh_undrawable_notice()
 
+    def resync_after_history(self):
+        """The scene was rebuilt by an undo or redo.
+
+        With nothing unapplied the graph is rebuilt from the scene (now, or
+        when the window is next shown). With unapplied edits it keeps them,
+        re-pointed at the live objects, so Apply writes to the map and not to
+        the copies the history step left behind.
+        """
+        if self._dirty:
+            detached = self.graph_scene.rebind_entities()
+            note = (f" {detached} entit{'y is' if detached == 1 else 'ies are'}"
+                    f" no longer in the map and will be skipped." if detached else "")
+            self._status.setText(
+                "The map changed (undo/redo); unsaved graph edits kept — "
+                "press Apply to save." + note)
+            return
+        if self.isVisible():
+            self._rebuild_from_scene()
+        else:
+            self._stale = True
+
+    def _rebuild_from_scene(self):
+        """Reload the graph from the scene without asking (nothing to lose),
+        keeping where the nodes are."""
+        try:
+            self.graph_scene.store_positions()
+        except Exception:
+            pass
+        self._stale = False
+        self._reload()
+
     def _apply(self):
+        scene = self.graph_scene
+        scene.rebind_entities()
+        lookup = scene._live_lookup()
+        held = [n.entity for n in scene._nodes.values()]
+        held += [entity for entity, _conns in scene._undrawable.values()]
+        if held and all(scene._resolve_live(e, lookup) is None for e in held):
+            # Nothing the graph shows is in the map any more: there is
+            # nothing to write, and no undo step to take for it.
+            self._status.setText(
+                "Nothing applied — none of these entities are in the map any "
+                "more. Press Reload.")
+            return
         self.about_to_apply.emit()
-        count = self.graph_scene.apply_to_entities()
+        count = scene.apply_to_entities()
+        skipped = getattr(scene, 'skipped_entities', 0)
+        note = (f" {skipped} entit{'y' if skipped == 1 else 'ies'} no longer "
+                f"in the map skipped." if skipped else "")
         self._status.setText(
-            f"Applied — {count} connection(s) written to entities.")
+            f"Applied — {count} connection(s) written to entities." + note)
         self._btn_apply.setStyleSheet("")
         self._dirty = False
         self.applied.emit()

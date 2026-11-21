@@ -5,6 +5,7 @@ identity keeps hitscan, melee, projectiles and billboard rendering working.
 """
 from __future__ import annotations
 
+import collections
 import copy
 from dataclasses import dataclass, field
 import math
@@ -80,6 +81,8 @@ class Fighter:
 class DeathmatchSession:
     def __init__(self, logic, host=None):
         self.logic, self.host = logic, host
+        #: Player kills raised off the tick (_human_hit), run by the next tick.
+        self._deferred_kills = collections.deque()
         self.clock = 0.0
         self.finished = False
         self.result_winner = None
@@ -185,6 +188,8 @@ class DeathmatchSession:
                   and f.actor.on_ground and isinstance(f.actor.ground_object, dict)
                   and (f.actor.ground_object.get('is_mover') or f.actor.ground_object.get('is_door'))]
         original(delta)
+        while self._deferred_kills:
+            self.kill(*self._deferred_kills.popleft())
         if not self._started:
             return
         # Native movers carry the local player. Carry the other Player
@@ -292,7 +297,17 @@ class DeathmatchSession:
         result = original(damage)
         if self.logic.player_runtime.player_health <= 0:
             self.logic.player_runtime.player_dead = True
-            self.kill(victim, self._human_attacker or self.projectile_attacker())
+            killer = self._human_attacker or self.projectile_attacker()
+            import threading
+            from engine.monster_ai import MonsterAIThread
+            if not isinstance(threading.current_thread(), MonsterAIThread):
+                self.kill(victim, killer)
+            else:
+                # A monster's attack lands here on the MonsterAI thread,
+                # holding the monster lock: kill() emits plugin events whose
+                # listeners may take the tick lock, which inverts the engine's
+                # lock order. The kill waits for the next tick instead.
+                self._deferred_kills.append((victim, killer))
         return result
 
     def fire_output(self, entity, name, value=None):

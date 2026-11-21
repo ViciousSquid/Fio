@@ -2,9 +2,10 @@
 
 With "Animate connections" on, the arrows travelling along I/O links asked
 for a full repaint of the 2D view 60 times a second. The scene below the
-links is now kept as an image while they animate, and a frame that only
-moves the arrows reuses it. Any other repaint paints everything afresh.
+links is now kept as an image, and a frame that only moves the arrows (or
+the camera cone) reuses it. Any other repaint paints everything afresh.
 The camera cone follows the 3D view's frames instead of a 60 Hz poll.
+tests/performance/test_view2d_repaint_work.py counts what each frame does.
 """
 
 import pytest
@@ -75,16 +76,17 @@ def test_the_arrow_timer_runs_only_while_links_animate(linked):
     w.config.set('Display', 'animate_connections', 'False')
     view._update_connection_animations()
     assert not view.animation_timer.isActive()
+    # The scene is kept all the same: the camera cone is drawn over it.
     _frame(view, arrows_only=False)
-    assert view._base_layer is None, "nothing is cached when links do not animate"
+    assert view._base_layer is not None
 
 
 def test_a_camera_move_reaches_the_2d_view_without_a_timer(main_window, monkeypatch):
     view = main_window.view_top
     assert not hasattr(view, '_camera_tracking_timer')
     calls = []
-    monkeypatch.setattr(type(view), 'update',
-                        lambda self, *a: calls.append(self.view_type))
+    monkeypatch.setattr(type(view), '_request_overlay_frame',
+                        lambda self: calls.append(self.view_type))
     view._last_camera_pos = None
     monkeypatch.setattr(type(view), 'isVisible', lambda self: True)
     main_window.notify_camera_moved()

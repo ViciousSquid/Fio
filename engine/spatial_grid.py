@@ -271,6 +271,44 @@ class _CellRows:
             np.cumsum(counts) - counts, counts)
         return query, self.rows[np.repeat(first, counts) + within]
 
+    def _pairs_spanning(self, x0, z0, x1, z1):
+        """``(query, row)`` for every brush filed in a cell of each query's
+        cell range ``x0..x1, z0..z1`` but its first (``x0, z0``, which
+        :meth:`pairs` answers): every filed cell tested against the range, a
+        bounded slice of queries at a time. For a range far wider than a
+        cell walk should go (:data:`MAX_WALK_CELLS`): this costs as the
+        filed cells do, not as the cells the range covers."""
+        empty = np.empty(0, dtype=np.int64)
+        cells = len(self.starts) - 1
+        if cells <= 0 or not len(x0):
+            return empty, empty
+        if self._unpacked_cells is not None:
+            coords = np.asarray(list(self._unpacked_cells), dtype=np.float64).reshape(-1, 2)
+            cx, cz = coords[:, 0], coords[:, 1]
+        else:
+            cx = self.keys // _CELL_STRIDE - _CELL_OFFSET
+            cz = self.keys % _CELL_STRIDE - _CELL_OFFSET
+        queries, found = [], []
+        chunk = max(1, (1 << 20) // cells)
+        for start in range(0, len(x0), chunk):
+            ax, az = x0[start:start + chunk, None], z0[start:start + chunk, None]
+            inside = ((cx >= ax) & (cx <= x1[start:start + chunk, None])
+                      & (cz >= az) & (cz <= z1[start:start + chunk, None])
+                      & ~((cx == ax) & (cz == az)))
+            query, cell = np.nonzero(inside)
+            if not query.size:
+                continue
+            first = self.starts[cell]
+            counts = self.starts[cell + 1] - first
+            total = int(counts.sum())
+            within = np.arange(total, dtype=np.int64) - np.repeat(
+                np.cumsum(counts) - counts, counts)
+            queries.append(np.repeat(query + start, counts))
+            found.append(self.rows[np.repeat(first, counts) + within])
+        if not queries:
+            return empty, empty
+        return np.concatenate(queries), np.concatenate(found)
+
     def _pairs_unpacked(self, cx, cz):
         """Rare large-coordinate queries, retaining query and bucket order."""
         query = []
@@ -309,6 +347,16 @@ _EMPTY_CELL_ROWS = _CellRows({})
 #: every cell a typo'd ``distance`` spans.  Past this the brush is filed where
 #: it stands and handled as off range (see :meth:`SpatialGrid.populate`).
 MAX_TRAVEL_CELLS = 1 << 16
+
+
+#: The most cells one :meth:`SpatialGrid.box_pairs` box is walked cell by
+#: cell: eight square, where a body's move at its fastest (Soma's
+#: ``MAX_SPEED``) spans five. Each cell is a lookup for every box at once, so
+#: the walk is cheap for boxes that are all small; a box wider than this --
+#: a vast body, or bad data -- would make it cost as the square of its width,
+#: and has every filed cell tested against it instead
+#: (:meth:`_CellRows._pairs_spanning`). Both find the same pairs.
+MAX_WALK_CELLS = 64
 
 
 def _travel_cells(box, cell_size):
@@ -1180,10 +1228,23 @@ class SpatialGrid:
         query, row = rows.pairs(cx0, cz0)
         more_x = np.floor(hi[:, 0] / cs) - cx0
         more_z = np.floor(hi[:, 2] / cs) - cz0
+        queries, found = [query], [row]
+        side = np.maximum(more_x, more_z) + 1.0
+        wide = side * side > MAX_WALK_CELLS
+        if wide.any():
+            # Too many cells to walk one by one: the filed cells are tested
+            # against each such box instead, and the walk keeps to the rest.
+            which = np.flatnonzero(wide)
+            q, r = rows._pairs_spanning(cx0[which], cz0[which], cx0[which] + more_x[which],
+                                        cz0[which] + more_z[which])
+            if len(r):
+                queries.append(which[q])
+                found.append(r)
+            more_x = np.where(wide, 0.0, more_x)
+            more_z = np.where(wide, 0.0, more_z)
         span_x = int(more_x.max())
         span_z = int(more_z.max())
         if span_x or span_z:
-            queries, found = [query], [row]
             for dx in range(span_x + 1):
                 for dz in range(span_z + 1):
                     if not (dx or dz):
@@ -1195,11 +1256,11 @@ class SpatialGrid:
                     if len(r):
                         queries.append(which[q])
                         found.append(r)
-            if len(found) > 1:
-                query = np.concatenate(queries)
-                row = np.concatenate(found)
-                if _placement.asleep:
-                    rows._resolve_asleep(row)
+        if len(found) > 1:
+            query = np.concatenate(queries)
+            row = np.concatenate(found)
+            if _placement.asleep:
+                rows._resolve_asleep(row)
         return query, row, rows
 
     def raycast_down(self, x, z, start_y=10000.0):

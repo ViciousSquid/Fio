@@ -902,3 +902,26 @@ def test_dflaglight_switches_shadows_without_extinguishing_flags(ctf):
     assert all(not f.light.properties['casts_shadows'] for f in session.game.flags.values())
     assert all(f.light.properties['state'] == 'on' for f in session.game.flags.values())
     assert command(logic, 'dflaglight', 'invalid') == 'Usage: dflaglight [on|off]'
+
+
+def test_player_killed_on_the_monster_thread_dies_on_the_next_tick(arena):
+    """A monster's hit lands on the MonsterAI thread holding the monster lock;
+    kill() emits plugin events whose listeners may take the tick lock, so the
+    kill is deferred to the tick rather than run there (lock order)."""
+    import threading
+    from engine.monster_ai import MonsterAIThread
+
+    logic, session, human, bot = arena
+    logic.player_runtime.player_health = 10
+
+    def hit():
+        logic.trigger_runtime._apply_player_damage(50)
+
+    thread = MonsterAIThread(logic, logic.monster_ai, threading.Lock())
+    thread.run = hit
+    thread.start()
+    thread.join(5)
+    assert logic.player_runtime.player_dead
+    assert human.alive and human.deaths == 0      # not killed off the tick
+    logic._tick_play_mode(0.0)
+    assert not human.alive and human.deaths == 1

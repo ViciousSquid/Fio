@@ -378,8 +378,30 @@ def cells_within(cells, px, pz, radius, cell_size=CELL_SIZE):
     inside the radius, which gives a true circle of coverage.  Cells the mapping
     does not have are skipped outright, so the cost is proportional to occupied
     local cells rather than to the size of the world.
+
+    When the bounding square holds more cells than the mapping has keys (a
+    huge radius over a sparse index) the occupied keys are walked instead, so
+    the cost never exceeds one pass over what is filed.  An infinite radius
+    reaches every occupied cell; a NaN or negative radius, or a centre that is
+    not finite, reaches none -- nothing raises.
     """
+    try:
+        radius = float(radius)
+        px, pz = float(px), float(pz)
+    except (TypeError, ValueError):
+        return set()
+    if not cells or radius != radius or radius < 0.0:
+        return set()
+    if not (math.isfinite(px) and math.isfinite(pz)):
+        return set()
+    if radius == math.inf:
+        return set(cells)
     r2 = radius * radius
+    span = radius / cell_size + 1.0
+    if 2.0 * span + 3.0 > math.sqrt(len(cells)):
+        # The square is bigger than what is filed: test each occupied key.
+        return {coord for coord in list(cells)
+                if cell_distance_sq(coord[0], coord[1], px, pz, cell_size) <= r2}
     reach = int(math.ceil(radius / cell_size)) + 1
     bx, bz = cell_of_point(px, pz, cell_size)
     out = set()

@@ -128,13 +128,33 @@ BLAST_DEFAULTS = {
     'explosion_force': 0.0,
 }
 
+#: The most a blast setting can be, whatever is authored. A value that is not
+#: a finite number (NaN, ``"inf"``) is the default instead; one above its
+#: maximum is the maximum. 4096 units of radius is eight grid cells -- far past
+#: any room -- and keeps the radius queries bounded; 20000 units a second at
+#: the centre already throws a body of mass 1 clean across a large map, so
+#: more only feeds the physics broad phase velocities it cannot use (the cost
+#: of a swept box grows with the square of speed); and a million damage kills
+#: anything while staying a number ``int()`` can round.
+BLAST_MAXIMUMS = {
+    'explosion_damage': 1.0e6,
+    'explosion_radius': 4096.0,
+    'explosion_force': 20000.0,
+}
+
+
+def _finite(value, default):
+    """*value* as a float, or *default* when it is not a finite number."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return float(default)
+    return value if math.isfinite(value) else float(default)
+
 
 def _blast_number(props, key):
-    try:
-        value = float(props.get(key, BLAST_DEFAULTS[key]))
-    except (TypeError, ValueError):
-        return float(BLAST_DEFAULTS[key])
-    return max(value, 0.0) if value == value else float(BLAST_DEFAULTS[key])
+    value = _finite(props.get(key, BLAST_DEFAULTS[key]), BLAST_DEFAULTS[key])
+    return min(max(value, 0.0), BLAST_MAXIMUMS[key])
 
 
 def blast_settings(props):
@@ -284,10 +304,10 @@ def barrel_effect(prop, base, model_size=(0.0, 0.0)):
 
 
 def _number(props, key):
-    try:
-        return float(props.get(key, EXPLOSIVE_DEFAULTS[key]))
-    except (TypeError, ValueError):
-        return float(EXPLOSIVE_DEFAULTS[key])
+    value = _finite(props.get(key, EXPLOSIVE_DEFAULTS[key]), EXPLOSIVE_DEFAULTS[key])
+    if key in BLAST_MAXIMUMS:
+        return min(max(value, 0.0), BLAST_MAXIMUMS[key])
+    return value
 
 
 def is_explosive(thing) -> bool:
@@ -333,6 +353,8 @@ class ExplosionRuntime:
         self.exploded = {}              # id(prop) -> (prop, hidden before)
         self._bounds = {}               # model path -> local (min, max) or None
         self._explosives = None         # (key, [props]) cache
+        self.scans = 0                  # thing-list scans by explosives()
+        self.sight_tests = 0            # chain-reaction line-of-sight tests
 
     # -- session ----------------------------------------------------------
 
@@ -356,15 +378,33 @@ class ExplosionRuntime:
     # -- which Props -------------------------------------------------------
 
     def explosives(self):
-        """The explosive Props still standing (cached per thing list)."""
+        """The explosive Props still standing (cached per thing list).
+
+        The thing list is scanned only when it is a different list or its
+        length changed; a barrel that explodes leaves the cached list itself
+        (:meth:`explode_prop`), so a chain of explosions never rescans the
+        world."""
         things = self.logic.editor_state.things
-        key = (id(things), len(things), len(self.exploded))
+        key = (id(things), len(things))
         cached = self._explosives
         if cached is None or cached[0] != key:
+            self.scans += 1
+            exploded = self.exploded
             standing = [t for t in things
-                        if is_explosive(t) and id(t) not in self.exploded]
+                        if is_explosive(t) and id(t) not in exploded]
             cached = self._explosives = (key, standing)
         return cached[1]
+
+    def _drop_explosive(self, prop):
+        """Take *prop* out of the cached standing list, if it is there."""
+        cached = self._explosives
+        if cached is None:
+            return
+        standing = cached[1]
+        for i, other in enumerate(standing):
+            if other is prop:
+                del standing[i]
+                return
 
     def _model_box(self, prop):
         """*prop*'s model as the renderer places it: ``(lo, hi, scale, pos,
@@ -509,6 +549,7 @@ class ExplosionRuntime:
         # The model goes: hidden, and its collision with it.
         self.exploded[id(prop)] = (prop, bool(props.get('hidden', False)))
         self.damage_taken.pop(id(prop), None)
+        self._drop_explosive(prop)
         set_authored_flag(prop, 'hidden', True)
         touch(prop)
         sync = getattr(logic.collision_runtime, 'sync_bodies', None)
@@ -519,7 +560,15 @@ class ExplosionRuntime:
         hi = self.box(prop)[1]
         effect = barrel_effect(prop, (centre[0], lo[1], centre[2]),
                                (max(hi[0] - lo[0], hi[2] - lo[2]), hi[1] - lo[1]))
+        things = logic.editor_state.things
+        before = (id(things), len(things))
         logic.session_runtime.add_session_thing(effect)
+        cached = self._explosives
+        if (cached is not None and cached[0] == before
+                and len(things) == before[1] + 1 and things[-1] is effect):
+            # The fireball is an Effect, not an explosive Prop: the standing
+            # list is still right for the longer thing list.
+            self._explosives = ((id(things), len(things)), cached[1])
         if logic.io_manager is not None:
             logic.io_manager.fire_output(prop, 'OnExplode')
         explode_effect(effect, logic, now)
@@ -582,10 +631,16 @@ class ExplosionRuntime:
                 if push > 0.0:
                     monster_ai.knock_back(monster, mx - cx, mz - cz, push)
 
-        # Other explosive Props: they go off in turn.
-        for other in self.explosives():
-            ox, oy, oz = self.centre(other)
+        # Other explosive Props: they go off in turn. One already waiting to
+        # go off needs nothing more from this blast -- no box, no line of
+        # sight -- so a chain reaction tests each barrel's sight until it is
+        # caught, not once per blast that reaches it.
+        pending = {id(p) for _when, p in self.pending}
+        for other in tuple(self.explosives()):
+            if id(other) in pending:
+                continue
             lo, hi = self.box(other)
+            ox, oy, oz = ((a + b) * 0.5 for a, b in zip(lo, hi))
             reach = max(hi[0] - lo[0], hi[2] - lo[2]) * 0.5
             d = max(((ox - cx) ** 2 + (oy - cy) ** 2 + (oz - cz) ** 2) ** 0.5 - reach, 0.0)
             if d > radius:
@@ -594,6 +649,7 @@ class ExplosionRuntime:
             if d > 0.0:
                 k = reach / max(d + reach, 1e-6)
                 tx, ty, tz = ox + (cx - ox) * k, oy + (cy - oy) * k, oz + (cz - oz) * k
+                self.sight_tests += 1
                 if not seen(tx, ty, tz):
                     continue
             self.damage_prop(other, damage, delay=self.CHAIN_DELAY, now=now)

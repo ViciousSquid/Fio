@@ -385,22 +385,23 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
     # the player's slot and reported success.
     level = logic.editor_state.get_level_data()
 
+    # Not swallowed either: an error here used to write a save with no
+    # monster state at all and report success. The caller holds the monster
+    # lock (LogicSession.save_session), so the AI thread is not adding to the
+    # dict while it is read.
     monster_states: Dict[str, Any] = {}
-    try:
-        raw = logic.monster_ai.monster_states or {}
-        by_obj_id = {id(t): t for t in logic.world_runtime.monster_things}
-        for obj_id, state in raw.items():
-            mon = by_obj_id.get(obj_id)
-            sid = _thing_id(mon) if mon is not None else ""
-            if sid:
-                # investigating_sound holds a transient (pos, expiry) tuple tied
-                # to wall-clock time; drop it rather than persist a stale timer.
-                # _public_state also strips any cached _-prefixed runtime fields.
-                clean = _public_state(state)
-                clean.pop("investigating_sound", None)
-                monster_states[sid] = clean
-    except Exception:
-        monster_states = {}
+    raw = logic.monster_ai.monster_states or {}
+    by_obj_id = {id(t): t for t in logic.world_runtime.monster_things}
+    for obj_id, state in raw.items():
+        mon = by_obj_id.get(obj_id)
+        sid = _thing_id(mon) if mon is not None else ""
+        if sid:
+            # investigating_sound holds a transient (pos, expiry) tuple tied
+            # to wall-clock time; drop it rather than persist a stale timer.
+            # _public_state also strips any cached _-prefixed runtime fields.
+            clean = _public_state(state)
+            clean.pop("investigating_sound", None)
+            monster_states[sid] = clean
 
     runtime = {
         "god_mode": bool(logic.player_runtime.god_mode),
@@ -1225,7 +1226,11 @@ def write(path: str, snapshot: dict) -> None:
         os.makedirs(directory, exist_ok=True)
     # Atomic: a quicksave overwrites the same slot every time, and a failure
     # part-way through must not cost the player the save they already had.
-    write_json_atomic(path, snapshot, indent=2, default=_json_default)
+    # allow_nan=False: a NaN or infinity would write fine and then be refused
+    # on load (validate_snapshot), after it had replaced the good save. It
+    # raises ValueError here instead, before the old file is touched.
+    write_json_atomic(path, snapshot, indent=2, default=_json_default,
+                      allow_nan=False)
 
 
 def read(path: str) -> dict:

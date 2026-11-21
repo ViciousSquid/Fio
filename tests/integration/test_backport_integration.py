@@ -396,11 +396,14 @@ def test_property_editor_has_no_hard_debug_console_dependency():
 def test_tick_exception_enters_a_controlled_fault_state():
     src = _read("engine/logic_thread.py")
     tree = ast.parse(src)
-    fn = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_step_frame"
+    # The frame loop catches the failure; _tick_failed (which it calls from
+    # its ``except``) reports it and ends the session.
+    block = "\n".join(
+        ast.get_source_segment(src, node) for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name in ("_step_frame", "_tick_failed")
     )
-    block = ast.get_source_segment(src, fn)
+    assert "self._tick_failed()" in block
     assert "try:" in block and "self._tick(self.TICK_DURATION)" in block
     assert "except Exception:" in block
     assert "traceback.format_exc()" in block, "traceback must be reported"

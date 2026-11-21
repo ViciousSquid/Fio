@@ -9,6 +9,7 @@ duplicating those systems here.
 
 import math
 import random
+import threading
 import time
 
 import glm
@@ -65,6 +66,9 @@ class LogicTriggers:
 
     def __init__(self, logic):
         self.logic = logic
+        #: Player plugin events raised off the tick (_emit_player_event).
+        self._deferred_events = []
+        self._deferred_lock = threading.Lock()
         self.fired_once_triggers = set()
         self.hurt_trigger_timers = {}
         self._trigger_contacts = {}
@@ -72,6 +76,8 @@ class LogicTriggers:
         self._nonplayer_trigger_contacts = {}
         self._trigger_poll_elapsed = 0.0
         self._trigger_poll_elapsed_by_bid = {}
+        # Broad-phase candidates tested by _trigger_overlaps (a work count).
+        self.pairs_tested = 0
         self._trigger_use_generation = 0
         self._trigger_use_seen = {}
         self._trigger_use_prompt = ""
@@ -138,6 +144,8 @@ class LogicTriggers:
         fresh('_nonplayer_trigger_contacts')
         # Scheduler: wakes every TRIGGER_POLL_TICK and polls only triggers
         # whose own interval has elapsed; never scans at the 60 Hz tick rate.
+        # A trigger's clock starts at its staggered phase
+        # (_trigger_poll_phase) the first time the scheduler sees it.
         self._trigger_poll_elapsed = 0.0
         fresh('_trigger_poll_elapsed_by_bid')
         # Each use-key press gets a generation number consumed independently
@@ -269,6 +277,65 @@ class LogicTriggers:
         allowed = (1.0, 0.5, 0.25)
         return min(allowed, key=lambda interval: abs(interval - value))
 
+    def _trigger_poll_phase(self, slot, interval):
+        """Where a trigger's poll clock starts: staggered by its place in the
+        trigger list, so triggers with the same interval share the scheduler
+        ticks between them instead of all falling due on the same one.
+
+        The *slot*-th trigger with a 1 s interval starts 0, 0.25, 0.5 or
+        0.75 s in (round-robin), so a quarter of them are due at each
+        scheduler tick; 0.5 s triggers alternate between two ticks; 0.25 s
+        triggers are due every tick anyway. Each trigger still polls exactly
+        once per interval -- only the first poll comes sooner, never later
+        -- and the order is the level's, so a run is reproducible.
+        """
+        steps = max(1, int(round(interval / self.TRIGGER_POLL_TICK)))
+        return (slot % steps) * self.TRIGGER_POLL_TICK
+
+    def _trigger_overlaps(self, positions, type_mask, bounds, filter_masks):
+        """Every (entity row, trigger row) where the entity's position is inside
+        the trigger's box and the trigger's filter takes its category.
+
+        A sorted-axis sweep, once per category: that category's entities are
+        sorted by X, each trigger whose filter takes it finds the slice of
+        them inside its X span by binary search, and only those candidates are
+        tested on Y and Z -- all in NumPy, with no Python loop over entities or
+        triggers. The work is the sort plus the candidates, not the full
+        entities x triggers product a dense test builds. Inclusive bounds, in
+        float32, exactly as the dense test had them. ``pairs_tested`` counts
+        the candidates, so the work is measurable.
+        """
+        empty = np.zeros(0, dtype=np.intp)
+        found_entities, found_triggers = [], []
+        for bit in (1, 2, 4):
+            rows = np.flatnonzero(type_mask == bit)
+            triggers = np.flatnonzero(filter_masks & bit)
+            if rows.size == 0 or triggers.size == 0:
+                continue
+            xs = positions[rows, 0]
+            order = np.argsort(xs, kind='stable')
+            xs = xs[order]
+            box = bounds[triggers]
+            lo = np.searchsorted(xs, box[:, 0], side='left')
+            hi = np.searchsorted(xs, box[:, 3], side='right')
+            counts = np.maximum(hi - lo, 0)
+            total = int(counts.sum())
+            self.pairs_tested += total
+            if total == 0:
+                continue
+            pair_trigger = np.repeat(np.arange(triggers.size), counts)
+            starts = np.repeat(np.cumsum(counts) - counts, counts)
+            pair_entity = rows[order[lo[pair_trigger] + (np.arange(total) - starts)]]
+            p = positions[pair_entity]
+            b = box[pair_trigger]
+            keep = ((p[:, 1] >= b[:, 1]) & (p[:, 1] <= b[:, 4]) &
+                    (p[:, 2] >= b[:, 2]) & (p[:, 2] <= b[:, 5]))
+            found_entities.append(pair_entity[keep])
+            found_triggers.append(triggers[pair_trigger[keep]])
+        if not found_entities:
+            return empty, empty
+        return np.concatenate(found_entities), np.concatenate(found_triggers)
+
     def _poll_triggers(self, use_key_pressed=False, trigger_ids=None):
         """Run one batched trigger poll for the triggers that are due.
 
@@ -357,24 +424,32 @@ class LogicTriggers:
             return
 
         # ------------------------------------------------------------------
-        # Snapshot ALL eligible entities into one compact array.
-        # The first row is always the player; props and monsters follow.
+        # Snapshot the eligible entities into one compact array: only the
+        # categories some due trigger filters on (a poll of player-only
+        # triggers never walks the props or monsters). The first row is
+        # always the player; props and monsters follow.
         # ------------------------------------------------------------------
+        wanted = 0
+        for entry in trigger_entries:
+            wanted |= entry[3]
+
         entities = [self.logic.player_runtime.player]
         entity_types = [1]  # player
         entity_ids = [id(self.logic.player_runtime.player)]
 
-        for entity in (self.logic.prop_runtime.props if True else ()):
-            if not getattr(entity, 'properties', {}).get('disabled', False):
-                entities.append(entity)
-                entity_types.append(2)
-                entity_ids.append(id(entity))
+        if wanted & 2:
+            for entity in self.logic.prop_runtime.props:
+                if not getattr(entity, 'properties', {}).get('disabled', False):
+                    entities.append(entity)
+                    entity_types.append(2)
+                    entity_ids.append(id(entity))
 
-        for entity in self.logic.world_runtime.monster_things:
-            if not getattr(entity, 'properties', {}).get('disabled', False):
-                entities.append(entity)
-                entity_types.append(4)
-                entity_ids.append(id(entity))
+        if wanted & 4:
+            for entity in self.logic.world_runtime.monster_things:
+                if not getattr(entity, 'properties', {}).get('disabled', False):
+                    entities.append(entity)
+                    entity_types.append(4)
+                    entity_ids.append(id(entity))
 
         positions = np.asarray(
             [entity.pos for entity in entities],
@@ -383,32 +458,28 @@ class LogicTriggers:
         entity_type_mask = np.asarray(entity_types, dtype=np.uint8)
 
         # ------------------------------------------------------------------
-        # ONE vectorised broad-phase over only the trigger subset that is due.
-        # No Python entity × trigger nested loop.
+        # ONE vectorised broad-phase over only the trigger subset that is due:
+        # a sorted-axis sweep per category (_trigger_overlaps), so the work
+        # follows the entities each trigger's X span can reach rather than
+        # every entity x every trigger. No Python entity x trigger loop.
         # ------------------------------------------------------------------
         trigger_bounds = np.asarray(
             [entry[2] for entry in trigger_entries],
             dtype=np.float32,
         )
-        inside = (
-            (positions[:, None, 0] >= trigger_bounds[None, :, 0]) &
-            (positions[:, None, 0] <= trigger_bounds[None, :, 3]) &
-            (positions[:, None, 1] >= trigger_bounds[None, :, 1]) &
-            (positions[:, None, 1] <= trigger_bounds[None, :, 4]) &
-            (positions[:, None, 2] >= trigger_bounds[None, :, 2]) &
-            (positions[:, None, 2] <= trigger_bounds[None, :, 5])
-        )
-
         trigger_filter_masks = np.asarray(
             [entry[3] for entry in trigger_entries],
             dtype=np.uint8,
         )
-        inside &= (
-            (entity_type_mask[:, None] & trigger_filter_masks[None, :]) != 0
-        )
-
-        # Sparse result: only actual overlaps are materialised from NumPy.
-        entity_indices, trigger_indices = np.nonzero(inside)
+        entity_indices, trigger_indices = self._trigger_overlaps(
+            positions, entity_type_mask, trigger_bounds, trigger_filter_masks)
+        # Which due triggers the player (row 0) is inside: the use-trigger
+        # pass below only ever asks about the player.
+        player_inside = {
+            int(trigger_index)
+            for entity_index, trigger_index in zip(entity_indices, trigger_indices)
+            if entity_index == 0
+        }
 
         for entity_index, trigger_index in zip(entity_indices, trigger_indices):
             entry = trigger_entries[int(trigger_index)]
@@ -515,7 +586,7 @@ class LogicTriggers:
             use_edge = last_seen < generation
             self._trigger_use_seen[bid] = generation
 
-            if not inside[0, trigger_index]:
+            if trigger_index not in player_inside:
                 continue
             if not use_edge:
                 continue
@@ -606,12 +677,12 @@ class LogicTriggers:
             self._trigger_poll_elapsed = max(0.0, self._trigger_poll_elapsed - scheduler_tick)
 
             due_ids = set()
-            for bid, brush in self._trigger_brushes:
-                elapsed = (
-                    self._trigger_poll_elapsed_by_bid.get(bid, 0.0)
-                    + scheduler_tick
-                )
+            for slot, (bid, brush) in enumerate(self._trigger_brushes):
                 interval = self._trigger_poll_interval(brush)
+                elapsed = self._trigger_poll_elapsed_by_bid.get(bid)
+                if elapsed is None:
+                    elapsed = self._trigger_poll_phase(slot, interval)
+                elapsed += scheduler_tick
                 if elapsed + self.TRIGGER_POLL_EPSILON >= interval:
                     due_ids.add(bid)
                     elapsed %= interval
@@ -669,9 +740,43 @@ class LogicTriggers:
             })
 
         # Emit outside the lock so a handler can't deadlock on the damage path.
-        self.logic._plugin_emit("player_damage", damage=damage, health=self.logic.player_runtime.player_health)
+        self._emit_player_event("player_damage", damage=damage, health=self.logic.player_runtime.player_health)
         if became_dead:
-            self.logic._plugin_emit("player_death")
+            self._emit_player_event("player_death")
+
+    def _emit_player_event(self, event, **data):
+        """Emit a player plugin event now on the tick, else queue it to the tick.
+
+        Monster attacks reach _apply_player_damage on the MonsterAI thread,
+        holding the monster lock. A listener taking the tick lock there (the
+        deathmatch plugin's kill() does) inverts the engine's lock order and
+        deadlocks against the logic thread, so off the tick the event waits
+        in a queue, as foreign I/O outputs do, and drain_deferred_events
+        delivers it at the start of the next tick. The tick, and a UI thread
+        call serialised with it, both hold the tick lock.
+        """
+        logic = self.logic
+        owned = getattr(logic._tick_lock, '_is_owned', None)
+        if owned is None or owned():
+            logic._plugin_emit(event, **data)
+            return
+        with self._deferred_lock:
+            self._deferred_events.append((event, data))
+
+    def drain_deferred_events(self):
+        """Deliver the player events queued off the tick, in order (on the tick)."""
+        if not self._deferred_events:
+            return
+        with self._deferred_lock:
+            events = list(self._deferred_events)
+            self._deferred_events.clear()
+        for event, data in events:
+            self.logic._plugin_emit(event, **data)
+
+    def discard_deferred_events(self):
+        """Drop queued player events: their session has ended."""
+        with self._deferred_lock:
+            self._deferred_events.clear()
 
     def _on_trigger_enter(
         self,

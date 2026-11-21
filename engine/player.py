@@ -145,8 +145,13 @@ def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle, n
         dz = hit_point[2] - closest[2]
         edge_dist_sq = dx*dx + dy*dy + dz*dz
         if edge_dist_sq < radius*radius:
-            # Hit edge - push out along vector from edge to sphere center
-            edge_normal = glm.normalize(glm.vec3(dx, dy, dz))
+            # Hit edge - push out along vector from edge to sphere center;
+            # on the edge itself that vector is zero and has no direction
+            # (normalising it is NaN), so the face's normal stands in.
+            if edge_dist_sq > 1e-12:
+                edge_normal = glm.normalize(glm.vec3(dx, dy, dz))
+            else:
+                edge_normal = glm.vec3(*normal)
             return True, t0, glm.vec3(*closest), edge_normal
     
     return False, 1.0, None, None
@@ -368,8 +373,37 @@ class Player:
         self._jump_held = False
         self._gravity = world_gravity()
 
+        # Out of the world (leave_void): below kill_height, back to
+        # respawn_point. The logic thread sets both from the level.
+        self.kill_height = self.KILL_HEIGHT_DEFAULT
+        self.respawn_point = None
+
     #: Seconds the view takes to move between the standing and ducked eye.
     DUCK_VIEW_TIME = 0.5
+
+    #: The kill height when nothing better is known: the clamp the engine
+    #: always had. In a game the logic thread sets ``kill_height`` from the
+    #: level (LogicPlayer.kill_height): below its lowest geometry.
+    KILL_HEIGHT_DEFAULT = -2000.0
+    #: Where a player out of the world goes when no ``respawn_point`` is set.
+    RESPAWN_DEFAULT = (0.0, 100.0, 0.0)
+
+    def leave_void(self):
+        """Put the player back at ``respawn_point`` if it has left the world:
+        fallen below ``kill_height`` with nothing under it, or with a position
+        or velocity that is not a finite number (one NaN would reach every
+        collision query). Returns whether it did."""
+        pos, vel = self.pos, self.velocity
+        finite = all(math.isfinite(v) for v in (pos.x, pos.y, pos.z, vel.x, vel.y, vel.z))
+        kill_height = getattr(self, 'kill_height', self.KILL_HEIGHT_DEFAULT)
+        if finite and (pos.y >= kill_height or self.on_ground):
+            return False
+        x, y, z = getattr(self, 'respawn_point', None) or self.RESPAWN_DEFAULT
+        self.pos = glm.vec3(float(x), float(y), float(z))
+        self.velocity = glm.vec3(0, 0, 0)
+        self.on_ground = False
+        self.ground_object = None
+        return True
 
     @property
     def view_height(self):
@@ -625,6 +659,8 @@ class Player:
         # Before this tick's duck check: a duck made now shows its whole first
         # step of travel next tick, so a full duck takes DUCK_VIEW_TIME.
         self._settle_view(delta)
+        # Before anything queries the world with a position that is not one.
+        self.leave_void()
         if gravity is None:
             gravity = world_gravity()
         self._gravity = gravity
@@ -821,10 +857,8 @@ class Player:
             self.pm_time = (PM_HARD_LAND_TIME if fall_speed < PM_HARD_LAND_SPEED
                             else PM_LAND_TIME)
 
-        # Floor safety clamp
-        if self.pos.y < -2000:
-            self.pos     = glm.vec3(0, 100, 0)
-            self.velocity = glm.vec3(0, 0, 0)
+        # Out of the world: below the level, or not a number.
+        self.leave_void()
 
     # ------------------------------------------------------------------
     # Quake-style ground / air movement

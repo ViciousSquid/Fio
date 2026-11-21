@@ -5,7 +5,6 @@ from contextlib import ExitStack
 import json
 from pathlib import Path
 import posixpath
-import shlex
 import struct
 import zipfile
 
@@ -41,40 +40,88 @@ def map_assets(node):
     return result
 
 
-def companion_assets(path, data):
-    """OBJ materials, MTL maps and glTF external buffers/images, data only."""
+#: The asset types :func:`companion_assets` finds references in; any other
+#: file names none, and need not be read to find out.
+COMPANION_SUFFIXES = ('.obj', '.mtl', '.glb', '.gltf')
+
+#: MTL statements that name a texture file (the loader reads map_Kd/map_Ka;
+#: a package carries the rest too, for a player that reads them).
+_MTL_MAP_KEYWORDS = ('bump', 'disp', 'decal', 'norm')
+
+
+def companion_assets(path, data, errors=None):
+    """OBJ materials, MTL maps and glTF external buffers/images, data only.
+
+    Lines are read as :class:`engine.obj_loader.OBJLoader` reads them --
+    split on whitespace, ``#`` only at the start of a line, an ``mtllib``
+    name running to the end of the line -- so the package holds exactly the
+    files the loader will ask for. (``shlex`` used to read them as shell
+    words: an apostrophe in ``o Bob's_chair`` raised, a backslash path lost
+    its separators, and a 10 MB OBJ took seconds.)
+
+    A reference that cannot be packaged (absolute, a drive, another scheme)
+    or a model whose header cannot be read is a problem with that one model:
+    with an *errors* list it is reported there and skipped, so one odd model
+    does not abort a whole export; without one it raises ``ValueError``.
+    """
+    def problem(message):
+        if errors is None:
+            raise ValueError(message)
+        errors.append(message)
+
     suffix = posixpath.splitext(path)[1].lower()
     refs = []
-    if suffix in ('.obj', '.mtl'):
+    if suffix == '.obj':
+        text = data.decode('utf-8-sig', 'replace')
+        if 'mtllib' in text:
+            for line in text.splitlines():
+                line = line.strip()
+                if not line.startswith('mtllib'):
+                    continue
+                parts = line.split()
+                if parts[0] == 'mtllib' and len(parts) > 1:
+                    refs.append(' '.join(parts[1:]))
+    elif suffix == '.mtl':
+        # Keep the same option parser as the desktop OBJ loader.
+        from engine.obj_loader import OBJLoader
         for line in data.decode('utf-8-sig', 'replace').splitlines():
-            parts = shlex.split(line, comments=True, posix=True)
-            if not parts:
+            parts = line.split()
+            if not parts or parts[0].startswith('#'):
                 continue
-            if suffix == '.obj' and parts[0] == 'mtllib':
-                refs.extend(parts[1:])
-            elif suffix == '.mtl' and (parts[0].startswith('map_') or parts[0] in ('bump', 'disp', 'decal', 'norm')):
-                # Keep the same option parser as the desktop OBJ loader.
-                from engine.obj_loader import OBJLoader
+            keyword = parts[0]
+            if keyword.startswith('map_') or keyword in _MTL_MAP_KEYWORDS:
                 name = OBJLoader._parse_texture_map(parts[1:])
                 if name:
                     refs.append(name)
     elif suffix in ('.glb', '.gltf'):
-        if suffix == '.glb':
-            if len(data) < 20 or data[:4] != b'glTF':
-                raise ValueError(f'Invalid GLB: {path}')
-            length, kind = struct.unpack_from('<II', data, 12)
-            if kind != 0x4E4F534A or 20 + length > len(data):
-                raise ValueError(f'Invalid GLB JSON chunk: {path}')
-            document = json.loads(data[20:20 + length])
-        else:
-            document = json.loads(data)
-        refs = [item['uri'] for group in ('buffers', 'images') for item in document.get(group, [])
-                if isinstance(item.get('uri'), str) and not item['uri'].startswith('data:')]
+        try:
+            if suffix == '.glb':
+                if len(data) < 20 or data[:4] != b'glTF':
+                    raise ValueError(f'Invalid GLB: {path}')
+                length, kind = struct.unpack_from('<II', data, 12)
+                if kind != 0x4E4F534A or 20 + length > len(data):
+                    raise ValueError(f'Invalid GLB JSON chunk: {path}')
+                document = json.loads(data[20:20 + length])
+            else:
+                document = json.loads(data)
+        except (ValueError, RecursionError) as exc:   # JSONDecodeError, UnicodeError too
+            problem(str(exc) if str(exc).startswith('Invalid GLB') else f'Invalid glTF: {path}: {exc}')
+            return []
+        if not isinstance(document, dict):
+            problem(f'Invalid glTF: {path}: not a JSON object')
+            return []
+        for group in ('buffers', 'images'):
+            items = document.get(group)
+            for item in items if isinstance(items, list) else ():
+                uri = item.get('uri') if isinstance(item, dict) else None
+                if isinstance(uri, str) and uri and not uri.startswith('data:'):
+                    refs.append(uri)
     result = []
     for reference in refs:
         reference = reference.replace('\\', '/')
         if reference.startswith('/') or ':' in reference:
-            raise ValueError(f'Model companion must be project-relative: {reference}')
+            problem(f'Model companion must be project-relative: {reference} (in {path})')
+            continue
         result.append(posixpath.normpath(posixpath.join(posixpath.dirname(path), reference)))
     return result
 

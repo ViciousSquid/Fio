@@ -484,6 +484,11 @@ def main():
     # QOpenGLWidget from forcing a GL compositor on otherwise ordinary UI.
     native_gl_widget = QtWidgets.QOpenGLWidget
     class LayoutViewport(QtWidgets.QWidget):
+        # QtGameView connects to the presentation signal on its viewport base.
+        # The audit substitutes only the GL surface, so preserve that part of
+        # QOpenGLWidget's contract without creating a GL context.
+        frameSwapped = QtCore.pyqtSignal()
+
         def setFormat(self, value):
             self._audit_format = value
 

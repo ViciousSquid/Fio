@@ -756,7 +756,7 @@ class EditorAPI:
         after the stock rows, never replacing them (see
         :meth:`register_properties` for a plugin entity's whole panel).
         """
-        self._manager.register_extra_fields(entity_type, specs)
+        self._manager.register_extra_fields(entity_type, specs, plugin=self._plugin)
 
     def register_property_tab(self, label: str, factory, entity_type=None):
         """Add a custom tab to the property panel.
@@ -764,7 +764,8 @@ class EditorAPI:
         ``factory(thing)`` builds and returns the tab's widget. If *entity_type*
         is given the tab appears only for that type, otherwise for every entity.
         """
-        self._manager.register_property_tab(label, factory, entity_type)
+        self._manager.register_property_tab(label, factory, entity_type,
+                                            plugin=self._plugin)
 
     def register_property_section(self, label: str, factory, entity_type=None,
                                   expanded: bool = False) -> None:

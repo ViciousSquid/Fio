@@ -12,6 +12,26 @@ from .entity_table import EntityTable
 # common empty path avoids allocating a throwaway list on every rendered frame.
 _EMPTY_DRAIN: tuple = ()
 
+
+def _frozen_empty(dtype, shape=(0,)):
+    array = np.empty(shape, dtype=dtype)
+    array.setflags(write=False)
+    return array
+
+
+# The defaults RenderState.reset() puts back, shared rather than built on every
+# swap: every one of these fields is replaced by assignment when a frame is
+# prepared (LogicRender), never changed in place, so one instance serves all.
+_IDENTITY = glm.mat4(1.0)
+_ORIGIN = glm.vec3(0, 0, 0)
+_DEFAULT_TINT = (0.0, 0.4, 0.6)
+_NO_KEYS = frozenset()
+_NO_OBJECTS = _frozen_empty(object)
+_NO_SLOTS = _frozen_empty(np.int32)
+_NO_FLAGS = _frozen_empty(bool)
+_NO_POSITIONS = _frozen_empty(np.float32, (0, 3))
+
+
 class RenderState:
     """
     A snapshot of the game state specifically for the renderer.
@@ -144,15 +164,19 @@ class RenderState:
         self.prepare_ms = 0.0
 
     def reset(self):
-        """Reset all fields to defaults for reuse (avoids per-frame allocation)."""
-        self.camera_view_matrix = glm.mat4(1.0)
-        self.projection_matrix = glm.mat4(1.0)
+        """Reset all fields to defaults for reuse (avoids per-frame allocation).
+
+        The defaults are the module's shared instances (_IDENTITY, _NO_SLOTS
+        and the rest), not new objects: a swap used to build about twenty.
+        """
+        self.camera_view_matrix = _IDENTITY
+        self.projection_matrix = _IDENTITY
         self.is_play_mode = False
-        self.editor_camera_pos = glm.vec3(0, 0, 0)
+        self.editor_camera_pos = _ORIGIN
         self.editor_camera_yaw = 0.0
         self.editor_camera_pitch = 0.0
         self.editor_camera_fov = 90.0
-        self.player_pos = glm.vec3(0, 0, 0)
+        self.player_pos = _ORIGIN
         self.light_fade_range = None  # optional live-world boundary, in world units
         self.player_angle = 0.0
         self.player_pitch = 0.0
@@ -169,14 +193,14 @@ class RenderState:
         self.player_armor = 0
         self.shot_ready = False
         self.player_underwater = False
-        self.underwater_tint = [0.0, 0.4, 0.6]
+        self.underwater_tint = _DEFAULT_TINT
         #: Waist deep with the eye above the water: the lens's bottom-half
         #: drops (engine.lens_water.wets_bottom_half).
         self.player_wading = False
-        self.player2_pos = glm.vec3(0, 0, 0)
+        self.player2_pos = _ORIGIN
         self.player2_angle = 0.0
         self.player2_pitch = 0.0
-        self.player2_view_matrix = glm.mat4(1.0)
+        self.player2_view_matrix = _IDENTITY
         self.player2_health = 100
         self.player2_max_health = 100
         self.player2_dead = False
@@ -189,9 +213,9 @@ class RenderState:
         # same tables without allocating a RenderTable/EntityTable per frame.
         if self.entity_table is None:
             self.entity_table = EntityTable()
-        self.entity_refs = np.empty(0, dtype=object)
-        self.visible_thing_slots = np.empty(0, dtype=np.int32)
-        self.thing_hidden = np.empty(0, dtype=bool)
+        self.entity_refs = _NO_OBJECTS
+        self.visible_thing_slots = _NO_SLOTS
+        self.thing_hidden = _NO_FLAGS
         self.has_portals = False
         if self.render_table is None:
             self.render_table = RenderTable()
@@ -199,26 +223,26 @@ class RenderState:
         #: for a mover or a door the per-frame snapshot. Indexed by the slot
         #: arrays below, so a consumer converts an index to an object once, at
         #: the point it actually needs one, rather than up front for everything.
-        self.render_refs = np.empty(0, dtype=object)
-        self.visible_brush_slots = np.empty(0, dtype=np.int32)
-        self.all_brush_slots = np.empty(0, dtype=np.int32)
-        self.collected_keys = set()
+        self.render_refs = _NO_OBJECTS
+        self.visible_brush_slots = _NO_SLOTS
+        self.all_brush_slots = _NO_SLOTS
+        self.collected_keys = _NO_KEYS
         self.hud_message = ""
         self.hud_prompt_key = None
-        self.bullet_marks = []
+        self.bullet_marks = ()
         self.decals = None
         #: Directional damage for the HUD: ((x, y, z, strength 0..1), ...) --
         #: where recent hits on the player came from -- or () (LogicRender).
         self.damage_marks = ()
         #: Live monster projectiles, as an ``(N, 3)`` float32 array of positions.
-        self.projectiles = np.empty((0, 3), dtype=np.float32)
+        self.projectiles = _NO_POSITIONS
         self.muzzle_flash_active = False
         self.camera_transition_active = False
         self.cinematic_camera_active = False
         self.hud_alpha = 1.0
         self.hud_health_alpha = 0.5
         self.monster_debug_active = False
-        self.monster_debug_rays = []
+        self.monster_debug_rays = ()
         self.monster_hitboxes = None
         self.total_brushes = 0
         self.culled_brushes = 0

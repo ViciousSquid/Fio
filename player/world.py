@@ -155,7 +155,7 @@ class PlayerWorld:
         self.brushes = self.state.brushes
         self.terrain = None
         terrain_data = data.get('terrain_data')
-        if terrain_data and terrain_data.get('enabled', True):
+        if isinstance(terrain_data, dict) and terrain_data and terrain_data.get('enabled', True):
             from engine.terrain import Terrain
             self.terrain = Terrain()
             self.terrain.from_dict(terrain_data)

@@ -46,6 +46,13 @@ def export_showcase(output, root=None, map_name='_SHOWCASE', title=None):
             with patch.object(QFileDialog, 'getSaveFileName', return_value=(str(output), 'Game Packages (*.fiopak)')), \
                  patch.object(PackageExporter, 'export', checked_export):
                 dialog.export_btn.click()
+                # Package export is deliberately asynchronous in the editor.
+                # Keep the exporter spy installed until the worker has called
+                # it, then deliver its queued GUI-thread completion callback.
+                job = getattr(window, '_export_job', None)
+                if job is None or not job.wait(timeout=300):
+                    raise RuntimeError('Package export did not finish within 300 seconds')
+                application.processEvents()
             if 'Export successful!' not in dialog.dep_label.text() or errors:
                 raise RuntimeError(f'Export failed or reported missing assets: {errors or dialog.dep_label.text()}')
             print(f'PASS: desktop Fio loaded {map_name} and exported {output} ({output.stat().st_size} bytes)')

@@ -171,6 +171,48 @@ def _loading_step(window, stage, percent=None):
         overlay.step(stage, percent)
 
 
+def _non_finite_at(value, path=""):
+    """Where in *value* the first NaN or infinite number is (for example
+    ``brushes[3] ('wall').pos[1]``), or None."""
+    if isinstance(value, float):
+        return None if math.isfinite(value) else (path or "a value")
+    if isinstance(value, dict):
+        name = value.get('name')
+        props = value.get('properties')
+        if not name and isinstance(props, dict):
+            name = props.get('name')
+        if isinstance(name, str) and name and path.endswith(']'):
+            path = f"{path} ('{name}')"
+        for key, item in value.items():
+            found = _non_finite_at(item, f"{path}.{key}" if path else str(key))
+            if found:
+                return found
+        return None
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            found = _non_finite_at(item, f"{path}[{index}]")
+            if found:
+                return found
+    return None
+
+
+def _strict_json(data, **layout):
+    """``json.dumps(data)`` refusing NaN and infinity, with a message that
+    says where the bad number is."""
+    try:
+        return json.dumps(data, allow_nan=False, **layout)
+    except ValueError as e:
+        where = _non_finite_at(data)
+        if where is None:
+            raise
+        raise ValueError(_non_finite_message(where)) from e
+
+
+def _non_finite_message(where):
+    return (f"{where} is not a number (NaN or infinity); the map was not "
+            f"written. Fix that value and save again.")
+
+
 class MainWindow(QMainWindow):
     #: A LevelChanger asks for a map: ``(map path, destination spawn)``, the
     #: spawn being a PlayerStart name, or '' for the map's primary start.
@@ -181,6 +223,9 @@ class MainWindow(QMainWindow):
     #: Emitted after set_selected_objects changes the selection (viewport,
     #: Scene Hierarchy, ...); Debug Tables follows it.
     selection_changed = pyqtSignal()
+    #: A background autosave finished: ``(path, error)``, error '' on success.
+    #: Emitted on the writer thread; delivered on the GUI thread.
+    _autosave_finished = pyqtSignal(str, str)
     def __init__(self, root_dir):
         super().__init__()
         self.root_dir = root_dir
@@ -377,6 +422,17 @@ class MainWindow(QMainWindow):
         # Show startup tooltip after window is shown
         QTimer.singleShot(1500, self._show_startup_tooltip)
         
+        # Map files are written under one lock, so a background autosave and
+        # a save from the File menu never write at the same time; the
+        # autosave's writer thread is made on first use.
+        import threading
+        self._map_io_lock = threading.Lock()
+        self._autosave_executor = None
+        self._autosave_future = None
+        self._autosave_generation = 0
+        self._autosave_written = {}         # path -> newest generation written
+        self._autosave_finished.connect(self._on_autosave_finished)
+
         # Autosave Timer
         self.autosave_timer = QTimer(self)
         self.autosave_timer.timeout.connect(self.autosave)
@@ -618,13 +674,17 @@ class MainWindow(QMainWindow):
             self.autosave_timer.stop()
 
     def autosave(self):
-        """Background autosave to a specific autosave file."""
+        """Background autosave to a specific autosave file.
+
+        The level is serialized here, on the GUI thread, so the file is one
+        consistent moment of it; only the writing happens on a worker thread.
+        """
         if not self.unsaved_changes:
             return # Nothing to save
         if self._in_play_mode():
             # The scene is the running game's world, not the authored map.
             return
-        self._write_autosave()
+        self._write_autosave(background=True)
 
     def _in_play_mode(self):
         view = getattr(self, 'view_3d', None)
@@ -643,11 +703,19 @@ class MainWindow(QMainWindow):
         self.show_toast(f"Stop Play to {what}", is_error=True)
         return True
 
-    def _write_autosave(self):
+    def _write_autosave(self, background=False):
         """Write the open level to its ``maps/*_autosave.json`` file.
 
         Returns the path written, or ``None`` if the write failed. The
         unsaved flag is left alone: an autosave is not the level's file.
+
+        *background*: serialize now and leave the writing to the autosave
+        thread (the timer's autosave); the path is returned once the write is
+        queued, and a failure is reported when it happens. Without it the
+        file is written before this returns (a level change in Play, which is
+        about to replace the scene). Autosaves are minified: the encoding is
+        the part done on the GUI thread, and an autosave is a copy to recover
+        from, which loads exactly as an indented map does.
         """
         try:
             # Ensure maps directory exists
@@ -663,18 +731,65 @@ class MainWindow(QMainWindow):
                 save_name = "untitled_autosave.json"
                 
             save_path = os.path.join(autosave_dir, save_name)
-            
-            self._write_map(save_path)
+            texts = self._map_texts(minified=True, detach=background)
+            self._autosave_generation += 1
+            generation = self._autosave_generation
+            if background:
+                self._queue_autosave(save_path, texts, generation)
+                return save_path
 
+            self._commit_map_texts(save_path, texts, generation)
             print(f"[Autosave] Saved to {save_path}")
             return save_path
             
         except Exception as e:
-            print(f"Autosave failed: {e}")
-            # Said where it is seen: a windowed build has no console, and an
-            # autosave that quietly stopped working is found out too late.
-            debug_log("Warning", f"Autosave failed: {e}")
+            self._report_autosave_failure(e)
             return None
+
+    def _queue_autosave(self, path, texts, generation):
+        """Write an autosave's *texts* on the autosave thread."""
+        if self._autosave_executor is None:
+            from concurrent.futures import ThreadPoolExecutor
+            # One worker: autosaves are written in the order they were taken.
+            self._autosave_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="fio-autosave")
+        finished = self._autosave_finished
+
+        def write():
+            try:
+                self._commit_map_texts(path, texts, generation)
+            except Exception as e:          # reported on the GUI thread
+                finished.emit(path, str(e) or type(e).__name__)
+            else:
+                finished.emit(path, "")
+
+        self._autosave_future = self._autosave_executor.submit(write)
+
+    def _on_autosave_finished(self, path, error):
+        if error:
+            self._report_autosave_failure(error)
+        else:
+            print(f"[Autosave] Saved to {path}")
+
+    @staticmethod
+    def _report_autosave_failure(error):
+        print(f"Autosave failed: {error}")
+        # Said where it is seen: a windowed build has no console, and an
+        # autosave that quietly stopped working is found out too late.
+        debug_log("Warning", f"Autosave failed: {error}")
+
+    def wait_for_autosave(self, timeout=None):
+        """Block until a background autosave in progress has been written.
+        Returns False if *timeout* (seconds) ran out first."""
+        future = self._autosave_future
+        if future is None:
+            return True
+        from concurrent.futures import TimeoutError as _Timeout
+        try:
+            future.result(timeout)
+        except _Timeout:
+            return False
+        return True
 
     def show_procedural_map_generator(self):
         """Open the procedural map generator as an overlay in the Properties dock."""
@@ -1347,8 +1462,10 @@ class MainWindow(QMainWindow):
                 if self.view_3d is not None and self.view_3d.logic_thread:
                     self.view_3d.logic_thread.world_runtime.terrain = self.terrain
             finally:
-                # Always close the progress dialog
+                # Always close the progress dialog, and delete it: a closed
+                # dialog is still this window's child, one more per terrain.
                 progress.close()
+                progress.deleteLater()
 
             # Store terrain data in state so the scene hierarchy can see it
             self.state.terrain_data = self.terrain.to_dict()
@@ -1759,7 +1876,7 @@ class MainWindow(QMainWindow):
         # with nothing in it (and its bounding box raised).
         self.state.selected_objects = [o for o in (objects or []) if o is not None]
         primary = self.primary_selection()
-        self.update_all_ui()
+        self.update_all_ui(selection_only=True)
         self.selection_changed.emit()
 
     @property
@@ -1770,7 +1887,9 @@ class MainWindow(QMainWindow):
         2D views are brought up to date once, when kiosk mode is left."""
         return bool(getattr(self, 'is_kiosk_mode', False))
 
-    def update_all_ui(self):
+    def update_all_ui(self, selection_only=False):
+        # *selection_only*: called by set_selected_objects, so the hierarchy
+        # may keep what it read from the objects since the last transaction.
         # Every editor operation ends here: a PlayerStart it created, deleted,
         # pasted or cloned is held to the primary invariant inside that
         # operation (and its undo step), before anything shows the level.
@@ -1786,7 +1905,7 @@ class MainWindow(QMainWindow):
             return
         self._editor_ui_stale = False
         self.property_editor.set_object(self._property_target())
-        self.scene_hierarchy.refresh_list()
+        self.scene_hierarchy.refresh_list(selection_only=selection_only)
         self.sync_surface_inspector()
         window = getattr(self, 'visgroups_window', None)
         if window is not None and window.isVisible():
@@ -3551,7 +3670,9 @@ class MainWindow(QMainWindow):
         * the Surface Inspector and the "face last worked on", both of which
           hold a brush directly and would otherwise edit a detached dict;
         * the property editor's cached pages and the I/O reverse index, which
-          are keyed on objects that no longer exist.
+          are keyed on objects that no longer exist;
+        * the Logic Graph window, whose nodes hold entities: Apply wrote into
+          the detached copies and reported success.
         """
         self.components.cancel_drag()
         self.components.prune(self.state.brushes)
@@ -3559,6 +3680,9 @@ class MainWindow(QMainWindow):
         self._rebind_face_targets()
         self._resync_terrain_after_history()
         self.invalidate_entity_caches()
+        graph = getattr(self, '_logic_graph_win', None)
+        if graph is not None:
+            graph.resync_after_history()
 
     def _resync_terrain_after_history(self):
         """Reload live terrain when an undo/redo changed authored terrain data."""
@@ -3849,20 +3973,82 @@ class MainWindow(QMainWindow):
             # temporary copy stays too (the overlay's close removes it).
             return
 
-        from editor.package_exporter import PackageExporter
-        exporter = PackageExporter(self.state, self.root_dir)
-        success, errors = exporter.export(output_path, metadata, abs_map, parent_widget=dialog)
+        job = getattr(self, '_export_job', None)
+        if job is not None and job.running:
+            self.show_toast("A package export is already running", is_error=True)
+            return
 
-        if success:
-            dialog.dep_label.setStyleSheet("color: #4CAF50; font-size: 12px; padding: 4px;")
-            dialog.dep_label.setText(f"Export successful!\nSaved to: {os.path.basename(output_path)}")
-            dialog.export_btn.setText("Done")
-            dialog.export_btn.setEnabled(False)
-            self.show_toast(f"Package exported: {os.path.basename(output_path)}", level='success')
-        else:
-            dialog.dep_label.setStyleSheet("color: #f44336; font-size: 12px; padding: 4px;")
-            dialog.dep_label.setText("Export failed:\n" + "\n".join(errors[:5]))
-            # Error already shown in exporter
+        # The export runs on a worker thread and reads files only, so the
+        # scene it packages is fixed here, on the GUI thread: an unsaved
+        # level is written to a copy of its own, taken now (the overlay's
+        # temporary copy dates from when it opened, and the overlay may be
+        # closed -- removing that copy -- while the export still reads).
+        job_copy = None
+        if self.unsaved_changes or self.file_path is None or abs_map == os.path.abspath(
+                getattr(self, '_export_temp_file', None) or ''):
+            import tempfile
+            try:
+                text = _strict_json(self.state.get_level_data(), indent=4)
+                fd, job_copy = tempfile.mkstemp(suffix=".json", prefix="export_temp_",
+                                                dir=os.path.dirname(abs_map))
+                with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                    handle.write(text)
+            except Exception as e:
+                if job_copy and os.path.exists(job_copy):
+                    os.unlink(job_copy)
+                self.show_toast(f"Failed to snapshot the map for export: {e}", is_error=True)
+                return
+            abs_map = job_copy
+
+        def discard_copy():
+            if job_copy and os.path.exists(job_copy):
+                os.unlink(job_copy)
+
+        def finished(success, errors):
+            self._export_job = None
+            try:
+                bar.deleteLater()
+                dialog.cancel_btn.setEnabled(True)
+                if success:
+                    dialog.dep_label.setStyleSheet("color: #4CAF50; font-size: 12px; padding: 4px;")
+                    dialog.dep_label.setText(
+                        f"Export successful!\nSaved to: {os.path.basename(output_path)}")
+                    dialog.export_btn.setText("Done")
+                else:
+                    dialog.dep_label.setStyleSheet("color: #f44336; font-size: 12px; padding: 4px;")
+                    dialog.dep_label.setText("Export failed:\n" + "\n".join(errors[:5]))
+                    dialog.export_btn.setText("Export...")
+                    dialog.export_btn.setEnabled(True)
+            except RuntimeError:
+                pass                    # the overlay was closed meanwhile
+            if success:
+                self.show_toast(f"Package exported: {os.path.basename(output_path)}",
+                                level='success')
+            else:
+                first = (errors[0] if errors else "unknown error").splitlines()
+                self.show_toast(f"Package export failed: {' '.join(first[:2])}",
+                                is_error=True)
+
+        # Progress: a busy bar and a disabled Export button while it runs;
+        # the rest of the editor stays usable.
+        from PyQt5.QtWidgets import QProgressBar
+        bar = QProgressBar(dialog)
+        bar.setRange(0, 0)
+        bar.setTextVisible(False)
+        if dialog.layout() is not None:
+            dialog.layout().addWidget(bar)
+        dialog.export_btn.setEnabled(False)
+        dialog.export_btn.setText("Exporting...")
+        dialog.cancel_btn.setEnabled(False)
+        dialog.dep_label.setStyleSheet("color: #888; font-size: 12px; padding: 4px;")
+        dialog.dep_label.setText(f"Exporting {os.path.basename(output_path)}...")
+
+        from editor.export_job import ExportJob
+        from editor.package_exporter import PackageExporter
+        self._export_job = ExportJob(PackageExporter(self.state, self.root_dir),
+                                     output_path, metadata, abs_map, finished,
+                                     cleanup=discard_copy)
+        self._export_job.start()
 
     def new_map(self):
         if self._refuse_file_command_in_play("start a new map"):
@@ -5275,17 +5461,59 @@ class MainWindow(QMainWindow):
         """File > Save As Minified...: Save As, with minified JSON chosen."""
         self.save_level_as(minified=True)
 
-    def _write_map(self, path):
+    def _write_map(self, path, minified=None):
         """Write the map to *path* -- indented, or minified when the map is
         kept that way -- and its terrain paint and placed stamps beside it
-        in ``<map name>.paint`` (they are not kept in the map's JSON)."""
+        in ``<map name>.paint`` (they are not kept in the map's JSON).
+
+        Everything is encoded before any file is touched, so a map that
+        cannot be written (a coordinate that is not a number) leaves the
+        file on disk as it was."""
+        if minified is None:
+            minified = getattr(self, 'map_minified', False)
+        self._commit_map_texts(path, self._map_texts(minified))
+
+    def _map_texts(self, minified, detach=False):
+        """The open level encoded for writing: ``(map JSON, paint file dict
+        or None)``.
+
+        Strict JSON: a NaN or infinite number raises ``ValueError`` naming
+        where it is. Python writes them as ``NaN``/``Infinity`` by default,
+        which saved fine and then made the map fail validation on load.
+
+        *detach*: the paint dict is for another thread, so it is copied off
+        the live terrain lists (its blobs are immutable strings, shared).
+        """
         from engine import terrain_stamp
         level, stamps = terrain_stamp.split_level(self.state.get_level_data())
-        if getattr(self, 'map_minified', False):
-            write_json_atomic(path, level, separators=(",", ":"))
-        else:
-            write_json_atomic(path, level, indent=4)
-        terrain_stamp.write_map_stamps(path, stamps)
+        layout = {'separators': (",", ":")} if minified else {'indent': 4}
+        text = _strict_json(level, **layout)
+        if stamps is not None:
+            where = _non_finite_at(stamps)
+            if where is not None:
+                raise ValueError(_non_finite_message(f"the paint file's {where}"))
+            if detach:
+                stamps = copy.deepcopy(stamps)
+        return text, stamps
+
+    def _commit_map_texts(self, path, texts, autosave_generation=None):
+        """Write encoded map *texts* (:meth:`_map_texts`) to *path*, and its
+        paint file beside it.
+
+        Under the map lock: a save and a background autosave never write at
+        once. *autosave_generation* orders autosaves of one path: an older
+        snapshot that reaches the lock after a newer one was written is
+        dropped rather than put back over it.
+        """
+        from engine import terrain_stamp
+        text, stamps = texts
+        with self._map_io_lock:
+            if autosave_generation is not None:
+                if autosave_generation < self._autosave_written.get(path, 0):
+                    return
+                self._autosave_written[path] = autosave_generation
+            write_text_atomic(path, text)
+            terrain_stamp.write_map_stamps(path, stamps)
 
     def save_level(self):
         if self._refuse_file_command_in_play("save the map"):
@@ -5334,7 +5562,34 @@ class MainWindow(QMainWindow):
         # dirty), so a malformed map or one that fails to parse leaves the open
         # level as it was. Clearing first emptied the scene for any map that
         # got past the shape check.
-        self.state.load_from_data(level_data, validated=validated, stream_editor=True)
+        #
+        # The terrain is built first for the same reason: a terrain_data that
+        # passes validation can still fail to build, and failing *after* the
+        # scene was replaced left a half-built, untitled level (or, for a
+        # LevelChanger, a dead Play session). Built aside, it is refused with
+        # the open level untouched.
+        if not validated:
+            self.state.validate_level_data(level_data)
+            validated = True
+        new_terrain = None
+        if level_data.get('terrain_data'):
+            from engine.terrain import Terrain
+            _loading_step(self, "Building terrain", 35)
+            new_terrain = Terrain()
+            try:
+                new_terrain.from_dict(level_data['terrain_data'])
+            except Exception as e:
+                try:
+                    new_terrain.cleanup()
+                except Exception:
+                    pass
+                raise ValueError(f"the map's terrain could not be built: {e}") from e
+        try:
+            self.state.load_from_data(level_data, validated=validated, stream_editor=True)
+        except Exception:
+            if new_terrain is not None:
+                new_terrain.cleanup()
+            raise
         self.state.set_editor_whole_world(
             self.config.getboolean('Display', 'show_whole_world', fallback=True),
             self.view_3d.camera.pos)
@@ -5347,13 +5602,9 @@ class MainWindow(QMainWindow):
         self.view_3d.terrain = None
         self.state.terrain_data = terrain_data
 
-        # Re-initialize terrain if present in the new map
-        if self.state.terrain_data:
-            if self.terrain is None:
-                from engine.terrain import Terrain
-                self.terrain = Terrain()
-            _loading_step(self, "Building terrain", 40)
-            self.terrain.from_dict(self.state.terrain_data)
+        # The new map's terrain, built above
+        if self.state.terrain_data and new_terrain is not None:
+            self.terrain = new_terrain
             if self.state.editor_stream is not None:
                 # Only the terrain around the camera, like the cells.
                 self.terrain.set_streaming(True, self.state.editor_stream.config['activation_radius'])
@@ -5524,7 +5775,6 @@ class MainWindow(QMainWindow):
 
         loaded = False
         open_level = None
-        scene_replacement_started = False
         try:
             # A level change during play: end the running session *before*
             # the scene is replaced.  Its teardown (movers, doors, Props, the
@@ -5556,7 +5806,6 @@ class MainWindow(QMainWindow):
                           self.state.brushes,
                           self.state.things)
             self.file_path = None
-            scene_replacement_started = True
             _loading_step(self, "Building the scene", 30)
             # Validated at the top, before the open level was touched.
             self._apply_level_data(level_data, validated=True)
@@ -5643,13 +5892,14 @@ class MainWindow(QMainWindow):
             return True
 
         except Exception as e:
-            if (not loaded and not scene_replacement_started
+            if (not loaded
                     and open_level is not None
                     and open_level[2] is not None and open_level[3] is not None
                     and self.state.brushes is open_level[2]
                     and self.state.things is open_level[3]):
-                # The map failed to parse: the open level was never replaced,
-                # so it keeps its file.
+                # The map failed to parse, or its terrain to build: the open
+                # level was never replaced (load_from_data publishes the new
+                # objects only once everything is parsed), so it keeps its file.
                 self.file_path, self.unsaved_changes = open_level[:2]
                 self.update_title()
             elif not loaded:
@@ -6335,7 +6585,11 @@ class MainWindow(QMainWindow):
         else:
             # Quietly discard the stale window — a new one will be built on
             # next open(), using the current editor_state automatically.
+            # Deleted, not just closed: a closed window is still the main
+            # window's child, holding the previous map's whole graph, and one
+            # was left behind per map load.
             win.close()
+            win.deleteLater()
             self._logic_graph_win = None
 
     def open_item_editor(self):
@@ -6527,6 +6781,11 @@ class MainWindow(QMainWindow):
                 self.tooltip_timer.stop()
             if hasattr(self, 'autosave_timer'):
                 self.autosave_timer.stop()
+            # An autosave being written finishes before the editor goes.
+            if getattr(self, '_autosave_executor', None) is not None:
+                self.wait_for_autosave(timeout=30)
+                self._autosave_executor.shutdown(wait=False)
+                self._autosave_executor = None
 
             # The played package, if any, is no longer read.
             self._close_package()

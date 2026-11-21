@@ -156,6 +156,28 @@ class DeviceTest:
                 return True
         return False
 
+    def clear_system_overlays(self, timeout=45):
+        """Dismiss stacked Android system dialogs before sending game input.
+
+        The fullscreen first-use hint and a system-process ANR can be stacked.
+        A single dismiss_overlays() call removes only the top one; a fresh
+        hierarchy dump is required before dismissing the next overlay.
+        """
+        deadline = time.monotonic() + timeout * self.timeout_scale
+        while time.monotonic() < deadline:
+            nodes = self.nodes()
+            if self.dismiss_overlays(nodes):
+                time.sleep(0.75)
+                continue
+            # Do not send joystick gestures until the foreground hierarchy
+            # belongs to Fio rather than a system dialog or the file picker.
+            if any(node.get('package') == PACKAGE for node in nodes):
+                return
+            time.sleep(0.5)
+        self.screenshot('system-overlay-blocking-input.png')
+        raise RuntimeError(
+            'Android system UI still covers Fio; inspect system-overlay-blocking-input.png')
+
     def reports(self, pid):
         log = self.adb('logcat', '-d', '--pid', pid, '-v', 'epoch')
         (self.output / 'fio-logcat.txt').write_text(log, encoding='utf-8')
@@ -256,7 +278,7 @@ class DeviceTest:
             self.screenshot('load-failed.png')
             raise RuntimeError('No rendered-world reports: use a debug APK and inspect fio-logcat.txt / load-failed.png')
         world_sha256 = self.verify_import(world)
-        self.dismiss_overlays(self.nodes())
+        self.clear_system_overlays()
         width, height = self.screenshot('before-movement.png')
         # Drag from the floating stick's origin, then hold the forward position.
         # Slow software emulators need a longer real hold to deliver several
@@ -275,6 +297,9 @@ class DeviceTest:
         distances = [math.dist(start, report['position']) for report in forward_reports]
         horizontal = [math.hypot(report['position'][0] - start[0], report['position'][2] - start[2])
                       for report in forward_reports]
+        # The emulator can raise another system-process ANR while Fio
+        # software-renders. Clear stacked overlays again before reverse input.
+        self.clear_system_overlays()
         # Opposite input must reverse the direction. This rules out passive
         # platform motion or a late scripted push masquerading as touch input.
         for _ in range(2):

@@ -7,6 +7,7 @@ to raise out of ``from_dict`` and abort loading the level.
 """
 
 import base64
+import json
 import io
 
 import numpy as np
@@ -68,3 +69,105 @@ def test_an_unusable_heightmap_is_dropped(blob):
 def test_malformed_sculpt_entries_are_skipped():
     terrain = _loaded(sculpt_offsets=[[1, 2, 0.5], [3, 4], "xyz", [5, "z", 1.0], None])
     assert terrain.sculpt_offsets == {(1, 2): 0.5}
+
+
+def test_non_finite_sculpt_entries_are_skipped():
+    # Python's json reads NaN/Infinity; a NaN offset became a NaN height,
+    # and an infinite coordinate raised out of int().
+    terrain = _loaded(sculpt_offsets=[[1, 2, 0.5], [3, 4, float("nan")],
+                                      [5, 6, float("inf")], [7, 8, float("-inf")],
+                                      [float("inf"), 0, 1.0], [0, float("nan"), 1.0]])
+    assert terrain.sculpt_offsets == {(1, 2): 0.5}
+
+
+# ---------------------------------------------------------------------------
+# Any JSON in any field: defaults, never an exception
+# ---------------------------------------------------------------------------
+
+#: One of each JSON shape, and the numbers that break arithmetic.
+_JSON_VALUES = [None, True, False, "x", "", 0, -1, 1.5, 1e30, 10 ** 30, -10 ** 30,
+                float("nan"), float("inf"), float("-inf"), [], [1], [[1]], [None],
+                ["x", "y", "z"], [1, 2, 3], [[1, 2, "x"]], {}, {"a": 1}, [{}],
+                [{"tile": [0, 0], "data": "x"}], [{"coord": [0, 0], "data": "x"}]]
+
+_TERRAIN_FIELDS = sorted(set(Terrain(seed=3).to_dict()) | {
+    "lock", "sculpt_offsets", "sculpt_tiles", "sculpt_grid_resolution",
+    "csg_subtractions", "texture_paint", "texture_paint_base",
+    "texture_paint_resolution", "paint_stamps", "texture_stamps",
+    "heightmap_blob", "heightmap_strength", "heightmap_blend"})
+
+
+def _assert_loads_cleanly(terrain, data):
+    terrain.from_dict(data)
+    xs, zs = np.array([0.0, 100.0, -37.5]), np.array([0.0, 7.0, 512.0])
+    heights = terrain._get_heights_batch(xs, zs)
+    assert np.isfinite(heights).all() and np.isfinite(terrain.get_height_at(0.5, 0.5))
+    terrain._get_colors_batch(heights, np.array([0.1, 0.5, 0.9]))
+    # What it saves is strict JSON (no NaN) and loads back the same way.
+    saved = json.dumps(terrain.to_dict(), allow_nan=False)
+    terrain.from_dict(json.loads(saved))
+
+
+@pytest.mark.parametrize("data", _JSON_VALUES, ids=repr)
+def test_terrain_data_of_any_json_type_loads_as_defaults(data):
+    terrain = Terrain(seed=3)
+    _assert_loads_cleanly(terrain, data)
+    assert terrain.seed == 42 and terrain.biome.name == "Grassy Hills"
+
+
+@pytest.mark.parametrize("field", _TERRAIN_FIELDS)
+def test_any_json_in_a_terrain_field_loads(field):
+    terrain = Terrain(seed=3)
+    for value in _JSON_VALUES:
+        _assert_loads_cleanly(terrain, {field: value})
+
+
+@pytest.mark.parametrize("record", ["custom_biome", "appearance"])
+def test_any_json_in_a_nested_terrain_field_loads(record):
+    terrain = Terrain(seed=3)
+    fields = (terrain.biome.to_dict() if record == "custom_biome"
+              else terrain.appearance.to_dict())
+    for field in fields:
+        for value in _JSON_VALUES:
+            _assert_loads_cleanly(terrain, {record: {field: value}})
+
+
+@pytest.mark.parametrize("field", ["x", "z", "radius", "texture", "feather",
+                                   "opacity", "angle", "id", "tiled"])
+def test_any_json_in_a_paint_stamp_field_loads(field):
+    terrain = Terrain(seed=3)
+    for value in _JSON_VALUES:
+        stamp = {"x": 1.0, "z": 1.0, "radius": 4.0, "texture": "no/such.png", field: value}
+        _assert_loads_cleanly(terrain, {"paint_stamps": [stamp]})
+
+
+def test_the_reported_terrain_data_values_load_as_defaults():
+    # The ones that raised out of from_dict and aborted the map load.
+    for data, check in (
+            ({"seed": "abc"}, lambda t: t.seed == 42),
+            ({"seed": 1.5}, lambda t: t.seed == 42),
+            ({"seed": 1e30}, lambda t: t.seed == 42),
+            ({"seed": 7.0}, lambda t: t.seed == 7),
+            ({"seed": Terrain.MAX_SEED + 1}, lambda t: t.seed == 42),
+            ({"grass_density": "x"}, lambda t: t.grass_density == 0.02),
+            ({"grass_density": 5}, lambda t: t.grass_density == 0.24),
+            ({"grass_height": "x"}, lambda t: t.grass_height == 5.0),
+            ({"biome": [1]}, lambda t: t.biome.name == "Grassy Hills"),
+            ({"biome": "desert"}, lambda t: t.biome.name == "Desert"),
+            ({"custom_biome": {"height_scale": "x", "color_gradient": "x"}},
+             lambda t: t.biome.height_scale == 200.0 and len(t.biome.color_gradient) == 4),
+            ({"enabled": "no"}, lambda t: t.enabled is True),
+            ({"enabled": 0}, lambda t: t.enabled is False),
+            ({"heightmap_blob": _npy(np.ones((4, 4), np.float32)),
+              "heightmap_strength": "x", "heightmap_blend": [1]},
+             lambda t: t.heightmap_strength == 100.0 and t.heightmap_blend == "additive"),
+            ({"csg_subtractions": [[0, -1e9, 0, float("inf"), 1e9, 10]]},
+             lambda t: t.csg_subtractions == []),
+            ({"paint_stamps": [{"x": 0, "z": 0, "radius": 1e30, "texture": "a.png"}]},
+             lambda t: t.paint_stamps == []),
+            ({"texture_paint_resolution": float("inf")}, lambda t: True),
+    ):
+        terrain = Terrain(seed=3)
+        _assert_loads_cleanly(terrain, data)
+        terrain.from_dict(data)
+        assert check(terrain), data

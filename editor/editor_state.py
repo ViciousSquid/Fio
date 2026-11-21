@@ -81,6 +81,34 @@ class _HistoryBase(str):
         return super().__new__(cls, "")
 
 
+class _Checkpoint(str):
+    """An undo or redo entry: the scene as JSON, with the terrain paint
+    chunks held by reference beside it.
+
+    A painted chunk is a compressed blob of tens of kilobytes, and nearly
+    every checkpoint holds the same ones: only a paint stroke changes any.
+    Encoded into each entry's JSON, fifty entries held fifty copies. Here the
+    JSON names each chunk by its place in :attr:`blobs`, and entries share
+    the strings themselves (see :meth:`EditorState._history_entry`). Still a
+    ``str`` of JSON, so anything that reads an entry as one keeps working.
+    """
+
+    def __new__(cls, text, blobs=()):
+        entry = super().__new__(cls, text)
+        entry.blobs = tuple(blobs)
+        return entry
+
+
+#: The ``terrain_data`` lists of paint chunks (``{'coord', 'data'}``) whose
+#: ``data`` a checkpoint holds by reference, and the checkpoint key of each.
+_PAINT_HISTORY_KEYS = ('terrain_texture_paint', 'terrain_texture_paint_base')
+#: Where a checkpoint's paint chunk names its blob: ``[index, hash]``. The
+#: hash keeps two checkpoints with different paint from comparing equal.
+_BLOB_REF = '@blob'
+#: Shorter chunk data than this stays in the JSON: not worth a reference.
+_BLOB_MIN_CHARS = 256
+
+
 # Import lightmap bake state
 try:
     from lightmap.bake_state import BakeState
@@ -96,6 +124,13 @@ class EditorState:
     #: finished. The main window installs one (a zero-delay timer); without a
     #: UI event loop, edits are synchronous and nothing needs deferring.
     post_event = None
+
+    #: What the undo history may hold, in bytes, before its oldest steps are
+    #: dropped (on top of the 50-step cap). A checkpoint is the whole scene:
+    #: 5.5 MB on a 20k-brush map, so fifty of them held about 270 MB.
+    UNDO_BYTE_BUDGET = 128 * 1024 * 1024
+    #: Undo steps kept whatever they cost, so a huge map still has a few.
+    UNDO_MIN_STEPS = 5
 
     # The world's row sets, as RowLists (engine/row_list.py): a plain list
     # assigned to ``brushes`` or ``things`` is taken as one, so the render
@@ -140,10 +175,19 @@ class EditorState:
         #: world; the custom slots' definitions are saved with the map.
         self.item_definitions = ItemDefinitions()
         self.terrain_data = None
+        #: A callable that brings ``terrain_data`` up to date with the live
+        #: terrain, left by a tool that edits the terrain faster than it is
+        #: worth re-encoding it (sculpt dabs); see :meth:`defer_terrain_sync`.
+        self._terrain_sync = None
         self._logic_graph_positions = {}  # Persisted node positions for the logic graph
         self.created_at = ''              # ISO timestamp, set on first save
         self.undo_stack = deque(maxlen=50)
         self.redo_stack = []
+        # Every distinct paint blob the history holds, once (see
+        # _history_entry); rebuilt from the entries by _enforce_history_budget.
+        self._history_blobs = {}
+        #: What the history held at its last trim, in bytes (blobs once).
+        self.history_bytes = 0
         # The redo branch the most recent save_state() cleared, so a checkpoint
         # that guarded no change can be discarded without losing it.
         self._discarded_redo = None
@@ -418,6 +462,7 @@ class EditorState:
         self._invalidate_entity_caches()
         self.selected_objects = []
         self.terrain_data = None
+        self._terrain_sync = None           # it was the old terrain's
         self.view_filters.load_level_data({})
         self.item_definitions.reset()
         self.undo_stack.clear()
@@ -506,8 +551,26 @@ class EditorState:
             self.mark_world_changed(changed)
         return changed
 
+    def defer_terrain_sync(self, sync):
+        """*sync()* will copy the live terrain into ``terrain_data``; it is
+        run before anything reads the scene to keep it (a save, an autosave,
+        an undo checkpoint), or when the tool calls :meth:`sync_terrain`.
+
+        A sculpt dab used to re-encode the whole terrain into
+        ``terrain_data`` every time; now a stroke does it once, at its end,
+        and nothing that keeps the scene can see it out of date.
+        """
+        self._terrain_sync = sync
+
+    def sync_terrain(self):
+        """Run a deferred terrain sync, if one is pending."""
+        sync, self._terrain_sync = self._terrain_sync, None
+        if sync is not None:
+            sync()
+
     def get_level_data(self):
         """Serializes the current scene state into a dictionary."""
+        self.sync_terrain()
         data = {
             # 3: stable entity IDs and logic graph layout. 4: one material
             # record per brush face (engine.brush_faces.CANONICAL_MAP_VERSION).
@@ -911,6 +974,7 @@ class EditorState:
         self._invalidate_entity_caches()
 
         self.terrain_data = level_data.get('terrain_data', None)
+        self._terrain_sync = None           # it was the old terrain's
         self.view_filters.load_level_data(level_data)
         self.item_definitions.load(level_data.get('items'))
         self.sync_item_props()
@@ -1058,7 +1122,80 @@ class EditorState:
         self.selected_objects = restored
 
     def snapshot(self):
-        """The scene as it stands right now, as a JSON checkpoint string."""
+        """The scene as it stands right now, as a JSON checkpoint string.
+
+        Self-contained: :meth:`restore_state` needs nothing else to put it
+        back. The undo history stores :meth:`_history_entry` instead.
+        """
+        return json.dumps(self._checkpoint_data(), separators=(',', ':'),
+                          check_circular=False)
+
+    def _history_entry(self):
+        """The scene as an undo/redo entry: :meth:`snapshot`'s JSON, with
+        each terrain paint chunk's data held by reference (:class:`_Checkpoint`).
+
+        Equal blobs are one string, shared by every entry that holds them:
+        an unchanged chunk keeps its string from one checkpoint to the next,
+        and one re-encoded since (a restore rebuilds the terrain's paint) is
+        matched by content against the blobs the history already has.
+        """
+        checkpoint = self._checkpoint_data()
+        pool = self._history_blobs
+        blobs, slots = [], {}
+        for key in _PAINT_HISTORY_KEYS:
+            entries = checkpoint.get(key)
+            if not entries:
+                continue
+            for entry in entries:
+                data = entry.get('data')
+                if not isinstance(data, str) or len(data) < _BLOB_MIN_CHARS:
+                    continue
+                data = pool.setdefault(data, data)
+                slot = slots.get(id(data))
+                if slot is None:
+                    slot = slots[id(data)] = len(blobs)
+                    blobs.append(data)
+                del entry['data']
+                entry[_BLOB_REF] = [slot, hash(data)]
+        text = json.dumps(checkpoint, separators=(',', ':'), check_circular=False)
+        return _Checkpoint(text, blobs)
+
+    def _enforce_history_budget(self):
+        """Drop the oldest undo steps while the history holds more than
+        :attr:`UNDO_BYTE_BUDGET`, keeping at least :attr:`UNDO_MIN_STEPS`.
+
+        A shared paint blob is counted once, and only goes when the last
+        entry holding it does. Also rebuilds the blob pool from what is left,
+        so a blob no entry holds any more is not kept alive by it.
+        """
+        held = {}                   # id(blob) -> [blob, entries holding it]
+        total = 0
+        for entry in list(self.undo_stack) + list(self.redo_stack):
+            total += len(entry)
+            for blob in getattr(entry, 'blobs', ()):
+                ref = held.get(id(blob))
+                if ref is None:
+                    held[id(blob)] = [blob, 1]
+                    total += len(blob)
+                else:
+                    ref[1] += 1
+        # Undo needs one entry under the step it restores.
+        keep = max(1, int(self.UNDO_MIN_STEPS)) + 1
+        while total > self.UNDO_BYTE_BUDGET and len(self.undo_stack) > keep:
+            oldest = self.undo_stack.popleft()
+            total -= len(oldest)
+            for blob in getattr(oldest, 'blobs', ()):
+                ref = held[id(blob)]
+                ref[1] -= 1
+                if not ref[1]:
+                    total -= len(blob)
+                    del held[id(blob)]
+        self._history_blobs = {ref[0]: ref[0] for ref in held.values()}
+        self.history_bytes = total
+
+    def _checkpoint_data(self):
+        """The scene as a JSON-ready checkpoint dict (see :meth:`snapshot`)."""
+        self.sync_terrain()
         terrain_csg = []
         if isinstance(self.terrain_data, dict):
             terrain_csg = [
@@ -1105,7 +1242,7 @@ class EditorState:
             checkpoint.update(stream.all_data())
             checkpoint['editor_camera'] = stream.position
             checkpoint['editor_whole_world'] = stream.whole_world
-        return json.dumps(checkpoint, separators=(',', ':'), check_circular=False)
+        return checkpoint
 
     def save_state(self):
         """Checkpoint the scene *before* an operation changes it.
@@ -1131,8 +1268,9 @@ class EditorState:
         # Keep the redo branch we are about to drop, so an operation that turns
         # out to change nothing can put it back (see discard_last_checkpoint).
         self._discarded_redo = list(self.redo_stack)
-        self.undo_stack.append(self.snapshot())
+        self.undo_stack.append(self._history_entry())
         self.redo_stack.clear()
+        self._enforce_history_budget()
 
     def discard_last_checkpoint(self):
         """Undo a :meth:`save_state` that turned out to guard no change.
@@ -1196,6 +1334,14 @@ class EditorState:
         map that was several seconds of logic-thread stall per undo or Stop.
         """
         state = json.loads(state_json)
+        blobs = getattr(state_json, 'blobs', None)
+        if blobs:
+            # A history entry: its paint chunks name their data in blobs.
+            for key in _PAINT_HISTORY_KEYS:
+                for entry in state.get(key) or ():
+                    ref = entry.pop(_BLOB_REF, None) if isinstance(entry, dict) else None
+                    if ref is not None:
+                        entry['data'] = blobs[ref[0]]
         stream = None
         if 'editor_camera' in state:
             from plugins.bigworld.editor_streaming import EditorCellStream
@@ -1293,7 +1439,7 @@ class EditorState:
         """
         if len(self.undo_stack) <= 1 or isinstance(self.undo_stack[-1], _HistoryBase):
             return False
-        self.redo_stack.append(self.snapshot())
+        self.redo_stack.append(self._history_entry())
         self.restore_state(self.undo_stack.pop())
         return True
 
@@ -1304,7 +1450,7 @@ class EditorState:
         state_json = self.redo_stack.pop()
         # Symmetrically: what makes the redo undoable again is the scene as it
         # is before the redo lands, which is exactly what undo restored.
-        self.undo_stack.append(self.snapshot())
+        self.undo_stack.append(self._history_entry())
         self.restore_state(state_json)
         return True
 

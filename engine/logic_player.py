@@ -60,6 +60,72 @@ class LogicPlayer:
         self.player2_health = 100
         self.player2_max_health = 100
         self.player2_dead = False
+        self._kill_height = None        # (world key, height); see kill_height
+
+    #: How far below the lowest geometry (and the spawn) the level's kill
+    #: height is: room for a pit the terrain's coarse height estimate missed,
+    #: and for a fall to look like one before the respawn.
+    KILL_MARGIN = 1024.0
+
+    def kill_height(self):
+        """The height below which a player or a falling Prop has left the
+        world: :data:`KILL_MARGIN` under the lowest collision brush, the solid
+        terrain's lowest point and the spawn, whichever is lowest. A level
+        with none of these keeps the old fixed clamp
+        (:data:`engine.player.Player.KILL_HEIGHT_DEFAULT`).
+
+        Worked out again only when the collision cache, the terrain, the
+        world epoch or the spawn changes -- not per tick."""
+        from .player import Player
+        logic = self.logic
+        collision = getattr(logic, 'collision_runtime', None)
+        brushes = getattr(collision, '_collision_brushes_cache', None) or ()
+        world = getattr(logic, 'world_runtime', None)
+        terrain = getattr(world, 'terrain', None)
+        session = getattr(logic, 'session_runtime', None)
+        start = getattr(session, 'spawn_start', None)
+        epoch = getattr(getattr(logic, 'editor_state', None), 'world_epoch', 0)
+        key = (id(brushes), len(brushes), id(terrain), epoch, id(start))
+        cached = self._kill_height
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+        from .brush_placement import world_bounds
+        lows = []
+        for brush in brushes:
+            try:
+                lows.append(float(world_bounds(brush)[1]))
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+        if terrain is not None:
+            try:
+                if terrain.is_solid():
+                    lows.append(float(terrain._layer_height_range()[0]))
+            except Exception:       # a terrain that cannot say: brushes decide
+                pass
+        if start is not None:
+            try:
+                lows.append(float(start.pos[1]))
+            except (TypeError, ValueError, IndexError, AttributeError):
+                pass
+        lows = [v for v in lows if math.isfinite(v)]
+        height = (min(lows) - self.KILL_MARGIN) if lows else Player.KILL_HEIGHT_DEFAULT
+        self._kill_height = (key, height)
+        return height
+
+    def _place_void_exit(self, player, offset=0.0):
+        """Give *player* the level's kill height and the spawn to go back to
+        when it leaves the world (Player.leave_void)."""
+        player.kill_height = self.kill_height()
+        start = getattr(self.logic.session_runtime, 'spawn_start', None)
+        point = None
+        if start is not None:
+            try:
+                point = (float(start.pos[0]) + offset, float(start.pos[1]),
+                         float(start.pos[2]))
+            except (TypeError, ValueError, IndexError, AttributeError):
+                point = None
+        player.respawn_point = point
 
     def give_armor(self, amount):
         """Add *amount* armor, up to ``player_max_armor``."""
@@ -96,6 +162,7 @@ class LogicPlayer:
         crouch = KEY_C in keys
         sprint = KEY_SHIFT in keys
 
+        self._place_void_exit(player)
         player.update(
             delta,
             move_dir,
@@ -124,6 +191,8 @@ class LogicPlayer:
         self.player2.pitch -= float(p2['look_dy']) * 0.002
         self.player2.pitch = max(-1.5, min(1.5, self.player2.pitch))
 
+        # Player 2 starts 32 units along from the spawn (qt_game_view).
+        self._place_void_exit(self.player2, offset=32.0)
         self.player2.update(
             delta,
             p2_dir,

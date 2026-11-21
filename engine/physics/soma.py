@@ -399,6 +399,16 @@ class Soma:
     #: of hundred thousand units from the origin.
     CONTACT_SKIN = 0.03125
     REST_SPEED = np.float32(1.0)
+    #: The fastest a body moves, in units a second: one 512-unit grid column
+    #: a 60 Hz tick (three in the longest step, MAX_STEP). Quake's
+    #: sv_maxvelocity is 2000, a run is 300 and a default blast (force 400)
+    #: throws a body of mass 1 at 400, so play never comes near it; what
+    #: does is a blast or a push on a body of the least mass (0.01), a
+    #: hundred times faster. Past it the move is a blur either way, and the
+    #: broad phase, which asks about every column a move crosses, would pay
+    #: for each of them: two steps at ten million units a second took five
+    #: seconds.
+    MAX_SPEED = np.float32(512.0 * 60.0)
 
     #: The share of its ``friction`` a body that ``rolls`` loses to the ground:
     #: rolling loses far less speed than sliding.
@@ -486,6 +496,13 @@ class Soma:
         self._clear_rolling()
         self._clear_body_index()
         self._dirty = False
+        #: Bodies removed since the last repack, by entity id: still listed in
+        #: ``_entities`` (their rows are as last packed) until _pack drops them.
+        self._removed = set()
+        #: The columns each row's registration set (_AUTHORED), as it set
+        #: them, by row as last packed: a repack takes a carried-over row's
+        #: from here rather than reading its descriptor again.
+        self._authored = {}
         # Baseline for entities_that_changed_cell(): one (N, 2) cell array.
         self._reported_cell = None
 
@@ -531,6 +548,8 @@ class Soma:
         self._clear_body_index()
         self._reported_cell = None
         self._dirty = False
+        self._removed = set()
+        self._authored = {}
 
     def _clear_body_index(self):
         """Where the bodies are, for bodies meeting bodies (see
@@ -597,6 +616,14 @@ class Soma:
     _CARRIED = ('_position', '_velocity', '_awake', '_kinematic', '_orientation',
                 '_half', '_offset', '_lying', '_stand_half', '_stand_offset',
                 '_tip_left', '_tip_sign', '_tip_from', '_grounded')
+    #: The columns a body's registration sets (its ``_initial`` descriptor).
+    #: A repack puts them back as registered -- as it always has -- but takes
+    #: a carried-over row's from :attr:`_authored`, so only the bodies
+    #: registered since are read one at a time: adding one body to thousands
+    #: is not a pass of Python over all of them.
+    _AUTHORED = ('_mass', '_friction', '_damping', '_gravity', '_angular_velocity',
+                 '_solid', '_physics_enabled', '_rolls', '_meshed', '_bounce',
+                 '_topples')
 
     @staticmethod
     def _shape_from_brush(entity, brush):
@@ -623,7 +650,12 @@ class Soma:
         if body is None:
             body = PhysicsBody(self, entity, entity_id)
             self.bodies[entity_id] = body
-            self._entities.append(entity)
+            if entity_id in self._removed:
+                # Removed and back before the repack: still listed, and taken
+                # afresh -- its old row went with the removal.
+                self._removed.discard(entity_id)
+            else:
+                self._entities.append(entity)
 
         props = getattr(entity, 'properties', {})
         half, offset = self._shape_from_brush(entity, brush)
@@ -662,43 +694,61 @@ class Soma:
     def _pack(self):
         if not self._dirty:
             return
-        n = len(self._entities)
+        if self._removed:
+            # The bodies removed since the last repack leave the list now, all
+            # at once (see remove_body).
+            removed = self._removed
+            self._entities[:] = [e for e in self._entities if id(e) not in removed]
+            removed.clear()
+        entities = self._entities
+        n = len(entities)
         if n == 0:
             self._dirty = False
             return
 
-        # A body may become active immediately before a repack. Preserve its
-        # last observed state by identity so that transition is not swallowed.
-        previous_inactive = {
-            id(entity): bool(self._inactive[i])
-            for i, entity in enumerate(self._entities)
-            if i < len(self._inactive)
-        }
-        previous_pending_settle = {
-            id(entity): bool(self._pending_settle[i])
-            for i, entity in enumerate(self._entities)
-            if i < len(self._pending_settle)
-        }
+        bodies = self.bodies
+        ids = [id(entity) for entity in entities]
+        # Each entity's row as last packed, or -1: never packed, or removed
+        # and registered again.
+        old_index = self._indices
+        was = np.fromiter((old_index.get(i, -1) for i in ids), dtype=np.int64, count=n)
+        packed = was >= 0
+        before = was[packed]
+
+        # Hidden or disabled, and the tier, read afresh. A body may become
+        # active immediately before a repack: its last observed state, taken
+        # by identity, keeps that transition from being swallowed.
+        props = [getattr(entity, 'properties', None) for entity in entities]
+        inactive = np.fromiter(
+            (isinstance(p, dict) and bool(p.get('disabled', False) or p.get('hidden', False))
+             for p in props), dtype=np.bool_, count=n)
+        tier = np.fromiter(
+            ((p.get(SIM_TIER_KEY) or TIER_NEAR) if isinstance(p, dict) else 0
+             for p in props), dtype=np.int8, count=n)
+        previous_inactive = inactive.copy()
+        previous_inactive[packed] = self._inactive[before]
+        pending = np.zeros(n, dtype=np.bool_)
+        pending[packed] = self._pending_settle[before]
+        # Made active again across a repack: its placement is corrected
+        # before it first moves, as for any other reactivation.
+        pending |= previous_inactive & ~inactive
 
         # Bodies that were packed before and have not been registered again
         # keep everything about them that the simulation has changed: adding
         # or removing one body must not stop the others where they are.
-        old_index = self._indices
-        self._indices = {}
-        kept_new, kept_old = [], []
-        for i, entity in enumerate(self._entities):
-            was = old_index.get(id(entity))
-            if was is not None and not self.bodies[id(entity)]._fresh:
-                kept_new.append(i)
-                kept_old.append(was)
-        carried = None
-        if kept_new:
-            kept_old = np.asarray(kept_old, dtype=np.int64)
+        fresh = np.fromiter((bodies[i]._fresh for i in ids), dtype=np.bool_, count=n)
+        kept = packed & ~fresh
+        kept_new = np.flatnonzero(kept)
+        kept_old = was[kept_new]
+        carried = authored = None
+        if kept_new.size:
             carried = {name: getattr(self, name)[kept_old] for name in self._CARRIED}
+            authored = {name: self._authored[name][kept_old] for name in self._AUTHORED}
             # What each stood on, by entity: rows are renumbered below.
-            stood_on = [self._entities_before[int(row)] if row >= 0 else None
-                        for row in self._support[kept_old]]
+            stood_on = [self._entities_before[row] if row >= 0 else None
+                        for row in self._support[kept_old].tolist()]
 
+        self._indices = dict(zip(ids, range(n)))
         self._position = np.empty((n, 3), dtype=np.float32)
         self._offset = np.empty((n, 3), dtype=np.float32)
         self._half = np.empty((n, 3), dtype=np.float32)
@@ -712,9 +762,9 @@ class Soma:
         self._physics_enabled = np.empty(n, dtype=np.bool_)
         self._awake = np.zeros(n, dtype=np.bool_)
         self._kinematic = np.zeros(n, dtype=np.bool_)
-        self._inactive = np.empty(n, dtype=np.bool_)
-        self._tier = np.zeros(n, dtype=np.int8)
-        self._pending_settle = np.empty(n, dtype=np.bool_)
+        self._inactive = inactive
+        self._tier = tier
+        self._pending_settle = pending
         self._rolls = np.zeros(n, dtype=np.bool_)
         self._meshed = np.zeros(n, dtype=np.bool_)
         self._bounce = np.zeros(n, dtype=np.float32)
@@ -732,26 +782,17 @@ class Soma:
         self._any_support = False
         self._bodies_dirty = True
 
-        for i, entity in enumerate(self._entities):
-            props = getattr(entity, 'properties', None)
-            current_inactive = bool(
-                isinstance(props, dict)
-                and (props.get('disabled', False) or props.get('hidden', False)))
-            self._inactive[i] = current_inactive
-            # Made active again across a repack: its placement is corrected
-            # before it first moves, as for any other reactivation.
-            self._pending_settle[i] = previous_pending_settle.get(
-                id(entity), False) or (
-                    previous_inactive.get(id(entity), current_inactive)
-                    and not current_inactive)
-            if isinstance(props, dict):
-                self._tier[i] = props.get(SIM_TIER_KEY) or TIER_NEAR
-            body = self.bodies[id(entity)]
+        if authored is not None:
+            for name, values in authored.items():
+                getattr(self, name)[kept_new] = values
+        # The rest -- new, or registered again -- from their descriptors.
+        for i in np.flatnonzero(~kept).tolist():
+            entity = entities[i]
+            body = bodies[ids[i]]
             (
                 position, half, offset, mass, friction, damping, gravity,
                 angular_velocity, solid, physics_enabled, rolls, bounce, topples,
             ) = body._initial
-            self._indices[id(entity)] = i
             self._position[i] = position
             self._half[i] = half
             self._offset[i] = offset
@@ -773,13 +814,14 @@ class Soma:
                 self._topples[i] = True
                 self._angular_velocity[i] = 0.0
                 self._orientation[i] = self._entity_orientation(entity)
+        # As registered: what the next repack carries over for these rows.
+        self._authored = {name: getattr(self, name).copy() for name in self._AUTHORED}
 
         self._any_topples = bool(self._topples.any())
         self._any_mesh = bool(self._meshed.any())
         if self._any_topples:
             self._lie_as_placed()
         if carried is not None:
-            kept_new = np.asarray(kept_new, dtype=np.int64)
             for name, values in carried.items():
                 getattr(self, name)[kept_new] = values
             for row, entity in zip(kept_new.tolist(), stood_on):
@@ -787,9 +829,9 @@ class Soma:
                 self._support[row] = support
                 if support >= 0:
                     self._any_support = True
-        for body in self.bodies.values():
+        for body in bodies.values():
             body._fresh = False
-        self._entities_before = list(self._entities)
+        self._entities_before = list(entities)
         self._any_rolls = bool(self._rolls.any())
         self._any_spin = bool(self._angular_velocity.any())
         self._any_bounce = bool(self._bounce.any())
@@ -911,21 +953,27 @@ class Soma:
 
     def remove_body(self, entity):
         """Remove *entity*'s body (it was despawned). What stood on it falls.
-        Returns whether it had one."""
-        self._pack()
-        index = self._indices.get(id(entity))
-        if index is None:
+        Returns whether it had one.
+
+        Its row goes at the next repack, with every other body added or
+        removed since: a level despawning a crowd (the collision runtime's
+        ``sync_bodies`` removes one at a time) repacks once, not once a body.
+        Until then the rows are as last packed, and everything that reads
+        them repacks first."""
+        body = self.bodies.pop(id(entity), None)
+        if body is None:
             return False
-        self._wake_dependents(index)
-        self.bodies.pop(id(entity)).clear()
-        self._entities.pop(index)
-        if not self._entities:
+        # Its row as last packed; none for a body registered since, which
+        # nothing has stood on yet.
+        index = self._indices.pop(id(entity), None)
+        if index is not None:
+            self._wake_dependents(index)
+        body.clear()
+        if not self.bodies:
             self.clear()
             return True
-        # Rows are renumbered by the repack; nothing reads them in between.
+        self._removed.add(id(entity))
         self._dirty = True
-        self._bodies_dirty = True
-        self._pack()
         return True
 
     def impulse(self, entity, impulse):
@@ -1722,6 +1770,13 @@ class Soma:
                 self._body_reach = 0.0
         return self._body_rows.size > 1
 
+    #: The most grid cells a query box of :meth:`_bodies_near` is walked
+    #: cell by cell: eight columns square, where a body's move at MAX_SPEED
+    #: in the longest step spans five. A box past it -- a vast body's
+    #: reach, say -- has every obstacle's column tested against it instead,
+    #: which costs as the bodies do rather than as the square of its width.
+    _WALK_CELLS = 64
+
     def _bodies_near(self, lo, hi):
         """``(query, other)``: for each box ``lo[i]..hi[i]`` (float64), every
         obstacle row filed in a cell the box, grown by the reach, touches.
@@ -1729,11 +1784,27 @@ class Soma:
         keys = self._body_keys
         size = float(self.spatial_grid.cell_size)
         reach = self._body_reach
-        cx0 = np.floor((lo[:, 0] - reach) / size).astype(np.int64)
-        cz0 = np.floor((lo[:, 2] - reach) / size).astype(np.int64)
-        more_x = np.floor((hi[:, 0] + reach) / size).astype(np.int64) - cx0
-        more_z = np.floor((hi[:, 2] + reach) / size).astype(np.int64) - cz0
+        x0 = np.floor((lo[:, 0] - reach) / size)
+        z0 = np.floor((lo[:, 2] - reach) / size)
+        more_x = np.floor((hi[:, 0] + reach) / size) - x0
+        more_z = np.floor((hi[:, 2] + reach) / size) - z0
         queries, others = [], []
+        side = np.maximum(more_x, more_z) + 1.0
+        wide = side * side > self._WALK_CELLS
+        if wide.any():
+            wide = np.flatnonzero(wide)
+            self._bodies_spanned(wide, x0, z0, x0 + more_x, z0 + more_z,
+                                 queries, others)
+            # Their own cell is walked with the rest's; no other.
+            more_x = more_x.copy()
+            more_z = more_z.copy()
+            more_x[wide] = 0.0
+            more_z[wide] = 0.0
+        limit = float(self._KEY_BIAS - 1)
+        cx0 = np.clip(x0, -limit, limit).astype(np.int64)
+        cz0 = np.clip(z0, -limit, limit).astype(np.int64)
+        more_x = more_x.astype(np.int64)
+        more_z = more_z.astype(np.int64)
         for dx in range(int(more_x.max()) + 1):
             for dz in range(int(more_z.max()) + 1):
                 if dx or dz:
@@ -1760,6 +1831,29 @@ class Soma:
         if len(queries) == 1:
             return queries[0], others[0]
         return np.concatenate(queries), np.concatenate(others)
+
+    def _bodies_spanned(self, wide, x0, z0, x1, z1, queries, others):
+        """For :meth:`_bodies_near`: each query of *wide* with every obstacle
+        filed in a cell of ``x0..x1, z0..z1`` but its first (``x0, z0``, which
+        the walk finds) -- each obstacle's column tested against the range,
+        a bounded slice of queries at a time. Appended to *queries*/*others*."""
+        keys = self._body_keys
+        if not keys.size:
+            return
+        # The column each obstacle is filed under: _cell_key, undone.
+        cx = keys // self._KEY_STRIDE
+        cz = keys - cx * self._KEY_STRIDE - self._KEY_BIAS
+        chunk = max(1, (1 << 20) // keys.size)
+        for start in range(0, wide.size, chunk):
+            which = wide[start:start + chunk]
+            ax, az = x0[which, None], z0[which, None]
+            inside = ((cx >= ax) & (cx <= x1[which, None])
+                      & (cz >= az) & (cz <= z1[which, None])
+                      & ~((cx == ax) & (cz == az)))
+            query, at = np.nonzero(inside)
+            if query.size:
+                queries.append(which[query])
+                others.append(self._body_rows[at])
 
     def _body_pairs(self, indices, lo, hi):
         """The other bodies near each body row's move ``lo..hi``:
@@ -2491,6 +2585,35 @@ class Soma:
         indices, previous = self._floor_rows(previous_bottom)
         return self._spread(indices, self._floors_scalar(indices, previous))
 
+    def _limit_speed(self, velocity):
+        """No row of *velocity* faster than :data:`MAX_SPEED`: one that is
+        keeps its direction at that speed, and one that is not a number (or
+        is infinite) stops. One comparison for a step with neither, which is
+        every step."""
+        limit = float(self.MAX_SPEED)
+        squared = np.einsum('ij,ij->i', velocity, velocity)
+        over = ~(squared <= np.float32(limit * limit))     # NaN is over, too
+        if not over.any():
+            return
+        over = np.flatnonzero(over)
+        moving = velocity[over].astype(np.float64)
+        speed = np.sqrt(np.einsum('ij,ij->i', moving, moving))
+        finite = np.isfinite(speed)
+        scale = np.where(finite, limit / np.maximum(speed, limit), 0.0)
+        moving[~finite] = 0.0
+        velocity[over] = (moving * scale[:, None]).astype(np.float32)
+
+    def _stop_lost(self, rows):
+        """*rows* without the bodies whose position is not a number -- an
+        entity moved to NaN, say, and synchronised. Those are not stepped:
+        they sleep, stopped, where they are, until something puts them
+        somewhere (one would take the whole step's broad phase down)."""
+        lost = ~np.isfinite(self._position[rows]).all(axis=1)
+        gone = rows[lost]
+        self._velocity[gone] = 0.0
+        self._awake[gone] = False
+        return rows[~lost]
+
     def step(self, delta, player=None):
         self._pack()
         if not self._entities:
@@ -2586,6 +2709,8 @@ class Soma:
         # Everything below is the size of what is awake, not of the world:
         # the awake rows' state is gathered once, worked on, and put back.
         rows = np.flatnonzero(active & self._awake)
+        if rows.size and not np.isfinite(self._position[rows]).all():
+            rows = self._stop_lost(rows)
         if rows.size:
             if self.AUDIT_FLAGS_EVERY:
                 self._audit_in -= 1
@@ -2600,6 +2725,7 @@ class Soma:
 
             damping = self._damping[rows] * np.float32(max(0.0, float(self.damping_scale)))
             velocity *= np.maximum(0.0, 1.0 - damping * dt)[:, None]
+            self._limit_speed(velocity)
 
             old = position.copy()
             previous_bottom = old[:, 1] + self._offset[rows, 1] - self._half[rows, 1]

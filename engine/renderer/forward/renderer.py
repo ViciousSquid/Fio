@@ -246,10 +246,10 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._sprite_depth_scratch = np.empty(0, dtype=np.float64)
         self._sprite_depth_aux_scratch = np.empty(0, dtype=np.float64)
         self._sprite_sorted_slots_scratch = np.empty(0, dtype=np.int32)
-        self._model_instance_vbo = None
-        self._model_instance_capacity = 0
-        self._model_instance_data = np.empty((0, 29), dtype=np.float32)
+        # Model VAOs whose instance attributes are enabled; the buffers are
+        # per draw call (_model_instance_stream).
         self._model_instanced_vaos = set()
+        self._model_instance_streams = {}
         self._model_recipe_scratch = np.empty(0, dtype=np.int32)
         self._model_sorted_slots_scratch = np.empty(0, dtype=np.int32)
 
@@ -311,6 +311,14 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._portal_behind_texture = 0
         self._portal_behind_size = (0, 0)
         self._portal_gl_ready = False
+        # Failing portal frames in a row, when the last was printed, and
+        # whether they have turned portals off for the session (portals.py).
+        self._portal_failures = 0
+        self._portal_failure_reported = None
+        self._portals_disabled = False
+        # Set at the start of each view by render_scene (see there).
+        self._frame_viewport = None
+        self._frame_read_fbo = None
         # True only while the opaque brush passes are drawing a portal's virtual
         # scene. The oblique near-plane clip slices solid brushes open at the
         # destination portal, so the brush passes enable back-face culling for
@@ -830,6 +838,14 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         """
         if not self._probe_capture_pass and not self._portal_scene_pass:
             self._update_reflection_probes(config)
+        if not self._portal_scene_pass:
+            # The view's viewport and read framebuffer, asked once: the
+            # passes read these instead of asking again. A portal view
+            # shares its main view's.
+            self._frame_viewport = tuple(
+                int(v) for v in gl.glGetIntegerv(gl.GL_VIEWPORT))
+            self._frame_read_fbo = int(
+                gl.glGetIntegerv(gl.GL_READ_FRAMEBUFFER_BINDING))
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
         # 'Wireframe': geometry drawn as lines for depth, then coloured by
         # distance in one pass over the frame (draw_distance_pass).
@@ -1047,21 +1063,18 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
                 else np.empty(0, dtype=np.int32)
             )
             if len(portal_slots):
-                try:
-                    self.draw_portals(
-                        portal_table,
-                        portal_slots,
-                        projection,
-                        view,
-                        camera_pos,
-                        config,
-                        lambda view_state, cfg: self._draw_portal_scene(
-                            view_state, cfg, camera_pos),
-                    )
-                    self._proj_ptr = glm.value_ptr(projection)
-                    self._view_ptr = glm.value_ptr(view)
-                except Exception as _pe:
-                    print(f"[Portal] render error: {_pe}")
+                # Contains its own failures: the state it touched is put back
+                # and an error is reported rate-limited (portals.py).
+                self.draw_portals(
+                    portal_table,
+                    portal_slots,
+                    projection,
+                    view,
+                    camera_pos,
+                    config,
+                    lambda view_state, cfg: self._draw_portal_scene(
+                        view_state, cfg, camera_pos),
+                )
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_BLEND)
         brush_display_mode = config.get('brush_display_mode', 'Textured')
@@ -1277,11 +1290,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
             gl.glDeleteBuffers(1, [self._water_surface_vbo])
         if self._water_surface_ebo:
             gl.glDeleteBuffers(1, [self._water_surface_ebo])
-        if self._model_instance_vbo:
-            gl.glDeleteBuffers(1, [self._model_instance_vbo])
-            self._model_instance_vbo = None
-            self._model_instance_capacity = 0
-            self._model_instanced_vaos.clear()
+        self._release_model_instance_streams()
         if self._light_ubo:
             gl.glDeleteBuffers(1, [self._light_ubo])
             self._light_ubo = None

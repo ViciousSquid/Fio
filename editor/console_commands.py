@@ -382,20 +382,23 @@ class ConsoleCommandHandler:
             debug_log("Error", f"Entity '{name}' is not a Monster (type: {type(entity).__name__})")
             return
 
-        # Kill the monster
-        entity.properties['health'] = 0
-        entity.properties['dead'] = True
-        touch(entity)
+        # Kill the monster, and fire its OnDeath, between ticks: the logic
+        # tick (and its I/O) work on this entity, as with every other I/O
+        # command here.
+        with self._io_dispatch_lock():
+            entity.properties['health'] = 0
+            entity.properties['dead'] = True
+            touch(entity)
 
-        # Fire I/O output if available
-        try:
-            # Since we don't have IOManager reference here, we can use the logic_thread's io_manager if in play mode
-            if self.main_window.view_3d.logic_thread:
-                io_manager = self.main_window.view_3d.logic_thread.io_manager
-                if io_manager:
-                    io_manager.fire_output(entity, 'OnDeath')
-        except Exception as e:
-            debug_log("Warning", f"Could not fire OnDeath: {e}")
+            # Fire I/O output if available
+            try:
+                # Since we don't have IOManager reference here, we can use the logic_thread's io_manager if in play mode
+                if self.main_window.view_3d.logic_thread:
+                    io_manager = self.main_window.view_3d.logic_thread.io_manager
+                    if io_manager:
+                        io_manager.fire_output(entity, 'OnDeath')
+            except Exception as e:
+                debug_log("Warning", f"Could not fire OnDeath: {e}")
 
         debug_log("Info", f"Monster '{name}' killed (health set to 0, dead=True)")
         self.main_window.update_all_ui()

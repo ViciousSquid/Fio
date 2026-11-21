@@ -527,8 +527,7 @@ class LightingMixin:
             raise RuntimeError(
                 "Fio 2.5.6 shadow rendering requires EntityTable state")
 
-        caster_slots = self._shadow_caster_slots(
-            table, np.asarray(caster_slots, dtype=np.int32))
+        caster_slots = self._kept_shadow_casters(table, caster_slots)
         dense_model_slots = self._dense_shadow_model_slots(
             entity_table, entity_hidden)
 
@@ -581,8 +580,8 @@ class LightingMixin:
             radius = max(
                 float(light_table.light_params[light_slot_value, 1]), 1.0)
 
-            in_slots, brush_keys = self._casters_in_reach(
-                table, caster_slots, lx, ly, lz, radius)
+            in_slots, brush_keys = self._kept_casters_in_reach(
+                shadow_slot, table, caster_slots, lx, ly, lz, radius)
             in_models, model_keys = self._collect_dense_shadow_models(
                 entity_table, dense_model_slots, lx, ly, lz, radius)
 
@@ -597,6 +596,11 @@ class LightingMixin:
                 light_slot_value, shadow_slot, in_slots, in_models, sig,
                 lx, ly, lz, radius,
             ))
+
+        if not to_render:
+            # Every cube-map is current: nothing to bind, so no GL state to
+            # save and restore either (six queries, which stall a driver).
+            return
 
         prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
         prev_vp = gl.glGetIntegerv(gl.GL_VIEWPORT)

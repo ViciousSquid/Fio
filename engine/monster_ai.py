@@ -123,12 +123,18 @@ class MonsterAI:
         #: Monsters shoved by a blast: id(monster) -> [monster, vx, vz],
         #: world units a second, slowing by KNOCKBACK_DRAG (knock_back).
         self._knockback = {}
+        #: (thing-list key, PathNodes) for detour searches; see _path_nodes.
+        self._path_node_cache = None
+        self.path_node_scans = 0        # thing-list scans by _path_nodes
 
     #: How fast a shove dies away (1/s): a monster pushed at v slides about
     #: v / KNOCKBACK_DRAG units.
     KNOCKBACK_DRAG = 6.0
     #: Below this speed a shove is over.
     KNOCKBACK_MIN_SPEED = 8.0
+    #: Most wall-margin-long steps one tick's slide is tested in (1600 units
+    #: a tick, 48000 u/s at 30 Hz: far beyond any blast's push).
+    KNOCKBACK_MAX_STEPS = 16
 
     def knock_back(self, monster, dx, dz, speed):
         """Shove *monster* along (dx, dz) at *speed* (an explosion). Taken
@@ -157,17 +163,36 @@ class MonsterAI:
                 done.append(key)
                 continue
             x, y, z = (float(v) for v in monster.pos)
-            nx, nz = x + vx * delta, z + vz * delta
-            if not self._monster_overlaps_wall(nx, y, nz, MONSTER_WALL_MARGIN):
-                monster.pos = [nx, y, nz]
-            elif not self._monster_overlaps_wall(nx, y, z, MONSTER_WALL_MARGIN):
-                monster.pos = [nx, y, z]
-                vz = 0.0
-            elif not self._monster_overlaps_wall(x, y, nz, MONSTER_WALL_MARGIN):
-                monster.pos = [x, y, nz]
-                vx = 0.0
-            else:
-                vx = vz = 0.0
+            if not (math.isfinite(vx) and math.isfinite(vz)):
+                done.append(key)
+                continue
+            # The slide is tested along its path, not just where it ends: in
+            # steps no longer than the wall margin (half the monster's box),
+            # so a hard shove cannot carry the box clean over a thin wall.
+            # Past KNOCKBACK_MAX_STEPS steps the rest of this tick's slide is
+            # dropped rather than taken in longer, unsafe steps.
+            reach = math.hypot(vx, vz) * delta
+            steps = max(1, min(self.KNOCKBACK_MAX_STEPS,
+                               math.ceil(reach / MONSTER_WALL_MARGIN)))
+            scale = min(1.0, MONSTER_WALL_MARGIN * steps / reach) if reach > 0.0 else 1.0
+            sx, sz = vx * delta * scale / steps, vz * delta * scale / steps
+            moved = False
+            for _ in range(steps):
+                nx, nz = x + sx, z + sz
+                if not self._monster_overlaps_wall(nx, y, nz, MONSTER_WALL_MARGIN):
+                    x, z = nx, nz
+                elif not self._monster_overlaps_wall(nx, y, z, MONSTER_WALL_MARGIN):
+                    x = nx
+                    sz = vz = 0.0
+                elif not self._monster_overlaps_wall(x, y, nz, MONSTER_WALL_MARGIN):
+                    z = nz
+                    sx = vx = 0.0
+                else:
+                    vx = vz = 0.0
+                    break
+                moved = True
+            if moved:
+                monster.pos = [x, y, z]
             vx, vz = vx * decay, vz * decay
             if vx * vx + vz * vz < self.KNOCKBACK_MIN_SPEED ** 2:
                 done.append(key)
@@ -1946,12 +1971,18 @@ the scalar fallback for callers that do not have the dense table.
                 if blocked_count == 1 or blocked_count % 120 == 0:
                     debug_log("Pathfinding", f"'{mname}' blocked by wall en route to '{current_node_name}' (stuck for {blocked_count} ticks)")
 
-                if blocked_count >= MONSTER_STUCK_THRESHOLD and not state.get('detour_node'):
+                if (blocked_count >= MONSTER_STUCK_THRESHOLD and not state.get('detour_node')
+                        and self._detour_search_due(state, m_pos, current_node_name, blocked_count)):
                     detour = self._find_nearby_detour_node(m_pos, current_node_name, mtype)
                     if detour:
+                        state.pop('_detour_miss', None)
                         state['detour_node'] = detour
                         state['patrol_blocked_count'] = 0
                         debug_log("Pathfinding", f"'{mname}' DETOUR: blocked at '{current_node_name}', switching to '{detour}'")
+                    else:
+                        # Nothing found from here: don't ask again every tick.
+                        state['_detour_miss'] = (current_node_name,
+                                                self._detour_cell(m_pos), blocked_count)
 
     def _advance_patrol_index(self, monster, state: Dict, chain: List[str], patrol_mode: str, mname: str):
         """Advance the patrol index, firing OnMonsterLeft on the node left behind.
@@ -2043,6 +2074,47 @@ the scalar fallback for callers that do not have the dense table.
             return entity
         return None
 
+    #: AI ticks a stuck monster waits, after a detour search found nothing,
+    #: before searching again from the same place for the same node (one
+    #: second at 30 Hz). Moving to another DETOUR_MEMO_CELL, or being sent
+    #: to another node, searches at once.
+    DETOUR_RETRY_TICKS = 30
+    #: The memo's notion of "the same place": world units per cell.
+    DETOUR_MEMO_CELL = 32.0
+
+    def _detour_cell(self, m_pos):
+        size = self.DETOUR_MEMO_CELL
+        return (math.floor(float(m_pos.x) / size), math.floor(float(m_pos.y) / size),
+                math.floor(float(m_pos.z) / size))
+
+    def _detour_search_due(self, state, m_pos, node_name, blocked_count):
+        """Whether a stuck monster should search for a detour this tick: not
+        when the last search, from this same place for this same node during
+        this same spell of being stuck, found nothing less than
+        DETOUR_RETRY_TICKS ago."""
+        miss = state.get('_detour_miss')
+        if miss is None:
+            return True
+        miss_node, miss_cell, miss_count = miss
+        if miss_node != node_name or blocked_count < miss_count:
+            return True                 # another node, or a new spell
+        if miss_cell != self._detour_cell(m_pos):
+            return True
+        return blocked_count - miss_count >= self.DETOUR_RETRY_TICKS
+
+    def _path_nodes(self):
+        """Every PathNode in the world, cached per thing list (rebuilt when
+        it is another list or its length changed); the nodes themselves are
+        read live, so a node moved, renamed or disabled is seen at once."""
+        things = self.lt.editor_state.things
+        key = (id(things), len(things))
+        cached = getattr(self, '_path_node_cache', None)
+        if cached is None or cached[0] != key:
+            self.path_node_scans = getattr(self, 'path_node_scans', 0) + 1
+            cached = self._path_node_cache = (
+                key, tuple(t for t in things if isinstance(t, PathNode)))
+        return cached[1]
+
     def _find_nearby_detour_node(self, m_pos: glm.vec3, blocked_node_name: str, mtype: str) -> str:
         """Find a nearby PathNode that accepts this monster type to route around an obstacle."""
         if PathNode is None:
@@ -2051,9 +2123,7 @@ the scalar fallback for callers that do not have the dense table.
         best_name = ''
         best_dist = MONSTER_DETOUR_RANGE + 1.0
 
-        for t in self.lt.editor_state.things:
-            if not isinstance(t, PathNode):
-                continue
+        for t in self._path_nodes():
             node_name = t.properties.get('name', '')
             if not node_name or node_name == blocked_node_name:
                 continue
