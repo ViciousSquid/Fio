@@ -5435,8 +5435,7 @@
                 "down": 0.0,
                 "north": 0.0,
                 "south": 0.0
-            },
-            "hidden": false
+            }
         },
         {
             "pos": [
@@ -7830,93 +7829,22 @@
         {
             "type": "prop",
             "pos": [
-                -864.0,
+                -856.0,
                 240.0,
-                104.0
+                40.0
             ],
             "properties": {
                 "render_mode": "model",
                 "rotation": [
                     0,
                     90.0,
-                    0.0
-                ],
-                "model_path": "assets/models/Retro_Dining_Chair_Cream.obj",
-                "type": "prop",
-                "io_enabled": true,
-                "name": "Retro_Dining_Chair_Cream",
-                "id": "0cd20de6-9b4c-4af8-8577-fc005eb4f8dc",
-                "sprite_path": "assets/sprites/pickup.png",
-                "sprite_size": [
-                    32.0,
-                    32.0
-                ],
-                "carry_enabled": false,
-                "carry_reach": 110.0,
-                "carry_distance": 55.0,
-                "carry_offset": [
-                    0.0,
-                    -6.0,
-                    0.0
-                ],
-                "drop_velocity": 0.0,
-                "drop_angular_velocity": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "collect_enabled": false,
-                "collect_type": "item",
-                "collect_value": 25,
-                "collect_activation": "walk_over",
-                "collect_collected": false,
-                "collect_respawns": false,
-                "collect_respawn_time": 20.0,
-                "collect_key_name": "blue_key",
-                "collect_item": "gun1",
-                "collect_custom_sprite": "",
-                "mass": 1.0,
-                "collision_size": [
-                    0.0,
-                    0.0,
-                    0.0
-                ],
-                "physics_enabled": false,
-                "no_collision": true,
-                "collision_shape": "aabb",
-                "gravity": true,
-                "friction": 0.55,
-                "linear_damping": 0.08,
-                "angular_damping": 0.12,
-                "disabled": false,
-                "scale": [
-                    1,
-                    1,
-                    1
-                ],
-                "topples": false
-            },
-            "io_connections": []
-        },
-        {
-            "type": "prop",
-            "pos": [
-                -872.0,
-                240.0,
-                168.0
-            ],
-            "properties": {
-                "render_mode": "model",
-                "rotation": [
-                    0,
-                    90.0,
-                    0.0
+                    0
                 ],
                 "model_path": "assets/models/Retro_Dining_Chair_Cream.obj",
                 "type": "prop",
                 "io_enabled": true,
                 "name": "Retro_Dining_Chair_Cream (copy)",
-                "id": "9f946290-128d-410c-9fcc-f64b3b0f0feb",
+                "id": "b3219807-6bb3-4c67-8290-7d8a0cd9fb20",
                 "sprite_path": "assets/sprites/pickup.png",
                 "sprite_size": [
                     32.0,
@@ -7972,14 +7900,85 @@
         {
             "type": "prop",
             "pos": [
-                -896.0,
+                -856.0,
                 240.0,
-                232.0
+                112.0
             ],
             "properties": {
                 "render_mode": "model",
                 "rotation": [
+                    0,
+                    88.0,
+                    0
+                ],
+                "model_path": "assets/models/Retro_Dining_Chair_Cream.obj",
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Retro_Dining_Chair_Cream (copy) (copy)",
+                "id": "01d8d99e-0909-4dbf-99b3-7c249cb3ad5d",
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
                     0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "aabb",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -888.0,
+                240.0,
+                240.0
+            ],
+            "properties": {
+                "render_mode": "model",
+                "rotation": [
+                    0,
                     80.0,
                     0
                 ],
@@ -7987,7 +7986,149 @@
                 "type": "prop",
                 "io_enabled": true,
                 "name": "Retro_Dining_Chair_Orange",
-                "id": "b41c5b6b-25c6-418c-8b0c-0c0713b40752",
+                "id": "ae39d118-4d8d-4f22-8786-057773c68641",
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "aabb",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -864.0,
+                240.0,
+                176.0
+            ],
+            "properties": {
+                "render_mode": "model",
+                "rotation": [
+                    0,
+                    90.0,
+                    0
+                ],
+                "model_path": "assets/models/Retro_Dining_Chair_Cream.obj",
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Retro_Dining_Chair_Cream (copy) (copy 2)",
+                "id": "86b3b17c-4ed4-4a8e-8ebc-5131523eb0f3",
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "aabb",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -1184.0,
+                240.0,
+                368.0
+            ],
+            "properties": {
+                "render_mode": "model",
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "model_path": "assets/models/Retro_Rubber_Plant.obj",
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Retro_Rubber_Plant",
+                "id": "95ff5ea2-49a9-40b6-a07a-37f5ac4a014a",
                 "sprite_path": "assets/sprites/pickup.png",
                 "sprite_size": [
                     32.0,
