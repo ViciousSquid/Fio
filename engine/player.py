@@ -189,7 +189,8 @@ def _model_triangle_contact_normal(displacement, distance, face_normal,
     return (n[0] / length, n[1] / length, n[2] / length)
 
 
-def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle, normal):
+def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle,
+                                    normal, capsule_centre=None):
     """Continuous two-sided sphere/triangle contact.
 
     Returns (hit, hit_time, closest_point, slide_normal). The face is swept
@@ -238,11 +239,18 @@ def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle, n
         n = scale(face, 1.0 / face_len)
         distance = dot(sub(p, v0), n)
         normal_speed = dot(movement, n)
-        if abs(normal_speed) > eps and abs(distance) > eps:
-            # Do not also test the opposite offset plane: when a sphere is
-            # already touching a deck, that false side turns a jump away from
-            # the deck into a t=0 collision.
-            side = 1.0 if distance > 0.0 else -1.0
+        if abs(normal_speed) > eps:
+            if abs(distance) > eps:
+                side = 1.0 if distance > 0.0 else -1.0
+            elif capsule_centre is not None:
+                body_side = dot(sub(capsule_centre, v0), n)
+                side = (1.0 if body_side > eps else -1.0
+                        if body_side < -eps else
+                        (1.0 if normal_speed > 0.0 else -1.0))
+            else:
+                side = 1.0 if normal_speed > 0.0 else -1.0
+            # Only the capsule's current side is eligible. Testing the
+            # opposite plane makes a jump away from a touching deck collide.
             approach_speed = side * normal_speed
             if approach_speed < -eps:
                 separation = side * distance
@@ -1727,7 +1735,8 @@ class Player:
                                                 position[1] + oy,
                                                 position[2] + oz)
                         hit, hit_time, _point, normal = _intersect_swept_sphere_triangle(
-                            sphere_start, glm.vec3(*remaining), radius, tri, face_normal
+                            sphere_start, glm.vec3(*remaining), radius, tri, face_normal,
+                            capsule_centre=glm.vec3(*position)
                         )
                         if hit and (best is None or hit_time < best[0]):
                             best = (hit_time, (float(normal.x), float(normal.y),
