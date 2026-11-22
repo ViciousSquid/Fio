@@ -278,14 +278,20 @@ def test_player_can_climb_individual_stair_treads_in_a_model_mesh(use_grid):
         spatial.populate([brush])
 
     move = glm.vec3(1.0, 0.0, 0.0)
+    saw_raised_tread = False
     for _ in range(240):
         player.update(
             1.0 / 60.0, move, False, False, [brush],
             spatial_grid=spatial, gravity=-800.0,
         )
+        if player.pos.y > 50.5:
+            saw_raised_tread = True
+            assert player.on_ground, "a mesh tread must support the player immediately"
+            assert player.ground_object is brush
         if player.pos.x >= 220.0:
             break
 
+    assert saw_raised_tread, "the fixture must exercise mesh step-up"
     assert player.pos.x >= 200.0, "the player should climb all three mesh treads"
     assert player.pos.y == pytest.approx(86.0, abs=1.0)
     assert player.on_ground
