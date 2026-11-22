@@ -1533,6 +1533,12 @@ class Player:
             if self._model_mesh_max_penetration(
                     model_meshes, offsets, radius) > 1e-4:
                 return "unresolved"
+            if aabb_brushes:
+                player_min = self.pos - self._half
+                player_max = self.pos + self._half
+                if any(not self._has_headroom(brush, player_min, player_max)
+                       for brush in aabb_brushes):
+                    return "unresolved"
             return None
 
         if not shapes:
