@@ -1,6 +1,7 @@
 """Desktop lighting and shadow formulas, with an ES-compatible atlas lookup."""
 import re
-from engine.shaders import DEFAULT_SHADERS, SHADOW_GLSL, MAX_SHADOW_LIGHTS, light_ubo_source
+from engine.shaders import (DEFAULT_SHADERS, SHADOW_GLSL, MAX_SHADOW_LIGHTS, MAX_LIGHTS,
+                            MAX_LIGHTS_PLAYER, light_ubo_source)
 from player.gles_shaders import translate
 
 VERTEX = """#version 300 es
@@ -43,6 +44,12 @@ highp float _sampleShadowCube(int idx, highp vec3 delta) {
 """
 _shadow = _ATLAS_SAMPLE + SHADOW_GLSL[SHADOW_GLSL.index('// idx'):]
 _fragment = DEFAULT_SHADERS['textured.frag'].replace(SHADOW_GLSL, _shadow)
+# The player's own light budget (see engine.shaders.MAX_LIGHTS_PLAYER), not
+# the desktop editor's.
+for _old, _new in ((f'lights[{MAX_LIGHTS}]', f'lights[{MAX_LIGHTS_PLAYER}]'),
+                   (f'i < {MAX_LIGHTS};', f'i < {MAX_LIGHTS_PLAYER};')):
+    assert _old in _fragment, "the desktop light loop changed shape"
+    _fragment = _fragment.replace(_old, _new)
 _fragment = _fragment.replace('uniform vec4 model_tint;', 'uniform vec4 tint;\nuniform bool unlit;')
 _fragment = _fragment.replace('texColor.rgb *= mix(vec3(1.0), model_tint.rgb, model_tint.a);',
                             'texColor *= tint;\n    if (unlit) { FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a); return; }')
@@ -85,10 +92,12 @@ def fragment(quality):
         # still reject grazing-angle self-shadowing after depth quantisation.
         source = source.replace('highp float bias = diskRadius + clamp(',
                                 'highp float bias = diskRadius + 2.0 * farPlane / shadowTileSize + clamp(')
-    if quality.lights_per_batch < 64:
+    if quality.lights_per_batch < MAX_LIGHTS_PLAYER:
         source = source.replace('uniform int lightCount;',
             f'uniform int lightCount;\nuniform int lightIndices[{quality.lights_per_batch}];')
-        source = source.replace('for(int i = 0; i < lightCount && i < 64; i++) {',
+        loop = f'for(int i = 0; i < lightCount && i < {MAX_LIGHTS_PLAYER}; i++) {{'
+        assert loop in source, "the player light loop changed shape"
+        source = source.replace(loop,
             f'for(int localLight = 0; localLight < lightCount && localLight < {quality.lights_per_batch}; localLight++) {{\n'
             '        int i = lightIndices[localLight];')
     return source

@@ -1,6 +1,8 @@
 """Player-only quality budgets; shared desktop shaders remain unchanged."""
 from dataclasses import dataclass
 
+from engine.shaders import MAX_LIGHTS_PLAYER
+
 
 @dataclass(frozen=True)
 class RenderQuality:
@@ -9,7 +11,8 @@ class RenderQuality:
     adaptive: bool = False
     shadow_samples: int = 20
     fog_steps: int = 16
-    lights_per_batch: int = 64
+    #: Every light the player draws; anything smaller ranks lights per batch.
+    lights_per_batch: int = MAX_LIGHTS_PLAYER
     static_cell_size: int = 0
     animation_mipmaps: bool = True
     view_distance: float = 4096.0

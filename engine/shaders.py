@@ -142,7 +142,13 @@ MAX_SHADOW_LIGHTS = 8
 # undefined behaviour, and 24 of the "32" lights never worked in the first
 # place. Every loop over `active_lights` is now clamped to its own array as
 # well, so a mismatch can never be more than lights quietly not contributing.
-MAX_LIGHTS = 64
+MAX_LIGHTS = 128
+
+# The Android/GLES player keeps the previous 64. Its shared light block packs
+# each light into three vec4s, and some Android GLES translators count block
+# members against the default-uniform budget, whose ES 3.0 minimum is 224
+# vectors: 64 lights (192 vectors) fit, 128 (384) would not link there.
+MAX_LIGHTS_PLAYER = 64
 
 # The ARM/low-power variants keep a smaller array deliberately. Uniform storage
 # is the scarce resource on those GPUs, and the per-fragment loop runs
