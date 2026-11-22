@@ -374,9 +374,11 @@ class LogicCollision:
 
             rot = props.get('rotation', [0, 0, 0])
             is_physics_body = physics_enabled
-            # Two shapes, both taken from the model: AABB (the default: a box
-            # around it, the cheap path everything was on) and Mesh (its
-            # triangles). 'auto', which older maps hold, is AABB.
+            # Two shapes, both taken from the model: AABB (the compatibility
+            # default for existing Prop records, and the Ball/Barrel presets)
+            # or Mesh (the model's actual triangles). Newly placed generic
+            # models are assigned Mesh by Prop.for_model(). 'auto', which older
+            # maps hold, remains AABB.
             collision_shape = str(
                 props.get('collision_shape', 'aabb')
             ).lower()
