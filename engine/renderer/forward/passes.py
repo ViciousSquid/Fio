@@ -75,6 +75,13 @@ def _set_model_tint(uniforms, tint):
             gl.glUniform4f(location, 0.0, 0.0, 0.0, 0.0)
 
 
+def _set_model_emissive(uniforms, emissive):
+    """Set the glTF material's linear emissiveFactor for this model draw."""
+    location = uniforms['emissive_factor']
+    if location is not None and location != -1:
+        gl.glUniform3fv(location, 1, emissive)
+
+
 
 class PassesMixin:
     """ForwardRenderer's draw passes."""
@@ -179,6 +186,7 @@ class PassesMixin:
         view_ptr = glm.value_ptr(view)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
         gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, view_ptr)
+        _set_model_emissive(uniforms, (0.0, 0.0, 0.0))
         gl.glBindVertexArray(self.vaos['cube'])
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         model_loc      = uniforms['model']
@@ -411,6 +419,7 @@ class PassesMixin:
                 if current_shader != shader_name:
                     continue
                 u = self.uniforms[shader_name]
+                _set_model_emissive(u, (0.0, 0.0, 0.0))
                 gl.glBindTexture(
                     gl.GL_TEXTURE_2D,
                     self._manual_model_texture_id(manual_texture))
@@ -438,6 +447,7 @@ class PassesMixin:
                 if current_shader != shader_name:
                     continue
                 u = self.uniforms[shader_name]
+                _set_model_emissive(u, (0.0, 0.0, 0.0))
                 if shader_kind == 'lit':
                     gl.glUniform3fv(u['object_color'], 1, _tinted((0.8, 0.8, 0.8), tint))
                     gl.glUniform1f(u['alpha'], 1.0)
@@ -460,6 +470,7 @@ class PassesMixin:
                 if current_shader != shader_name:
                     continue
                 u = self.uniforms[shader_name]
+                _set_model_emissive(u, group.emissive)
                 if shader_kind == 'textured':
                     gl.glBindTexture(gl.GL_TEXTURE_2D, group.texture)
                     if tint:
@@ -568,6 +579,8 @@ class PassesMixin:
                 continue
 
             u = self.uniforms[shader_name]
+            _set_model_emissive(
+                u, group.emissive if group is not None else (0.0, 0.0, 0.0))
             if shader_kind == 'textured':
                 gl.glBindTexture(
                     gl.GL_TEXTURE_2D,
