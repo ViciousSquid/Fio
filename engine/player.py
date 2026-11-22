@@ -846,8 +846,20 @@ class Player:
         if spatial_grid:
             # Use the grid to get only nearby static brushes
             half = self._half
-            player_min = self.pos - half - glm.vec3(self.speed * delta + 32)  # pad for movement
-            player_max = self.pos + half + glm.vec3(self.speed * delta + 32)
+            # The player can carry momentum well above the nominal walk speed
+            # (explosions and body contacts both add velocity). Bound the
+            # displacement after this tick's maximum movement acceleration,
+            # jump impulse and gravity change, not self.speed (the input wish).
+            horizontal_accel = max(PM_ACCELERATE, PM_AIRACCELERATE) * PM_MAXSPEED
+            pad_x = (abs(float(self.velocity.x)) * delta
+                     + horizontal_accel * delta * delta + 32.0)
+            pad_z = (abs(float(self.velocity.z)) * delta
+                     + horizontal_accel * delta * delta + 32.0)
+            pad_y = ((abs(float(self.velocity.y)) + JUMP_STRENGTH
+                      + abs(float(gravity)) * delta) * delta + 32.0)
+            movement_pad = glm.vec3(pad_x, pad_y, pad_z)
+            player_min = self.pos - half - movement_pad
+            player_max = self.pos + half + movement_pad
             colliders = spatial_grid.get_potential_colliders(player_min, player_max)
         else:
             # Fallback: all brushes (old behaviour)
@@ -1477,18 +1489,17 @@ class Player:
                 fallback = tuple(float(v) for v in sweep_start)
             self.pos = glm.vec3(*fallback)
             self.velocity = glm.vec3(*resolved_velocity)
-            self.on_ground = entry_on_ground
-            self.ground_object = entry_ground_object
+            self.on_ground = False
+            self.ground_object = None
+            self._apply_final_ground_state(
+                model_meshes, shapes, aabb_brushes, offsets, radius
+            )
 
-        def apply_model_support():
-            if not _resolve_models or not model_meshes or self.velocity.y > 1e-3:
-                return
-            support = self._find_model_mesh_support(model_meshes, offsets, radius)
-            if support is not None:
-                if self.velocity.y < 0.0:
-                    self.velocity.y = 0.0
-                self.on_ground = True
-                self.ground_object = support
+        def apply_final_ground_state():
+            if _resolve_models:
+                self._apply_final_ground_state(
+                    model_meshes, shapes, aabb_brushes, offsets, radius
+                )
 
         start = entry_pos if cover is not None else None
 
@@ -1533,6 +1544,8 @@ class Player:
             if self._model_mesh_max_penetration(
                     model_meshes, offsets, radius) > 1e-4:
                 return "unresolved"
+            if self._convex_max_penetration(shapes, offsets, radius) > 1e-4:
+                return "unresolved"
             if aabb_brushes:
                 player_min = self.pos - self._half
                 player_max = self.pos + self._half
@@ -1549,7 +1562,7 @@ class Player:
             if status == "unresolved":
                 rollback_unresolved()
                 return False
-            apply_model_support()
+            apply_final_ground_state()
             return False
 
         ground_normal = None      # steepest-up contact this resolve
@@ -1676,7 +1689,7 @@ class Player:
         if status == "unresolved":
             rollback_unresolved()
             return False
-        apply_model_support()
+        apply_final_ground_state()
         return False
 
     def _sweep_model_triangle_meshes(self, model_meshes, offsets, radius, sweep_start):
@@ -1806,16 +1819,17 @@ class Player:
         centre = (float(self.pos.x), float(self.pos.y), float(self.pos.z))
         velocity = (float(self.velocity.x), float(self.velocity.y),
                     float(self.velocity.z))
-        limit_sq = (radius + 0.25) ** 2
+        support_radius = radius + 0.25
+        limit_sq = support_radius * support_radius
         best_normal_y = PM_GROUND_NORMAL
         best_brush = None
 
         for brush, triangles, bounds in model_meshes:
             if bounds:
                 mn, mx = bounds
-                if (sphere[0] + radius < mn[0] or sphere[0] - radius > mx[0]
-                        or sphere[1] + radius < mn[1] or sphere[1] - radius > mx[1]
-                        or sphere[2] + radius < mn[2] or sphere[2] - radius > mx[2]):
+                if (sphere[0] + support_radius < mn[0] or sphere[0] - support_radius > mx[0]
+                        or sphere[1] + support_radius < mn[1] or sphere[1] - support_radius > mx[1]
+                        or sphere[2] + support_radius < mn[2] or sphere[2] - support_radius > mx[2]):
                     continue
             for tri, face_normal in triangles:
                 v0, v1, v2 = tri
@@ -1825,9 +1839,9 @@ class Player:
                 tri_max = (max(v0[0], v1[0], v2[0]),
                            max(v0[1], v1[1], v2[1]),
                            max(v0[2], v1[2], v2[2]))
-                if (sphere[0] + radius < tri_min[0] or sphere[0] - radius > tri_max[0]
-                        or sphere[1] + radius < tri_min[1] or sphere[1] - radius > tri_max[1]
-                        or sphere[2] + radius < tri_min[2] or sphere[2] - radius > tri_max[2]):
+                if (sphere[0] + support_radius < tri_min[0] or sphere[0] - support_radius > tri_max[0]
+                        or sphere[1] + support_radius < tri_min[1] or sphere[1] - support_radius > tri_max[1]
+                        or sphere[2] + support_radius < tri_min[2] or sphere[2] - support_radius > tri_max[2]):
                     continue
                 closest = _closest_point_on_triangle(sphere, v0, v1, v2)
                 delta = (sphere[0] - closest[0], sphere[1] - closest[1],
@@ -1883,6 +1897,128 @@ class Player:
                     if distance_sq < radius_sq:
                         deepest = max(deepest, radius - math.sqrt(distance_sq))
         return deepest
+
+    def _find_aabb_support(self, aabb_brushes):
+        """Find a box whose top supports the capsule at its current position."""
+        half = self._half
+        feet_y = float(self.pos.y - half.y)
+        px, pz = float(self.pos.x), float(self.pos.z)
+        for brush in aabb_brushes or ():
+            bounds = brush_aabb_bounds(brush)
+            if abs(feet_y - float(bounds[4])) > 0.25:
+                continue
+            if (px + half.x > bounds[0] and px - half.x < bounds[3]
+                    and pz + half.z > bounds[2] and pz - half.z < bounds[5]):
+                return brush
+        return None
+
+    def _find_convex_support(self, shapes, offsets, radius):
+        """Find an upward convex face touching the lowest capsule sphere."""
+        if not shapes or not offsets:
+            return None
+        bottom_index = min(range(len(offsets)), key=lambda i: offsets[i][1])
+        for shape in shapes:
+            brush, planes, _bounds, frame, turned = shape
+            if not planes:
+                continue
+            if frame is None:
+                px, py, pz = float(self.pos.x), float(self.pos.y), float(self.pos.z)
+                local_offsets = offsets
+            elif frame.r is None:
+                px = float(self.pos.x + frame.ox)
+                py = float(self.pos.y + frame.oy)
+                pz = float(self.pos.z + frame.oz)
+                local_offsets = offsets
+            else:
+                px, py, pz = frame.to_shape(
+                    float(self.pos.x), float(self.pos.y), float(self.pos.z)
+                )
+                if turned is None:
+                    turned = [frame.dir_to_shape(*offset) for offset in offsets]
+                    shape[4] = turned
+                local_offsets = turned
+
+            ox, oy, oz = local_offsets[bottom_index]
+            cx, cy, cz = px + ox, py + oy, pz + oz
+            best_sd = -1e30
+            support_normal_y = -1.0
+            for nx, ny, nz, distance in planes:
+                signed_distance = nx * cx + ny * cy + nz * cz - distance
+                if signed_distance > best_sd:
+                    best_sd = signed_distance
+                    if frame is not None and frame.r is not None:
+                        support_normal_y = frame.to_world_dir(nx, ny, nz)[1]
+                    else:
+                        support_normal_y = ny
+            if (abs(best_sd - radius) <= 0.25
+                    and best_sd <= radius + 0.25
+                    and support_normal_y >= PM_GROUND_NORMAL):
+                return brush
+        return None
+
+    def _convex_max_penetration(self, shapes, offsets, radius):
+        """Maximum capsule-sphere penetration into the supplied convex brushes."""
+        deepest = 0.0
+        half = self._half
+        for brush, planes, bounds, frame, turned in shapes:
+            if not planes:
+                continue
+            if frame is None:
+                px, py, pz = float(self.pos.x), float(self.pos.y), float(self.pos.z)
+                if bounds:
+                    pmn = self.pos - half
+                    pmx = self.pos + half
+                    mn, mx = bounds
+                    if (pmx.x < mn[0] - radius or pmn.x > mx[0] + radius
+                            or pmx.y < mn[1] - radius or pmn.y > mx[1] + radius
+                            or pmx.z < mn[2] - radius or pmn.z > mx[2] + radius):
+                        continue
+            elif frame.r is None:
+                px = float(self.pos.x + frame.ox)
+                py = float(self.pos.y + frame.oy)
+                pz = float(self.pos.z + frame.oz)
+            else:
+                px, py, pz = frame.to_shape(
+                    float(self.pos.x), float(self.pos.y), float(self.pos.z)
+                )
+            if turned is None:
+                if frame is None or frame.r is None:
+                    turned = offsets
+                else:
+                    turned = [frame.dir_to_shape(*offset) for offset in offsets]
+                    shape[4] = turned
+            for ox, oy, oz in turned:
+                cx, cy, cz = px + ox, py + oy, pz + oz
+                best_sd = -1e30
+                separated = False
+                for nx, ny, nz, distance in planes:
+                    signed_distance = nx * cx + ny * cy + nz * cz - distance
+                    if signed_distance > radius:
+                        separated = True
+                        break
+                    if signed_distance > best_sd:
+                        best_sd = signed_distance
+                if not separated and best_sd > -1e29:
+                    deepest = max(deepest, radius - best_sd)
+        return deepest
+
+    def _apply_final_ground_state(self, model_meshes, shapes, aabb_brushes,
+                                  offsets, radius):
+        """Publish grounding only when the final capsule position has support."""
+        self.on_ground = False
+        self.ground_object = None
+        if self.velocity.y > 1e-3:
+            return
+        support = self._find_model_mesh_support(model_meshes, offsets, radius)
+        if support is None:
+            support = self._find_aabb_support(aabb_brushes)
+        if support is None:
+            support = self._find_convex_support(shapes, offsets, radius)
+        if support is not None:
+            if self.velocity.y < 0.0:
+                self.velocity.y = 0.0
+            self.on_ground = True
+            self.ground_object = support
 
     def _resolve_model_triangle_meshes(self, model_meshes, offsets, radius,
                                       cover=None, start=None):
@@ -2146,9 +2282,19 @@ class Player:
             # pass — the same cache _has_headroom already reads.
             b = brush_aabb_bounds(brush)
 
-            if (player_max.x < b[0] or player_min.x > b[3] or
-                    player_max.y < b[1] or player_min.y > b[4] or
-                    player_max.z < b[2] or player_min.z > b[5]):
+            if axis == 'x':
+                if not (player_min.x < b[3] and player_max.x > b[0]
+                        and player_min.y < b[4] and player_max.y > b[1]
+                        and player_min.z < b[5] and player_max.z > b[2]):
+                    continue
+            elif axis == 'z':
+                if not (player_min.x < b[3] and player_max.x > b[0]
+                        and player_min.y < b[4] and player_max.y > b[1]
+                        and player_min.z < b[5] and player_max.z > b[2]):
+                    continue
+            elif (player_max.x <= b[0] or player_min.x >= b[3]
+                  or player_max.z <= b[2] or player_min.z >= b[5]
+                  or player_max.y < b[1] or player_min.y > b[4]):
                 continue
 
             # Resolve on the relevant axis
