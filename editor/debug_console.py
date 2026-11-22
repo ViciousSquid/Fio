@@ -761,12 +761,6 @@ class DebugConsole(QWidget):
         self.filter_combo.setMinimumWidth(200)
         toolbar.addWidget(self.filter_combo)
 
-        # Separator
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.VLine)
-        sep1.setStyleSheet("color: #444;")
-        toolbar.addWidget(sep1)
-
         # Filter Empty Checkbox
         self.filter_empty_cb = QCheckBox("Filter Empty")
         self.filter_empty_cb.setToolTip("Hide messages about 0 connections")
