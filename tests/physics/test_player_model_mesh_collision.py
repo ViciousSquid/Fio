@@ -268,6 +268,7 @@ def test_player_update_sweeps_against_a_model_wall_from_either_side(start_x, dir
 def test_player_can_climb_individual_stair_treads_in_a_model_mesh(use_grid):
     brush = _model_collision_brushes(_staircase(), solid=True)[0]
     player = _player_at(x=-80.0, y=50.0)
+    player.angle = 0.0  # Positive strafe must move toward the staircase (+X).
     player.velocity = glm.vec3(0.0, 0.0, 0.0)
     player.on_ground = True
     player.ground_object = brush
@@ -295,6 +296,38 @@ def test_player_can_climb_individual_stair_treads_in_a_model_mesh(use_grid):
     assert player.pos.y == pytest.approx(86.0, abs=1.0)
     assert player.on_ground
     assert player.ground_object is brush
+
+
+@pytest.mark.parametrize("use_grid", [False, True], ids=["no-grid", "grid"])
+def test_model_tread_footprint_support_survives_30hz_and_allows_jump(use_grid):
+    brush = _model_collision_brushes(_staircase(), solid=True)[0]
+    # The player's centre is 20 units before the first tread edge; the 25-unit
+    # horizontal capsule radius overlaps the tread and should support the hull.
+    player = _player_at(x=-20.0, y=62.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    player.on_ground = True
+    player.ground_object = brush
+
+    spatial = SpatialGrid() if use_grid else None
+    if spatial is not None:
+        spatial.populate([brush])
+
+    idle = glm.vec3(0.0, 0.0, 0.0)
+    player.update(
+        1.0 / 30.0, idle, False, False, [brush],
+        spatial_grid=spatial, gravity=-800.0,
+    )
+
+    assert player.on_ground, "gravity at 30 Hz must not drop footprint tread support"
+    assert player.ground_object is brush
+    assert player.pos.y == pytest.approx(62.0, abs=1e-3)
+
+    player.update(
+        1.0 / 30.0, idle, True, False, [brush],
+        spatial_grid=spatial, gravity=-800.0,
+    )
+    assert player.velocity.y > 0.0, "the supported player must be able to jump"
+    assert not player.on_ground, "upward separation must detach from the tread"
 
 
 def test_jump_leaving_a_model_deck_is_not_cancelled_by_the_face_sweep():
