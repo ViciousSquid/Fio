@@ -294,6 +294,30 @@ def _debug_console(qt_app):
     return console
 
 
+def test_the_debug_console_has_no_auto_scroll_checkbox_and_follows_output(qt_app):
+    """Auto-scroll is the fixed console behaviour, not a toolbar option."""
+    from PyQt5.QtWidgets import QMainWindow, QVBoxLayout
+
+    console = _debug_console(qt_app)
+    assert not hasattr(console, 'auto_scroll_cb')
+
+    window = QMainWindow()
+    holder = QWidget()
+    QVBoxLayout(holder).addWidget(console)
+    window.setCentralWidget(holder)
+    window.resize(700, 400)
+    window.show()
+    _KEEP_ALIVE.append(window)
+    qt_app.processEvents()
+
+    console._insert_lines([f'output {i}<br>' for i in range(100)])
+    qt_app.processEvents()
+
+    scrollbar = console.console.verticalScrollBar()
+    assert scrollbar.maximum() > 0
+    assert scrollbar.value() == scrollbar.maximum()
+
+
 def test_the_debug_console_does_not_dictate_the_dock_width(qt_app):
     """This, not the ratio, is what pinned the 3D view to a slot.
 
