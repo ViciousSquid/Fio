@@ -156,9 +156,11 @@ class ModelDrawGroup:
     or index range and the material's values, with its texture already a GL
     name. Built by :meth:`ResourcesMixin._model_draw_groups`."""
 
-    __slots__ = ('start', 'count', 'indexed', 'alpha', 'colour', 'textured', 'texture')
+    __slots__ = ('start', 'count', 'indexed', 'alpha', 'colour', 'textured',
+                 'texture', 'emissive')
 
-    def __init__(self, start, count, indexed, alpha, colour, textured, texture):
+    def __init__(self, start, count, indexed, alpha, colour, textured, texture,
+                 emissive):
         self.start = start
         self.count = count
         self.indexed = indexed
@@ -166,6 +168,7 @@ class ModelDrawGroup:
         self.colour = colour
         self.textured = textured
         self.texture = texture
+        self.emissive = emissive
 
 
 class ResourcesMixin:
@@ -728,6 +731,7 @@ class ResourcesMixin:
                 group['material'], {'color': [0.8, 0.8, 0.8], 'texture': None})
             texture = material.get('texture')
             colour = material.get('color', [0.8, 0.8, 0.8])
+            emissive = material.get('emissive', (0.0, 0.0, 0.0))
             resolved.append(ModelDrawGroup(
                 int(group['start']), int(group['count']),
                 bool(group.get('indexed', False)) and has_ebo,
@@ -735,7 +739,8 @@ class ResourcesMixin:
                 (float(colour[0]), float(colour[1]), float(colour[2])),
                 bool(texture),
                 int(self._model_texture_id(texture, material, manual=False))
-                if texture else 0))
+                if texture else 0,
+                (float(emissive[0]), float(emissive[1]), float(emissive[2]))))
         # Ink and edge geometry must establish depth before the acrylic
         # surfaces (a stable sort: authored order within each half).
         resolved.sort(key=lambda g: g.alpha < 1.0)
