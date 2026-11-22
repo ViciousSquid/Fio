@@ -320,6 +320,11 @@ def test_solid_can_be_enabled_without_turning_on_physics(panel):
         'no_collision': True,
     })
     representation_combo(panel, prop)
+    physics_index = next(
+        index for index in range(panel.tab_widget.count())
+        if panel.tab_widget.tabText(index) == "Physics"
+    )
+    panel.tab_widget.setCurrentIndex(physics_index)
 
     solid = panel._widgets['prop_solid_cb']
     physics = panel._widgets['prop_physics_enabled_cb']
@@ -331,6 +336,31 @@ def test_solid_can_be_enabled_without_turning_on_physics(panel):
     assert prop.properties['no_collision'] is False
     assert prop.properties['physics_enabled'] is False
     assert not physics.isChecked()
+
+
+def test_enabling_topples_enables_physics_and_solid(panel):
+    """Toppling must still enable both of its required physics prerequisites."""
+    prop = Prop(pos=[0, 0, 0], properties={
+        'render_mode': 'model',
+        'model_path': Prop.DEFAULT_MODEL_PATH,
+        'physics_enabled': False,
+        'no_collision': True,
+        'topples': False,
+    })
+    representation_combo(panel, prop)
+    physics_index = next(
+        index for index in range(panel.tab_widget.count())
+        if panel.tab_widget.tabText(index) == "Physics"
+    )
+    panel.tab_widget.setCurrentIndex(physics_index)
+
+    panel._widgets['prop_topples_cb'].setChecked(True)
+
+    assert prop.properties['topples'] is True
+    assert prop.properties['physics_enabled'] is True
+    assert prop.properties['no_collision'] is False
+    assert panel._widgets['prop_physics_enabled_cb'].isChecked()
+    assert panel._widgets['prop_solid_cb'].isChecked()
 
 
 def test_the_control_does_not_move_when_it_is_used(panel):
