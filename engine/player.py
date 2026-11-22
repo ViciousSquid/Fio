@@ -1974,7 +1974,8 @@ class Player:
         """Maximum capsule-sphere penetration into the supplied convex brushes."""
         deepest = 0.0
         half = self._half
-        for brush, planes, bounds, frame, turned in shapes:
+        for shape in shapes:
+            brush, planes, bounds, frame, turned = shape
             if not planes:
                 continue
             if frame is None:
