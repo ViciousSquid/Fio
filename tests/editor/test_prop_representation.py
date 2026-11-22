@@ -14,7 +14,7 @@ pytest.importorskip("PyQt5", reason="the property panel is editor-tier")
 
 from editor.main_window import MainWindow               # noqa: E402
 from editor.property_editor import PropertyEditor      # noqa: E402
-from engine.prop_entity import PROP_DEFAULTS, Prop     # noqa: E402
+from engine.prop_entity import (PROP_DEFAULTS, Prop, legacy_model_properties)  # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -188,6 +188,31 @@ def _collision_brushes_for(things):
     state.things = list(things)
     thread = LogicThread(ThreadedGameState(), state)
     return LogicCollision(thread).build_model_collision_brushes()
+
+
+def test_new_custom_models_use_mesh_collision_without_changing_old_maps():
+    """New placements get surface collision; existing records keep AABB."""
+    model_path = 'assets/models/prop_book.obj'
+    placed = Prop.for_model(model_path, pos=[0, 0, 0],
+                             properties={'no_collision': False})
+    assert placed.properties['collision_shape'] == 'mesh'
+
+    brushes = _collision_brushes_for([placed])
+    assert len(brushes) == 1
+    assert brushes[0]['_collision_mode'] == 'mesh'
+    assert brushes[0]['_mesh_triangles']
+
+    # The author can still request a box for an individual new model.
+    boxed = Prop.for_model(model_path, pos=[0, 0, 0],
+                           properties={'collision_shape': 'aabb'})
+    assert boxed.properties['collision_shape'] == 'aabb'
+
+    # Old Model records are converted to Props without acquiring the new
+    # placement default. They retain the AABB behaviour they were authored with.
+    legacy = Prop(pos=[0, 0, 0], properties=legacy_model_properties({
+        'model_path': model_path,
+    }))
+    assert legacy.properties['collision_shape'] == 'aabb'
 
 
 def test_a_default_sprite_prop_has_no_collision():
