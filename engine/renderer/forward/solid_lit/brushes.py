@@ -41,6 +41,9 @@ class SolidLitMixin:
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('lit', lights)
+        emissive_loc = uniforms['emissive_factor']
+        if emissive_loc is not None and emissive_loc != -1:
+            gl.glUniform3f(emissive_loc, 0.0, 0.0, 0.0)
         # Cache value_ptr results – avoids redundant ctypes work per draw call
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(view)
