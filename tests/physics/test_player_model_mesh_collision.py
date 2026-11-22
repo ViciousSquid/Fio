@@ -321,6 +321,7 @@ def test_mesh_slide_is_rechecked_against_aabb_boxes():
         and p_max.z > b_min[2] and p_min.z < b_max[2]
     )
     assert player.pos.x >= 75.0 - 1e-2
+    assert player.pos.z == pytest.approx(50.0, abs=1e-2)
 
 
 def test_model_ceiling_correction_keeps_the_capsule_below_the_surface():
@@ -336,3 +337,147 @@ def test_model_ceiling_correction_keeps_the_capsule_below_the_surface():
 
     assert player.pos.y + player.height * 0.5 <= 100.0 + 1e-3
     assert player.pos.y == pytest.approx(50.0, abs=1e-3)
+
+
+def test_final_convex_penetration_check_measures_an_embedded_capsule():
+    player = _player_at(x=90.0, y=50.0)
+    wall = {'pos': [90.0, 50.0, 0.0], 'size': [20.0, 300.0, 200.0]}
+    planes = [
+        (-1.0, 0.0, 0.0, -80.0), (1.0, 0.0, 0.0, 100.0),
+        (0.0, -1.0, 0.0, 100.0), (0.0, 1.0, 0.0, 200.0),
+        (0.0, 0.0, -1.0, 100.0), (0.0, 0.0, 1.0, 100.0),
+    ]
+    shape = [wall, planes, ([80.0, -100.0, -100.0],
+                            [100.0, 200.0, 100.0]), None, None]
+    offsets = [(0.0, -25.0, 0.0), (0.0, 0.0, 0.0),
+               (0.0, 25.0, 0.0)]
+
+    assert player._convex_max_penetration([shape], offsets, 25.0) > 30.0
+
+    player.pos.x = 50.0
+    assert player._convex_max_penetration([shape], offsets, 25.0) == 0.0
+
+
+def test_support_clearance_reaches_the_triangle_distance_test():
+    brush = _model_collision_brushes(_platform(), solid=True)[0]
+    player = _player_at(y=50.2)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+
+    _resolve_model_mesh(player, brush)
+
+    assert player.pos.y == pytest.approx(50.2)
+    assert player.on_ground
+    assert player.ground_object is brush
+
+
+def test_model_relaxation_does_not_push_a_player_sideways_off_aabb_floor():
+    a = (300.0, -100.0, -100.0)
+    b = (300.0, 200.0, -100.0)
+    c = (300.0, 200.0, 100.0)
+    d = (300.0, -100.0, 100.0)
+    wall = _model_collision_brushes(
+        _quad(a, b, c, d, (1.0, 0.0, 0.0)), solid=True
+    )[0]
+    floor = {'pos': [0.0, -50.0, 0.0],
+             'size': [1000.0, 100.0, 1000.0]}
+    player = _player_at(y=50.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    player.on_ground = True
+    player.ground_object = floor
+
+    _aabb, meshes, shapes = _gather([wall], [])
+    player._resolve_mesh_capsule(
+        meshes, shapes, sweep_start=(0.0, 50.0, 0.0),
+        aabb_brushes=[floor],
+    )
+
+    assert tuple(player.pos) == pytest.approx((0.0, 50.0, 0.0))
+    assert player.on_ground
+    assert player.ground_object is floor
+
+
+def test_model_relaxation_clears_stale_aabb_ground_state():
+    a = (300.0, -100.0, -100.0)
+    b = (300.0, 200.0, -100.0)
+    c = (300.0, 200.0, 100.0)
+    d = (300.0, -100.0, 100.0)
+    wall = _model_collision_brushes(
+        _quad(a, b, c, d, (1.0, 0.0, 0.0)), solid=True
+    )[0]
+    floor = {'pos': [0.0, -50.0, 0.0],
+             'size': [1000.0, 100.0, 1000.0]}
+    player = _player_at(y=200.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    player.on_ground = True
+    player.ground_object = floor
+
+    _aabb, meshes, shapes = _gather([wall], [])
+    player._resolve_mesh_capsule(
+        meshes, shapes, sweep_start=(0.0, 200.0, 0.0),
+        aabb_brushes=[floor],
+    )
+
+    assert not player.on_ground
+    assert player.ground_object is None
+
+
+def test_spatial_grid_includes_static_meshes_reached_by_high_player_velocity():
+    wall_x = 100.0
+    a = (wall_x, -100.0, -100.0)
+    b = (wall_x, 200.0, -100.0)
+    c = (wall_x, 200.0, 100.0)
+    d = (wall_x, -100.0, 100.0)
+    wall = _model_collision_brushes(
+        _quad(a, b, c, d, (1.0, 0.0, 0.0)), solid=True
+    )[0]
+    bounds = wall['_mesh_bounds']
+
+    class Grid:
+        water_brushes = []
+
+        def __init__(self):
+            self.queried = False
+
+        def get_potential_colliders(self, player_min, player_max):
+            self.queried = True
+            overlaps = not (
+                player_max.x < bounds[0][0] or player_min.x > bounds[1][0]
+                or player_max.y < bounds[0][1] or player_min.y > bounds[1][1]
+                or player_max.z < bounds[0][2] or player_min.z > bounds[1][2]
+            )
+            return [wall] if overlaps else []
+
+    grid = Grid()
+    player = _player_at(x=0.0, y=50.0)
+    player.velocity = glm.vec3(1500.0, 0.0, 0.0)
+
+    player.update(
+        0.1, glm.vec3(0.0), False, False, [wall],
+        spatial_grid=grid, gravity=0.0,
+    )
+
+    assert grid.queried
+    assert player.pos.x == pytest.approx(75.0, abs=1e-2)
+
+
+def test_nonfinite_model_bounds_do_not_publish_a_nan_collision_proxy():
+    prop = Prop(pos=[0.0, 0.0, 0.0], properties={
+        'render_mode': 'model',
+        'model_path': 'assets/models/test_catwalk.obj',
+        'scale': [1.0, 1.0, 1.0],
+        'rotation': [0.0, 0.0, 0.0],
+        'collision_shape': 'mesh',
+        'collision_size': [0.0, 0.0, 0.0],
+        'physics_enabled': False,
+        'no_collision': False,
+    })
+    state = EditorState()
+    state.brushes = []
+    state.things = [prop]
+    thread = LogicThread(ThreadedGameState(), state)
+    thread.collision_runtime.compute_model_collision_mesh = lambda *_args: None
+    thread.collision_runtime.compute_model_bounds = lambda *_args: (
+        [float('nan'), 0.0, 0.0], [float('nan'), 10.0, 10.0]
+    )
+
+    assert thread.collision_runtime.build_model_collision_brushes() == []
