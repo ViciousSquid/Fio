@@ -1517,7 +1517,15 @@ class Player:
                 return True
 
         def finish_model_constraints():
-            if not _resolve_models or not model_meshes:
+            if not _resolve_models:
+                return None
+            if not model_meshes:
+                # The convex relaxation above also has a finite pass budget.
+                # Reject a residual convex overlap even when no model mesh
+                # participated in this tick.
+                if shapes and self._convex_max_penetration(
+                        shapes, offsets, radius) > 1e-4:
+                    return "unresolved"
                 return None
             # Model corrections can re-enter convex brushes or AABBs. Resolve
             # all three constraint types together until the endpoint is stable.
