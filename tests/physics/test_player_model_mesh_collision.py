@@ -132,3 +132,106 @@ def test_a_reversed_deck_face_still_supports_the_player():
 
     assert player.pos.y == pytest.approx(50.0, abs=1e-3)
     assert player.on_ground
+
+def test_degenerate_triangle_is_treated_as_a_segment_without_dividing_by_zero():
+    line = [(((0.0, 0.0, -100.0),
+              (0.0, 0.0, -100.0),
+              (0.0, 0.0, 100.0)), (0.0, 1.0, 0.0))]
+    brush = _model_collision_brushes(line, solid=True)[0]
+    player = _player_at(x=10.0, y=0.0)
+
+    _resolve_model_mesh(player, brush)
+
+    assert player.pos.x == pytest.approx(25.0, abs=1e-3)
+
+
+def test_deck_edge_contact_pushes_away_from_the_edge():
+    brush = _model_collision_brushes(
+        _platform(x0=-100.0, x1=0.0), solid=True
+    )[0]
+    player = _player_at(x=24.0, y=25.0)
+
+    _resolve_model_mesh(player, brush)
+
+    assert player.pos.x > 24.0
+    assert not player.on_ground
+
+
+def test_coverage_retry_restores_the_complete_player_entry_state():
+    brush = _model_collision_brushes(_platform(), solid=True)[0]
+    player = _player_at(y=40.0)
+    player.velocity = glm.vec3(3.0, -10.0, 4.0)
+    player.on_ground = False
+    player.ground_object = None
+
+    class LimitedCover:
+        full = ([], [], [])
+
+        @staticmethod
+        def holds(x, y, z):
+            return y < 45.0
+
+    _aabb, meshes, shapes = _gather([brush], [])
+    retried = player._resolve_mesh_capsule(meshes, shapes, LimitedCover())
+
+    assert retried is True
+    assert tuple(player.pos) == pytest.approx((0.0, 40.0, 0.0))
+    assert tuple(player.velocity) == pytest.approx((3.0, -10.0, 4.0))
+    assert player.on_ground is False
+    assert player.ground_object is None
+
+
+def test_model_correction_is_rechecked_against_convex_floor():
+    player = _player_at(y=40.0)
+    floor = {'pos': [0.0, -50.0, 0.0], 'size': [2000.0, 100.0, 2000.0]}
+    floor_planes = [
+        (1.0, 0.0, 0.0, 1000.0), (-1.0, 0.0, 0.0, 1000.0),
+        (0.0, 1.0, 0.0, 0.0), (0.0, -1.0, 0.0, 100.0),
+        (0.0, 0.0, 1.0, 1000.0), (0.0, 0.0, -1.0, 1000.0),
+    ]
+    floor_shape = (
+        floor_planes, [],
+        ([-1000.0, -100.0, -1000.0], [1000.0, 0.0, 1000.0]),
+        None,
+    )
+    normal = (0.8, -0.6, 0.0)
+    v0 = (0.0, 54.1666666667, -1000.0)
+    v1 = (-300.0, -345.8333333333, -1000.0)
+    v2 = (0.0, 54.1666666667, 1000.0)
+    triangles = [((v0, v1, v2), normal)]
+    model_bounds = (
+        [min(v[i] for v in (v0, v1, v2)) for i in range(3)],
+        [max(v[i] for v in (v0, v1, v2)) for i in range(3)],
+    )
+    model = {'_model_collision': True, 'pos': [0.0, 0.0, 0.0],
+             'size': [1.0, 1.0, 1.0]}
+    model_shape = ([], triangles, model_bounds, None)
+
+    player._resolve_mesh_capsule(
+        [floor, model], [floor_shape, model_shape]
+    )
+
+    assert player.pos.y >= 50.0 - 1e-3
+    assert player.on_ground
+    assert player.ground_object is floor
+
+
+def test_player_update_sweeps_against_a_model_wall_before_it_can_be_crossed():
+    a = (0.0, -100.0, -100.0)
+    b = (0.0, 200.0, -100.0)
+    c = (0.0, 200.0, 100.0)
+    d = (0.0, -100.0, 100.0)
+    wall = _model_collision_brushes(
+        _quad(a, b, c, d, (1.0, 0.0, 0.0)), solid=True
+    )[0]
+    player = _player_at(x=25.0, y=50.0)
+    player.velocity = glm.vec3(-300.0, 0.0, 0.0)
+
+    player.update(
+        0.1, glm.vec3(-1.0, 0.0, 0.0),
+        False, False, [wall], gravity=0.0,
+    )
+
+    assert player.pos.x == pytest.approx(25.0, abs=1e-2)
+    assert player.velocity.x == pytest.approx(0.0, abs=1e-3)
+
