@@ -631,7 +631,11 @@ class LogicCollision:
                 ny = e1[2]*e2[0] - e1[0]*e2[2]
                 nz = e1[0]*e2[1] - e1[1]*e2[0]
                 length = math.sqrt(nx*nx + ny*ny + nz*nz)
-                w_normal = (nx/length, ny/length, nz/length) if length > 0.001 else (0.0, 1.0, 0.0)
+                if not math.isfinite(length) or length <= 1e-8:
+                    # Zero-area faces cannot define collision surfaces.
+                    # Do not publish a degenerate triangle with a fake normal.
+                    continue
+                w_normal = (nx/length, ny/length, nz/length)
 
                 world_tris.append(((w0, w1, w2), w_normal))
 
