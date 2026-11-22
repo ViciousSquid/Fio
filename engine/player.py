@@ -133,6 +133,44 @@ def _closest_point_on_triangle(p, a, b, c):
             a[2] + ab[2] * v + ac[2] * w)
 
 
+
+def _closest_point_on_triangle_xz(x, z, triangle):
+    """Return the triangle height and squared XZ distance to its projection.
+
+    Used by model stair stepping: a tread may begin just ahead of the player's
+    centre, while the capsule footprint already reaches its leading edge.
+    """
+    a, b, c = triangle
+    abx, abz = b[0] - a[0], b[2] - a[2]
+    acx, acz = c[0] - a[0], c[2] - a[2]
+    det = abx * acz - abz * acx
+    dx, dz = x - a[0], z - a[2]
+
+    if abs(det) > 1e-12:
+        u = (dx * acz - dz * acx) / det
+        v = (abx * dz - abz * dx) / det
+        if u >= -1e-7 and v >= -1e-7 and u + v <= 1.0 + 1e-7:
+            height = a[1] + u * (b[1] - a[1]) + v * (c[1] - a[1])
+            return height, 0.0
+
+    best = (None, float("inf"))
+    for start, end in ((a, b), (b, c), (c, a)):
+        ex, ez = end[0] - start[0], end[2] - start[2]
+        length_sq = ex * ex + ez * ez
+        if length_sq <= 1e-20:
+            t = 0.0
+        else:
+            t = max(0.0, min(1.0, (
+                (x - start[0]) * ex + (z - start[2]) * ez
+            ) / length_sq))
+        qx, qz = start[0] + ex * t, start[2] + ez * t
+        distance_sq = (x - qx) ** 2 + (z - qz) ** 2
+        if distance_sq < best[1]:
+            height = start[1] + (end[1] - start[1]) * t
+            best = (height, distance_sq)
+    return best
+
+
 def _oriented_triangle_normal(normal, point, reference, velocity):
     """Orient a triangle normal toward the side occupied by the capsule centre.
 
@@ -1512,6 +1550,24 @@ class Player:
         # Sweep the frame displacement before discrete depenetration; otherwise
         # a fast player can cross a thin model wall completely between ticks.
         if _resolve_models and model_meshes and sweep_start is not None:
+            # A model stair's riser and tread are separate triangles. When a
+            # horizontal move meets the riser, step onto the tread first and
+            # raise the sweep origin by the same amount so the face sweep
+            # follows the raised path rather than colliding with the riser.
+            step_rise = self._try_step_up_model_meshes(
+                model_meshes, aabb_brushes, sweep_start
+            )
+            if step_rise:
+                if hasattr(sweep_start, "x"):
+                    sweep_start = (
+                        float(sweep_start.x), float(sweep_start.y) + step_rise,
+                        float(sweep_start.z)
+                    )
+                else:
+                    sweep_start = (
+                        float(sweep_start[0]), float(sweep_start[1]) + step_rise,
+                        float(sweep_start[2])
+                    )
             self._sweep_model_triangle_meshes(
                 model_meshes, offsets, radius, sweep_start
             )
@@ -1700,6 +1756,91 @@ class Player:
             return False
         apply_final_ground_state()
         return False
+
+    def _try_step_up_model_meshes(self, model_meshes, aabb_brushes, start):
+        """Step onto a nearby model tread when its mesh blocks horizontal travel.
+
+        Model collision is a non-convex surface mesh, so its riser cannot use
+        the AABB resolver's top bound. Find an actual walkable triangle within
+        the capsule footprint, lift by no more than the normal step height, and
+        require the complete standing capsule to clear every nearby shape.
+        """
+        if self.swimming or not model_meshes:
+            return 0.0
+        if hasattr(start, "x"):
+            start_x, start_y, start_z = (
+                float(start.x), float(start.y), float(start.z)
+            )
+        else:
+            start_x, start_y, start_z = (float(v) for v in start)
+        if ((float(self.pos.x) - start_x) ** 2
+                + (float(self.pos.z) - start_z) ** 2 <= 1e-8):
+            return 0.0
+
+        half = self._half
+        player_min = (self.pos.x - half.x, self.pos.y - half.y,
+                      self.pos.z - half.z)
+        player_max = (self.pos.x + half.x, self.pos.y + half.y,
+                      self.pos.z + half.z)
+        blocked = []
+        for brush, triangles, _bounds in model_meshes:
+            if not self._has_headroom(brush, player_min, player_max):
+                blocked.append((brush, triangles))
+        if not blocked:
+            return 0.0
+
+        feet_y = start_y - float(half.y)
+        radius = min(float(half.x), float(half.z))
+        radius_sq = radius * radius
+        step_top = None
+        for _brush, triangles in blocked:
+            brush_top = None
+            for triangle, normal in triangles:
+                # Face winding is not authoritative for a model's collision
+                # surface (reversed OBJ decks are supported elsewhere too).
+                if abs(float(normal[1])) < PM_GROUND_NORMAL:
+                    continue
+                top, distance_sq = _closest_point_on_triangle_xz(
+                    float(self.pos.x), float(self.pos.z), triangle
+                )
+                if distance_sq > radius_sq + 1e-6:
+                    continue
+                rise = top - feet_y
+                if rise <= 1e-4 or rise > self.step_height + 1e-4:
+                    continue
+                if brush_top is None or top > brush_top:
+                    brush_top = top
+            # Every mesh that blocks this destination must provide a real
+            # tread; a nearby low surface cannot hide a separate tall wall.
+            if brush_top is None:
+                return 0.0
+            if step_top is None or brush_top > step_top:
+                step_top = brush_top
+
+        if step_top is None:
+            return 0.0
+        lifted_y = max(
+            float(self.pos.y), step_top + float(half.y) + 1e-3
+        )
+        rise = lifted_y - float(self.pos.y)
+        if rise <= 1e-4:
+            return 0.0
+
+        lifted_min = glm.vec3(
+            player_min[0], lifted_y - half.y, player_min[2]
+        )
+        lifted_max = glm.vec3(
+            player_max[0], lifted_y + half.y, player_max[2]
+        )
+        for brush, _triangles, _bounds in model_meshes:
+            if not self._has_headroom(brush, lifted_min, lifted_max):
+                return 0.0
+        for brush in aabb_brushes or ():
+            if not self._has_headroom(brush, lifted_min, lifted_max):
+                return 0.0
+
+        self.pos.y = lifted_y
+        return rise
 
     def _sweep_model_triangle_meshes(self, model_meshes, offsets, radius, sweep_start):
         """Sweep the capsule through its integrated displacement against model triangles."""
