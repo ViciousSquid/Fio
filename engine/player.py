@@ -1705,6 +1705,24 @@ class Player:
                 max(position[1], position[1] + remaining[1]) + half.y + radius,
                 max(position[2], position[2] + remaining[2]) + half.z + radius,
             )
+            sweep_inputs = []
+            movement_vec = glm.vec3(*remaining)
+            for ox, oy, oz in offsets:
+                sphere_min = (
+                    min(position[0], position[0] + remaining[0]) + ox - radius,
+                    min(position[1], position[1] + remaining[1]) + oy - radius,
+                    min(position[2], position[2] + remaining[2]) + oz - radius,
+                )
+                sphere_max = (
+                    max(position[0], position[0] + remaining[0]) + ox + radius,
+                    max(position[1], position[1] + remaining[1]) + oy + radius,
+                    max(position[2], position[2] + remaining[2]) + oz + radius,
+                )
+                sphere_start = glm.vec3(position[0] + ox,
+                                        position[1] + oy,
+                                        position[2] + oz)
+                sweep_inputs.append((sphere_min, sphere_max, sphere_start))
+
             for brush, triangles, bounds in model_meshes:
                 if bounds:
                     mn, mx = bounds
@@ -1720,22 +1738,13 @@ class Player:
                     tri_max = (max(v0[0], v1[0], v2[0]),
                                max(v0[1], v1[1], v2[1]),
                                max(v0[2], v1[2], v2[2]))
-                    for ox, oy, oz in offsets:
-                        sphere_min = (min(position[0], position[0] + remaining[0]) + ox - radius,
-                                      min(position[1], position[1] + remaining[1]) + oy - radius,
-                                      min(position[2], position[2] + remaining[2]) + oz - radius)
-                        sphere_max = (max(position[0], position[0] + remaining[0]) + ox + radius,
-                                      max(position[1], position[1] + remaining[1]) + oy + radius,
-                                      max(position[2], position[2] + remaining[2]) + oz + radius)
+                    for sphere_min, sphere_max, sphere_start in sweep_inputs:
                         if (sphere_max[0] < tri_min[0] or sphere_min[0] > tri_max[0]
                                 or sphere_max[1] < tri_min[1] or sphere_min[1] > tri_max[1]
                                 or sphere_max[2] < tri_min[2] or sphere_min[2] > tri_max[2]):
                             continue
-                        sphere_start = glm.vec3(position[0] + ox,
-                                                position[1] + oy,
-                                                position[2] + oz)
                         hit, hit_time, _point, normal = _intersect_swept_sphere_triangle(
-                            sphere_start, glm.vec3(*remaining), radius, tri, face_normal,
+                            sphere_start, movement_vec, radius, tri, face_normal,
                             capsule_centre=glm.vec3(*position)
                         )
                         if hit and (best is None or hit_time < best[0]):
@@ -1803,7 +1812,18 @@ class Player:
                         or sphere[2] + radius < mn[2] or sphere[2] - radius > mx[2]):
                     continue
             for tri, face_normal in triangles:
-                closest = _closest_point_on_triangle(sphere, *tri)
+                v0, v1, v2 = tri
+                tri_min = (min(v0[0], v1[0], v2[0]),
+                           min(v0[1], v1[1], v2[1]),
+                           min(v0[2], v1[2], v2[2]))
+                tri_max = (max(v0[0], v1[0], v2[0]),
+                           max(v0[1], v1[1], v2[1]),
+                           max(v0[2], v1[2], v2[2]))
+                if (sphere[0] + radius < tri_min[0] or sphere[0] - radius > tri_max[0]
+                        or sphere[1] + radius < tri_min[1] or sphere[1] - radius > tri_max[1]
+                        or sphere[2] + radius < tri_min[2] or sphere[2] - radius > tri_max[2]):
+                    continue
+                closest = _closest_point_on_triangle(sphere, v0, v1, v2)
                 delta = (sphere[0] - closest[0], sphere[1] - closest[1],
                          sphere[2] - closest[2])
                 distance_sq = sum(v * v for v in delta)
@@ -1838,7 +1858,18 @@ class Player:
                 sphere = (float(self.pos.x + ox), float(self.pos.y + oy),
                           float(self.pos.z + oz))
                 for tri, _face_normal in triangles:
-                    closest = _closest_point_on_triangle(sphere, *tri)
+                    v0, v1, v2 = tri
+                    tri_min = (min(v0[0], v1[0], v2[0]),
+                               min(v0[1], v1[1], v2[1]),
+                               min(v0[2], v1[2], v2[2]))
+                    tri_max = (max(v0[0], v1[0], v2[0]),
+                               max(v0[1], v1[1], v2[1]),
+                               max(v0[2], v1[2], v2[2]))
+                    if (sphere[0] + radius < tri_min[0] or sphere[0] - radius > tri_max[0]
+                            or sphere[1] + radius < tri_min[1] or sphere[1] - radius > tri_max[1]
+                            or sphere[2] + radius < tri_min[2] or sphere[2] - radius > tri_max[2]):
+                        continue
+                    closest = _closest_point_on_triangle(sphere, v0, v1, v2)
                     dx = sphere[0] - closest[0]
                     dy = sphere[1] - closest[1]
                     dz = sphere[2] - closest[2]
