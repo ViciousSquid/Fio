@@ -3,13 +3,16 @@
 Model Props are arbitrary triangle surfaces, not convex solids: the player must
 land on deck/tread triangles without filling the gaps between them.
 """
-from types import SimpleNamespace
-
 import glm
 import pytest
 
-from engine.logic_collision import LogicCollision
+from editor.editor_state import EditorState
+from engine.logic_thread import LogicThread
 from engine.player import Player, _gather
+from engine.prop_entity import Prop
+from engine.threaded_game_state import ThreadedGameState
+
+pytestmark = pytest.mark.qt
 
 
 def _quad(a, b, c, d, normal):
@@ -24,30 +27,25 @@ def _platform(y=0.0, x0=-100.0, x1=100.0):
 
 
 def _model_collision_brushes(triangles, *, solid=True):
-    thing = SimpleNamespace(
-        pos=[0.0, 0.0, 0.0],
-        properties={
-            'render_mode': 'model',
-            'model_path': 'assets/models/test_catwalk.obj',
-            'scale': [1.0, 1.0, 1.0],
-            'rotation': [0.0, 0.0, 0.0],
-            'collision_shape': 'mesh',
-            'collision_size': [0.0, 0.0, 0.0],
-            'physics_enabled': False,
-            'no_collision': not solid,
-        },
+    """Build the real LogicThread collision proxy with CPU model data stubbed."""
+    prop = Prop(pos=[0.0, 0.0, 0.0], properties={
+        'render_mode': 'model',
+        'model_path': 'assets/models/test_catwalk.obj',
+        'scale': [1.0, 1.0, 1.0],
+        'rotation': [0.0, 0.0, 0.0],
+        'collision_shape': 'mesh',
+        'collision_size': [0.0, 0.0, 0.0],
+        'physics_enabled': False,
+        'no_collision': not solid,
+    })
+    state = EditorState()
+    state.brushes = []
+    state.things = [prop]
+    thread = LogicThread(ThreadedGameState(), state)
+    thread.collision_runtime.compute_model_collision_mesh = (
+        lambda *_args: triangles
     )
-    logic = SimpleNamespace(
-        editor_state=SimpleNamespace(things=[thing]),
-        session_runtime=SimpleNamespace(physics_enabled=True),
-        explosion_runtime=None,
-        package=None,
-    )
-    runtime = LogicCollision(logic)
-    # The test supplies world-space triangles, as the CPU model loader does
-    # after applying the Prop transform.
-    runtime.compute_model_collision_mesh = lambda *_args: triangles
-    return runtime.build_model_collision_brushes()
+    return thread.collision_runtime.build_model_collision_brushes()
 
 
 def _player_at(x=0.0, y=40.0, z=0.0):
@@ -118,3 +116,19 @@ def test_model_mesh_stops_the_player_at_a_vertical_surface():
 
     assert player.pos.x == pytest.approx(25.0, abs=1e-3)
     assert player.velocity.x == 0.0
+
+
+def test_a_reversed_deck_face_still_supports_the_player():
+    # Same deck with reversed winding: the visible upper surface must support
+    # the player regardless of which way its OBJ triangles are authored.
+    triangles = [
+        (tuple(reversed(face)), (0.0, -1.0, 0.0))
+        for face, _normal in _platform()
+    ]
+    brush = _model_collision_brushes(triangles, solid=True)[0]
+    player = _player_at(y=40.0)
+
+    _resolve_model_mesh(player, brush)
+
+    assert player.pos.y == pytest.approx(50.0, abs=1e-3)
+    assert player.on_ground
