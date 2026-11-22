@@ -9,6 +9,7 @@ import pytest
 from editor.editor_state import EditorState
 from engine.logic_thread import LogicThread
 from engine.player import Player, _gather
+from engine.spatial_grid import SpatialGrid
 from engine.prop_entity import Prop
 from engine.threaded_game_state import ThreadedGameState
 
@@ -24,6 +25,28 @@ def _platform(y=0.0, x0=-100.0, x1=100.0):
     c, d = (x1, y, 100.0), (x1, y, -100.0)
     # Winding gives the top face an upward normal.
     return _quad(a, b, c, d, (0.0, 1.0, 0.0))
+
+
+
+def _staircase():
+    """Three 12-unit risers with real vertical faces and horizontal treads."""
+    triangles = _platform(y=0.0, x0=-200.0, x1=0.0)
+    tread_depth = 60.0
+    tread_rise = 12.0
+    for index in range(3):
+        x = index * tread_depth
+        lower = index * tread_rise
+        upper = lower + tread_rise
+        triangles += _quad(
+            (x, lower, -100.0), (x, upper, -100.0),
+            (x, upper, 100.0), (x, lower, 100.0),
+            (1.0, 0.0, 0.0),
+        )
+        triangles += _platform(
+            y=upper, x0=x, x1=x + tread_depth
+        )
+    triangles += _platform(y=36.0, x0=180.0, x1=400.0)
+    return triangles
 
 
 def _model_collision_brushes(triangles, *, solid=True):
@@ -240,6 +263,33 @@ def test_player_update_sweeps_against_a_model_wall_from_either_side(start_x, dir
     assert player.velocity.x == pytest.approx(0.0, abs=1e-3)
 
 
+
+
+@pytest.mark.parametrize("use_grid", [False, True], ids=["no-grid", "grid"])
+def test_player_can_climb_individual_stair_treads_in_a_model_mesh(use_grid):
+    brush = _model_collision_brushes(_staircase(), solid=True)[0]
+    player = _player_at(x=-80.0, y=50.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    player.on_ground = True
+    player.ground_object = brush
+
+    spatial = SpatialGrid() if use_grid else None
+    if spatial is not None:
+        spatial.populate([brush])
+
+    move = glm.vec3(1.0, 0.0, 0.0)
+    for _ in range(240):
+        player.update(
+            1.0 / 60.0, move, False, False, [brush],
+            spatial_grid=spatial, gravity=-800.0,
+        )
+        if player.pos.x >= 220.0:
+            break
+
+    assert player.pos.x >= 200.0, "the player should climb all three mesh treads"
+    assert player.pos.y == pytest.approx(86.0, abs=1.0)
+    assert player.on_ground
+    assert player.ground_object is brush
 
 
 def test_jump_leaving_a_model_deck_is_not_cancelled_by_the_face_sweep():
