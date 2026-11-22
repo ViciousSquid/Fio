@@ -14,7 +14,8 @@ pytest.importorskip("PyQt5", reason="the property panel is editor-tier")
 
 from editor.main_window import MainWindow               # noqa: E402
 from editor.property_editor import PropertyEditor      # noqa: E402
-from engine.prop_entity import (PROP_DEFAULTS, Prop, legacy_model_properties)  # noqa: E402
+from engine.prop_entity import (PROP_DEFAULTS, Prop,
+                                legacy_model_properties)  # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -208,7 +209,7 @@ def test_new_custom_models_use_mesh_collision_without_changing_old_maps():
     assert boxed.properties['collision_shape'] == 'aabb'
 
     # Old Model records are converted to Props without acquiring the new
-    # placement default. They retain the AABB behaviour they were authored with.
+    # placement default. They retain their historical AABB behaviour.
     legacy = Prop(pos=[0, 0, 0], properties=legacy_model_properties({
         'model_path': model_path,
     }))
