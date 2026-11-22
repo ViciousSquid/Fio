@@ -371,6 +371,11 @@ class LogicCollision:
                 scale = [scale, scale, scale]
             else:
                 scale = list(scale)
+            if (len(pos) < 3 or len(scale) < 3
+                    or not all(math.isfinite(float(v)) for v in pos[:3])
+                    or not all(math.isfinite(float(v)) for v in scale[:3])):
+                debug_log("Collision", f"Skipping model with non-finite transform: {props.get('model_path', '')}")
+                continue
 
             rot = props.get('rotation', [0, 0, 0])
             is_physics_body = physics_enabled
@@ -446,6 +451,9 @@ class LogicCollision:
                     size = [base * scale[i] for i in range(3)]
                     aabb_pos = pos
 
+                if not all(math.isfinite(float(v)) for v in size + aabb_pos):
+                    debug_log("Collision", f"Skipping model with invalid AABB bounds: {model_path}")
+                    continue
                 brushes.append({
                     'pos': aabb_pos,
                     'size': size,
@@ -509,6 +517,9 @@ class LogicCollision:
                 size = [base * scale[i] for i in range(3)]
                 aabb_pos = pos
 
+            if not all(math.isfinite(float(v)) for v in size + aabb_pos):
+                debug_log("Collision", f"Skipping model with invalid AABB fallback: {model_path}")
+                continue
             brushes.append({
                 'pos': aabb_pos,
                 'size': size,
@@ -720,8 +731,16 @@ class LogicCollision:
                 return None
 
             if verts:
-                min_v = [min(v[i] for v in verts) for i in range(3)]
-                max_v = [max(v[i] for v in verts) for i in range(3)]
+                values = np.asarray(verts, dtype=np.float64)
+                if (values.ndim != 2 or values.shape[1] < 3
+                        or not np.isfinite(values[:, :3]).all()):
+                    debug_log("Collision", f"Non-finite model vertices in {model_path}")
+                    return None
+                min_v = values[:, :3].min(axis=0).tolist()
+                max_v = values[:, :3].max(axis=0).tolist()
+                if not all(math.isfinite(v) for v in min_v + max_v):
+                    debug_log("Collision", f"Non-finite model bounds in {model_path}")
+                    return None
                 return min_v, max_v
         except Exception as e:
             debug_log("Collision", f"Failed to compute {ext.upper()} bounds for {model_path}: {e}")
