@@ -880,10 +880,8 @@ class DebugConsole(QWidget):
         # Console text area
         self.console = LogoTextBrowser(self._logo_path, self)
         self.console.setReadOnly(True)
-        # QTextDocument layout can update the scrollbar range after insertHtml
-        # returns. Follow range changes as well as the immediate cursor move so
-        # the console reliably reaches the actual bottom on every Qt platform.
-        self.console.verticalScrollBar().rangeChanged.connect(self._scroll_to_latest)
+        # Output insertion schedules its own deferred scroll after QTextDocument
+        # layout. Do not follow every range change: resizing must not move a reader.
         self.console.setFont(QFont("IBM Plex Mono", self.font_size))
         self.console.setOpenLinks(False)
         self.console.anchorClicked.connect(self._on_anchor_clicked)
@@ -1525,10 +1523,10 @@ class DebugConsole(QWidget):
         if html is not None:
             self._insert_lines([html])
 
-    def _scroll_to_latest(self, _minimum=0, maximum=None):
-        """Keep the console at the scrollbar's real maximum after layout."""
+    def _scroll_to_latest(self):
+        """Keep the console at the scrollbar's real maximum after output layout."""
         scrollbar = self.console.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum() if maximum is None else maximum)
+        scrollbar.setValue(scrollbar.maximum())
 
     def _insert_lines(self, lines):
         """Insert formatted lines at the end in one edit, and scroll once."""
@@ -1540,6 +1538,10 @@ class DebugConsole(QWidget):
         self.console.setTextCursor(cursor)
         self.console.ensureCursorVisible()
         self._scroll_to_latest()
+        # QTextDocument may settle its layout and scrollbar range after this
+        # insertion returns. Defer only this output-triggered scroll; arbitrary
+        # range changes (such as resizing) must preserve the reader's position.
+        QTimer.singleShot(0, self._scroll_to_latest)
         self.message_count += len(lines)
         self._document_lines += len(lines)
         self._show_message_count()

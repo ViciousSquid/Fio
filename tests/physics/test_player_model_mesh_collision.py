@@ -550,3 +550,54 @@ def test_convex_ceiling_contact_is_validated_after_relaxation():
         [(0.0, -25.0, 0.0), (0.0, 0.0, 0.0), (0.0, 25.0, 0.0)],
         25.0,
     ) <= 1e-4
+
+
+def test_slope_following_velocity_remains_grounded_but_jump_separates():
+    normal = (-0.6, 0.8, 0.0)
+    triangle = (
+        (-200.0, -150.0, -200.0),
+        (200.0, 150.0, -200.0),
+        (0.0, 0.0, 200.0),
+    )
+    brush = {"_model_collision": True}
+    bounds = ((-200.0, -150.0, -200.0), (200.0, 150.0, 200.0))
+    model_meshes = [(brush, [(triangle, normal)], bounds)]
+    player = _player_at(y=56.25)
+    offsets, radius = player._capsule_offsets()
+
+    # This velocity is tangent to the slope: it has positive world-Y motion,
+    # but no component separating the capsule from the supporting surface.
+    player.velocity = glm.vec3(64.0, 48.0, 0.0)
+    player._apply_final_ground_state(model_meshes, [], [], offsets, radius)
+
+    assert player.on_ground
+    assert player.ground_object is brush
+
+    # A real jump has a positive component along the slope's outward normal.
+    player.velocity = glm.vec3(0.0, 100.0, 0.0)
+    player._apply_final_ground_state(model_meshes, [], [], offsets, radius)
+
+    assert not player.on_ground
+    assert player.ground_object is None
+
+
+def test_model_headroom_uses_triangles_not_the_enclosing_bounds():
+    deck = _platform()
+    railing = _quad(
+        (90.0, 0.0, -100.0), (90.0, 150.0, -100.0),
+        (90.0, 150.0, 100.0), (90.0, 0.0, 100.0),
+        (1.0, 0.0, 0.0),
+    )
+    brush = _model_collision_brushes(deck + railing, solid=True)[0]
+    player = _player_at()
+
+    # The model AABB spans the railing at x=90, but the standing capsule at
+    # x=0 has clear headroom above the deck.
+    clear_min = glm.vec3(-25.0, 0.0, -25.0)
+    clear_max = glm.vec3(25.0, 100.0, 25.0)
+    assert player._has_headroom(brush, clear_min, clear_max)
+
+    # Moving the standing capsule beside that same railing must still block.
+    blocked_min = glm.vec3(55.0, 0.0, -25.0)
+    blocked_max = glm.vec3(105.0, 100.0, 25.0)
+    assert not player._has_headroom(brush, blocked_min, blocked_max)

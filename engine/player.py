@@ -1814,12 +1814,7 @@ class Player:
         return hit_any
 
     def _find_model_mesh_support(self, model_meshes, offsets, radius):
-        """Return the model supporting the capsule at its final position, if any.
-
-        Only the lowest capsule sphere can establish ground contact. The
-        capsule centre chooses the surface side, so reversed winding and a
-        head sphere on the far side of a ceiling cannot reverse the result.
-        """
+        """Return (supporting model, outward contact normal), if supported."""
         if not model_meshes or not offsets:
             return None
         ox, oy, oz = min(offsets, key=lambda offset: offset[1])
@@ -1832,6 +1827,7 @@ class Player:
         limit_sq = support_radius * support_radius
         best_normal_y = PM_GROUND_NORMAL
         best_brush = None
+        best_normal = None
 
         for brush, triangles, bounds in model_meshes:
             if bounds:
@@ -1865,7 +1861,8 @@ class Player:
                 if contact_normal[1] > best_normal_y:
                     best_normal_y = contact_normal[1]
                     best_brush = brush
-        return best_brush
+                    best_normal = contact_normal
+        return (best_brush, best_normal) if best_brush is not None else None
 
     def _model_mesh_max_penetration(self, model_meshes, offsets, radius):
         """Maximum sphere/triangle penetration at the current capsule position."""
@@ -1922,10 +1919,10 @@ class Player:
         return None
 
     def _find_convex_support(self, shapes, offsets, radius):
-        """Find an upward convex face touching the lowest capsule sphere."""
+        """Return (supporting convex brush, world-space support normal)."""
         if not shapes or not offsets:
             return None
-        bottom_index = min(range(len(offsets)), key=lambda i: offsets[i][1])
+        bottom_index = min(range(len(offsets)), key=lambda i: offsets[i])
         for shape in shapes:
             brush, planes, _bounds, frame, turned = shape
             if not planes:
@@ -1950,19 +1947,22 @@ class Player:
             ox, oy, oz = local_offsets[bottom_index]
             cx, cy, cz = px + ox, py + oy, pz + oz
             best_sd = -1e30
+            support_normal = None
             support_normal_y = -1.0
             for nx, ny, nz, distance in planes:
                 signed_distance = nx * cx + ny * cy + nz * cz - distance
                 if signed_distance > best_sd:
                     best_sd = signed_distance
                     if frame is not None and frame.r is not None:
-                        support_normal_y = frame.to_world_dir(nx, ny, nz)[1]
+                        world_normal = frame.to_world_dir(nx, ny, nz)
+                        support_normal = tuple(float(world_normal[i]) for i in range(3))
                     else:
-                        support_normal_y = ny
+                        support_normal = (float(nx), float(ny), float(nz))
+                    support_normal_y = support_normal[1]
             if (abs(best_sd - radius) <= 0.25
                     and best_sd <= radius + 0.25
                     and support_normal_y >= PM_GROUND_NORMAL):
-                return brush
+                return brush, support_normal
         return None
 
     def _convex_max_penetration(self, shapes, offsets, radius):
@@ -2014,26 +2014,71 @@ class Player:
 
     def _apply_final_ground_state(self, model_meshes, shapes, aabb_brushes,
                                   offsets, radius, terrain=None):
-        """Publish grounding only when the final capsule position has support."""
+        """Publish grounded state only while velocity is not leaving support.
+
+        The separating test is measured along the actual support normal, not
+        world Y: motion tangent to a slope can have positive or negative Y
+        velocity without leaving the surface.
+        """
         self.on_ground = False
         self.ground_object = None
-        if self.velocity.y > 1e-3:
-            return
-        support = self._find_model_mesh_support(model_meshes, offsets, radius)
+        support = None
+        support_normal = None
+
+        model_support = self._find_model_mesh_support(model_meshes, offsets, radius)
+        if model_support is not None:
+            support, support_normal = model_support
+
         if support is None:
             support = self._find_aabb_support(aabb_brushes)
+            if support is not None:
+                support_normal = (0.0, 1.0, 0.0)
+
         if support is None:
-            support = self._find_convex_support(shapes, offsets, radius)
-        if (support is None and terrain is not None and terrain.is_solid()):
+            convex_support = self._find_convex_support(shapes, offsets, radius)
+            if convex_support is not None:
+                support, support_normal = convex_support
+
+        if support is None and terrain is not None and terrain.is_solid():
             terrain_height = terrain.get_height_at_safe(self.pos.x, self.pos.z)
             if (terrain_height is not None
                     and abs(float(self.pos.y - self._half.y) - terrain_height) <= 0.25):
                 support = terrain
-        if support is not None:
-            if self.velocity.y < 0.0:
-                self.velocity.y = 0.0
-            self.on_ground = True
-            self.ground_object = support
+                # Approximate the local heightfield normal using the same safe
+                # scalar surface query used for the contact height.
+                step = 1.0
+                left = terrain.get_height_at_safe(self.pos.x - step, self.pos.z)
+                right = terrain.get_height_at_safe(self.pos.x + step, self.pos.z)
+                back = terrain.get_height_at_safe(self.pos.x, self.pos.z - step)
+                front = terrain.get_height_at_safe(self.pos.x, self.pos.z + step)
+                if all(value is not None for value in (left, right, back, front)):
+                    nx = (float(left) - float(right)) / (2.0 * step)
+                    nz = (float(back) - float(front)) / (2.0 * step)
+                    length = math.sqrt(nx * nx + 1.0 + nz * nz)
+                    support_normal = (nx / length, 1.0 / length, nz / length)
+                else:
+                    support_normal = (0.0, 1.0, 0.0)
+
+        if support is None:
+            return
+
+        normal_speed = (
+            float(self.velocity.x) * support_normal[0]
+            + float(self.velocity.y) * support_normal[1]
+            + float(self.velocity.z) * support_normal[2]
+        )
+        # A positive component along the outward normal means a real jump or
+        # other separation. Tangential uphill/downhill motion remains grounded.
+        if normal_speed > 1e-3:
+            return
+        # Remove only motion into the support. Zeroing world-Y would destroy
+        # the vertical component of otherwise tangential slope movement.
+        if normal_speed < 0.0:
+            self.velocity.x -= support_normal[0] * normal_speed
+            self.velocity.y -= support_normal[1] * normal_speed
+            self.velocity.z -= support_normal[2] * normal_speed
+        self.on_ground = True
+        self.ground_object = support
 
     def _resolve_model_triangle_meshes(self, model_meshes, offsets, radius,
                                       cover=None, start=None):
@@ -2167,17 +2212,71 @@ class Player:
         return False
 
     def _has_headroom(self, brush, player_min, player_max):
-        # Model collision mesh (a proxy with no planes): its mesh bounds.
+        # A model proxy is a non-convex surface mesh. Its overall bounds can
+        # include distant railings or legs that do not occupy the standing
+        # hull. Test the same three-sphere capsule used by player collision
+        # against the actual triangles instead of treating the bounds as solid.
         if brush.get('_collision_mode') == 'mesh' and 'geometry' not in brush:
+            triangles = brush.get('_mesh_triangles') or ()
+            if not triangles:
+                return True
+
             bounds = brush.get('_mesh_bounds')
             if bounds:
                 min_b, max_b = bounds
-                # Standard AABB overlap test using mesh bounds
-                if (player_max.x > min_b[0] and player_min.x < max_b[0] and
-                    player_max.y > min_b[1] and player_min.y < max_b[1] and
-                    player_max.z > min_b[2] and player_min.z < max_b[2]):
-                    return False  # Overlapping mesh bounds → collision
-            return True  # No bounds or no overlap → pass through
+                if (player_max.x < min_b[0] or player_min.x > max_b[0]
+                        or player_max.y < min_b[1] or player_min.y > max_b[1]
+                        or player_max.z < min_b[2] or player_min.z > max_b[2]):
+                    return True
+
+            half_x = (float(player_max.x) - float(player_min.x)) * 0.5
+            half_y = (float(player_max.y) - float(player_min.y)) * 0.5
+            half_z = (float(player_max.z) - float(player_min.z)) * 0.5
+            radius = min(half_x, half_z)
+            if radius <= 0.0:
+                return True
+            centre = (
+                (float(player_min.x) + float(player_max.x)) * 0.5,
+                (float(player_min.y) + float(player_max.y)) * 0.5,
+                (float(player_min.z) + float(player_max.z)) * 0.5,
+            )
+            span = max(half_y - radius, 0.0)
+            spheres = tuple(
+                (centre[0], centre[1] + offset, centre[2])
+                for offset in (-span, 0.0, span)
+            )
+            # Permit exact contact (the deck beneath the player's feet), but
+            # reject a real intersection with a wall, railing or ceiling.
+            contact_radius = max(0.0, radius - 1e-3)
+            radius_sq = contact_radius * contact_radius
+
+            for triangle, _normal in triangles:
+                v0, v1, v2 = triangle
+                tri_min = (
+                    min(v0[0], v1[0], v2[0]),
+                    min(v0[1], v1[1], v2[1]),
+                    min(v0[2], v1[2], v2[2]),
+                )
+                tri_max = (
+                    max(v0[0], v1[0], v2[0]),
+                    max(v0[1], v1[1], v2[1]),
+                    max(v0[2], v1[2], v2[2]),
+                )
+                for sphere in spheres:
+                    if (sphere[0] + contact_radius < tri_min[0]
+                            or sphere[0] - contact_radius > tri_max[0]
+                            or sphere[1] + contact_radius < tri_min[1]
+                            or sphere[1] - contact_radius > tri_max[1]
+                            or sphere[2] + contact_radius < tri_min[2]
+                            or sphere[2] - contact_radius > tri_max[2]):
+                        continue
+                    closest = _closest_point_on_triangle(sphere, v0, v1, v2)
+                    dx = sphere[0] - closest[0]
+                    dy = sphere[1] - closest[1]
+                    dz = sphere[2] - closest[2]
+                    if dx * dx + dy * dy + dz * dz < radius_sq:
+                        return False
+            return True
 
         # An angled brush, static or moving: its derived bounds
         # (brush_placement), where it is now. (Callers pass the brushes the
@@ -2199,7 +2298,7 @@ class Player:
             player_max.y > b[1] and player_min.y < b[4] and
             player_max.z > b[2] and player_min.z < b[5]):
             return False
-            
+
         return True
 
     def _resolve_collision(self, brushes, axis, delta, ignore_brush=None, cover=None):
