@@ -196,7 +196,7 @@ def test_model_correction_is_rechecked_against_convex_floor():
     )
     normal = (0.8, -0.6, 0.0)
     v0 = (0.0, 54.1666666667, -1000.0)
-    v1 = (-300.0, -345.8333333333, -1000.0)
+    v1 = (-300.0, -345.8333333333, 0.0)
     v2 = (0.0, 54.1666666667, 1000.0)
     triangles = [((v0, v1, v2), normal)]
     model_bounds = (
@@ -216,7 +216,11 @@ def test_model_correction_is_rechecked_against_convex_floor():
     assert player.ground_object is floor
 
 
-def test_player_update_sweeps_against_a_model_wall_before_it_can_be_crossed():
+@pytest.mark.parametrize(
+    ("start_x", "direction"),
+    ((25.0, -1.0), (-25.0, 1.0)),
+)
+def test_player_update_sweeps_against_a_model_wall_from_either_side(start_x, direction):
     a = (0.0, -100.0, -100.0)
     b = (0.0, 200.0, -100.0)
     c = (0.0, 200.0, 100.0)
@@ -224,14 +228,14 @@ def test_player_update_sweeps_against_a_model_wall_before_it_can_be_crossed():
     wall = _model_collision_brushes(
         _quad(a, b, c, d, (1.0, 0.0, 0.0)), solid=True
     )[0]
-    player = _player_at(x=25.0, y=50.0)
-    player.velocity = glm.vec3(-300.0, 0.0, 0.0)
+    player = _player_at(x=start_x, y=50.0)
+    player.velocity = glm.vec3(direction * 300.0, 0.0, 0.0)
 
     player.update(
-        0.1, glm.vec3(-1.0, 0.0, 0.0),
+        0.1, glm.vec3(direction, 0.0, 0.0),
         False, False, [wall], gravity=0.0,
     )
 
-    assert player.pos.x == pytest.approx(25.0, abs=1e-2)
+    assert player.pos.x == pytest.approx(start_x, abs=1e-2)
     assert player.velocity.x == pytest.approx(0.0, abs=1e-3)
 
