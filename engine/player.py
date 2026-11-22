@@ -850,12 +850,16 @@ class Player:
             # (explosions and body contacts both add velocity). Bound the
             # displacement after this tick's maximum movement acceleration,
             # jump impulse and gravity change, not self.speed (the input wish).
-            horizontal_accel = max(PM_ACCELERATE, PM_AIRACCELERATE) * PM_MAXSPEED
+            max_wish_speed = max(
+                PM_MAXSPEED, abs(float(self.speed)) * WATER_SWIM_SPEED_MULT
+            )
+            horizontal_accel = max(PM_ACCELERATE, PM_AIRACCELERATE) * max_wish_speed
             pad_x = (abs(float(self.velocity.x)) * delta
                      + horizontal_accel * delta * delta + 32.0)
             pad_z = (abs(float(self.velocity.z)) * delta
                      + horizontal_accel * delta * delta + 32.0)
-            pad_y = ((abs(float(self.velocity.y)) + JUMP_STRENGTH
+            max_vertical_impulse = max(JUMP_STRENGTH, WATERJUMP_MAX_BOOST)
+            pad_y = ((abs(float(self.velocity.y)) + max_vertical_impulse
                       + abs(float(gravity)) * delta) * delta + 32.0)
             movement_pad = glm.vec3(pad_x, pad_y, pad_z)
             player_min = self.pos - half - movement_pad
