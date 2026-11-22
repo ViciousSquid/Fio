@@ -133,6 +133,62 @@ def _closest_point_on_triangle(p, a, b, c):
             a[2] + ab[2] * v + ac[2] * w)
 
 
+def _oriented_triangle_normal(normal, point, reference, velocity):
+    """Orient a triangle normal toward the side occupied by the capsule centre.
+
+    Face winding is not collision state. In particular, using each capsule
+    sphere's displacement independently can send the head sphere through a
+    ceiling while the capsule centre is still below it.
+    """
+    length = math.sqrt(sum(float(v) * float(v) for v in normal))
+    if length <= 1e-10:
+        return (0.0, 1.0, 0.0)
+    n = tuple(float(v) / length for v in normal)
+    side = sum((reference[i] - point[i]) * n[i] for i in range(3))
+    eps = 1e-6
+    if side > eps:
+        sign = 1.0
+    elif side < -eps:
+        sign = -1.0
+    else:
+        into = sum(float(velocity[i]) * n[i] for i in range(3))
+        if into > eps:
+            sign = -1.0
+        elif into < -eps:
+            sign = 1.0
+        elif abs(n[1]) > eps:
+            # With no side or motion information, horizontal decks resolve up.
+            sign = 1.0 if n[1] > 0.0 else -1.0
+        else:
+            first = next((v for v in n if abs(v) > eps), 1.0)
+            sign = 1.0 if first > 0.0 else -1.0
+    return (n[0] * sign, n[1] * sign, n[2] * sign)
+
+
+def _model_triangle_contact_normal(displacement, distance, face_normal,
+                                   contact_point, capsule_centre, velocity):
+    """Return a closest-point normal that stays on the capsule's side of a face.
+
+    Edge and vertex contacts retain their tangential displacement, but a
+    sphere that has crossed a thin face cannot reverse the whole capsule
+    through that face.
+    """
+    face_side = _oriented_triangle_normal(
+        face_normal, contact_point, capsule_centre, velocity
+    )
+    if distance <= 1e-6:
+        return face_side
+    inv_distance = 1.0 / distance
+    n = tuple(float(v) * inv_distance for v in displacement)
+    into = sum(n[i] * face_side[i] for i in range(3))
+    if into < 0.0:
+        n = tuple(n[i] - 2.0 * into * face_side[i] for i in range(3))
+    length = math.sqrt(sum(v * v for v in n))
+    if length <= 1e-10:
+        return face_side
+    return (n[0] / length, n[1] / length, n[2] / length)
+
+
 def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle, normal):
     """Continuous two-sided sphere/triangle contact.
 
@@ -182,19 +238,21 @@ def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle, n
         n = scale(face, 1.0 / face_len)
         distance = dot(sub(p, v0), n)
         normal_speed = dot(movement, n)
-        if abs(normal_speed) > eps:
-            for side in (1.0, -1.0):
-                approach_speed = side * normal_speed
-                if approach_speed >= -eps:
-                    continue
+        if abs(normal_speed) > eps and abs(distance) > eps:
+            # Do not also test the opposite offset plane: when a sphere is
+            # already touching a deck, that false side turns a jump away from
+            # the deck into a t=0 collision.
+            side = 1.0 if distance > 0.0 else -1.0
+            approach_speed = side * normal_speed
+            if approach_speed < -eps:
                 separation = side * distance
                 if separation > r:
                     t = (r - separation) / approach_speed
                 elif separation >= -r:
                     t = 0.0
                 else:
-                    continue
-                if -eps <= t <= 1.0 + eps:
+                    t = None
+                if t is not None and -eps <= t <= 1.0 + eps:
                     centre = add(p, scale(movement, t))
                     contact = sub(centre, scale(n, side * r))
                     if _point_in_triangle(contact, v0, v1, v2):
@@ -950,12 +1008,13 @@ class Player:
         #    (Likewise: a push past the broad phase runs it again in full.)
         if self._resolve_mesh_capsule(
                 mesh_brushes, mesh_shapes, cover,
-                sweep_start=mesh_sweep_start
+                sweep_start=mesh_sweep_start, aabb_brushes=aabb_brushes
         ):
             full, cover = cover.full, None
             aabb_brushes, mesh_brushes, mesh_shapes = _gather(*full)
             self._resolve_mesh_capsule(
-                mesh_brushes, mesh_shapes, sweep_start=mesh_sweep_start
+                mesh_brushes, mesh_shapes, sweep_start=mesh_sweep_start,
+                aabb_brushes=aabb_brushes
             )
 
         # 2. Terrain collision
@@ -1317,7 +1376,8 @@ class Player:
         return offsets, r
 
     def _resolve_mesh_capsule(self, mesh_brushes, mesh_shapes=None, cover=None,
-                              sweep_start=None, _resolve_models=True):
+                              sweep_start=None, _resolve_models=True,
+                              aabb_brushes=None):
         """Resolve the player capsule against angled (mesh) brushes by pushing
         it out of any penetration, and set ground/ceiling state from the
         contact normals.
@@ -1337,7 +1397,9 @@ class Player:
         With *cover* (the tick's mover broad phase, :class:`_Reach`), a
         relaxation pass that leaves the covered area restores position,
         velocity and ground state to their entry values and returns True; the
-        caller then retries against the complete mover list.
+        caller then retries against the complete mover list. Model corrections
+        also recheck AABBs, alternating both constraint sets when a slide
+        redirects the player into a box.
         """
         if not mesh_brushes:
             return False
@@ -1392,6 +1454,34 @@ class Player:
             self.on_ground = entry_on_ground
             self.ground_object = entry_ground_object
 
+        def rollback_unresolved():
+            # A non-convergent constraint set must not publish a penetrated
+            # endpoint. Fall back to the frame start, retaining any velocity
+            # component already clipped by the surface contact.
+            resolved_velocity = (float(self.velocity.x), float(self.velocity.y),
+                                 float(self.velocity.z))
+            if sweep_start is None:
+                fallback = entry_pos
+            elif hasattr(sweep_start, "x"):
+                fallback = (float(sweep_start.x), float(sweep_start.y),
+                            float(sweep_start.z))
+            else:
+                fallback = tuple(float(v) for v in sweep_start)
+            self.pos = glm.vec3(*fallback)
+            self.velocity = glm.vec3(*resolved_velocity)
+            self.on_ground = entry_on_ground
+            self.ground_object = entry_ground_object
+
+        def apply_model_support():
+            if not _resolve_models or not model_meshes or self.velocity.y > 1e-3:
+                return
+            support = self._find_model_mesh_support(model_meshes, offsets, radius)
+            if support is not None:
+                if self.velocity.y < 0.0:
+                    self.velocity.y = 0.0
+                self.on_ground = True
+                self.ground_object = support
+
         start = entry_pos if cover is not None else None
 
         # Sweep the frame displacement before discrete depenetration; otherwise
@@ -1407,28 +1497,45 @@ class Player:
 
         def finish_model_constraints():
             if not _resolve_models or not model_meshes:
-                return False
-            # Model corrections can put the capsule back inside a convex brush.
-            # Alternate both sets until neither correction moves the player.
-            for _ in range(4):
+                return None
+            # Model corrections can re-enter convex brushes or AABBs. Resolve
+            # all three constraint types together until the endpoint is stable.
+            for _ in range(8):
                 before = (float(self.pos.x), float(self.pos.y), float(self.pos.z))
-                if self._resolve_model_triangle_meshes(
-                        model_meshes, offsets, radius, cover, start):
-                    return True
+                model_retry = self._resolve_model_triangle_meshes(
+                    model_meshes, offsets, radius, cover, start
+                )
+                if model_retry is True:
+                    return "retry"
                 if shapes and self._resolve_mesh_capsule(
                         mesh_brushes, mesh_shapes, cover,
                         _resolve_models=False
                 ):
-                    return True
+                    return "retry"
+                if aabb_brushes:
+                    for axis in ("x", "y", "z"):
+                        if self._resolve_collision(
+                                aabb_brushes, axis=axis, delta=0.0, cover=cover):
+                            return "retry"
                 after = (float(self.pos.x), float(self.pos.y), float(self.pos.z))
                 if sum((after[i] - before[i]) ** 2 for i in range(3)) <= 1e-8:
                     break
-            return False
+            # Exhausting the relaxation limit is not success. Never leave a
+            # residual model penetration hidden behind the pass cap.
+            if self._model_mesh_max_penetration(
+                    model_meshes, offsets, radius) > 1e-4:
+                return "unresolved"
+            return None
 
         if not shapes:
-            if finish_model_constraints():
+            status = finish_model_constraints()
+            if status == "retry":
                 restore_entry()
                 return True
+            if status == "unresolved":
+                rollback_unresolved()
+                return False
+            apply_model_support()
             return False
 
         ground_normal = None      # steepest-up contact this resolve
@@ -1548,9 +1655,14 @@ class Player:
             if vn < 0.0:
                 self.velocity.x -= wall_normal[0] * vn
                 self.velocity.z -= wall_normal[2] * vn
-        if finish_model_constraints():
+        status = finish_model_constraints()
+        if status == "retry":
             restore_entry()
             return True
+        if status == "unresolved":
+            rollback_unresolved()
+            return False
+        apply_model_support()
         return False
 
     def _sweep_model_triangle_meshes(self, model_meshes, offsets, radius, sweep_start):
@@ -1649,16 +1761,82 @@ class Player:
                 self.velocity.x -= normal[0] * velocity_into
                 self.velocity.y -= normal[1] * velocity_into
                 self.velocity.z -= normal[2] * velocity_into
-            if normal[1] >= PM_GROUND_NORMAL and self.velocity.y <= 1e-3:
-                self.on_ground = True
-                self.ground_object = brush
-                if self.velocity.y < 0.0:
-                    self.velocity.y = 0.0
-            elif normal[1] <= -0.3 and self.velocity.y > 0.0:
+            if normal[1] <= -0.3 and self.velocity.y > 0.0:
                 self.velocity.y = 0.0
 
         self.pos = glm.vec3(*position)
         return hit_any
+
+    def _find_model_mesh_support(self, model_meshes, offsets, radius):
+        """Return the model supporting the capsule at its final position, if any.
+
+        Only the lowest capsule sphere can establish ground contact. The
+        capsule centre chooses the surface side, so reversed winding and a
+        head sphere on the far side of a ceiling cannot reverse the result.
+        """
+        if not model_meshes or not offsets:
+            return None
+        ox, oy, oz = min(offsets, key=lambda offset: offset[1])
+        sphere = (float(self.pos.x + ox), float(self.pos.y + oy),
+                  float(self.pos.z + oz))
+        centre = (float(self.pos.x), float(self.pos.y), float(self.pos.z))
+        velocity = (float(self.velocity.x), float(self.velocity.y),
+                    float(self.velocity.z))
+        limit_sq = (radius + 0.25) ** 2
+        best_normal_y = PM_GROUND_NORMAL
+        best_brush = None
+
+        for brush, triangles, bounds in model_meshes:
+            if bounds:
+                mn, mx = bounds
+                if (sphere[0] + radius < mn[0] or sphere[0] - radius > mx[0]
+                        or sphere[1] + radius < mn[1] or sphere[1] - radius > mx[1]
+                        or sphere[2] + radius < mn[2] or sphere[2] - radius > mx[2]):
+                    continue
+            for tri, face_normal in triangles:
+                closest = _closest_point_on_triangle(sphere, *tri)
+                delta = (sphere[0] - closest[0], sphere[1] - closest[1],
+                         sphere[2] - closest[2])
+                distance_sq = sum(v * v for v in delta)
+                if distance_sq > limit_sq:
+                    continue
+                distance = math.sqrt(max(0.0, distance_sq))
+                contact_normal = _model_triangle_contact_normal(
+                    delta, distance, face_normal, closest, centre, velocity
+                )
+                if contact_normal[1] > best_normal_y:
+                    best_normal_y = contact_normal[1]
+                    best_brush = brush
+        return best_brush
+
+    def _model_mesh_max_penetration(self, model_meshes, offsets, radius):
+        """Maximum sphere/triangle penetration at the current capsule position."""
+        deepest = 0.0
+        radius_sq = radius * radius
+        half = self._half
+        player_min = (self.pos.x - half.x, self.pos.y - half.y,
+                      self.pos.z - half.z)
+        player_max = (self.pos.x + half.x, self.pos.y + half.y,
+                      self.pos.z + half.z)
+        for _brush, triangles, bounds in model_meshes:
+            if bounds:
+                mn, mx = bounds
+                if (player_max[0] < mn[0] - radius or player_min[0] > mx[0] + radius
+                        or player_max[1] < mn[1] - radius or player_min[1] > mx[1] + radius
+                        or player_max[2] < mn[2] - radius or player_min[2] > mx[2] + radius):
+                    continue
+            for ox, oy, oz in offsets:
+                sphere = (float(self.pos.x + ox), float(self.pos.y + oy),
+                          float(self.pos.z + oz))
+                for tri, _face_normal in triangles:
+                    closest = _closest_point_on_triangle(sphere, *tri)
+                    dx = sphere[0] - closest[0]
+                    dy = sphere[1] - closest[1]
+                    dz = sphere[2] - closest[2]
+                    distance_sq = dx * dx + dy * dy + dz * dz
+                    if distance_sq < radius_sq:
+                        deepest = max(deepest, radius - math.sqrt(distance_sq))
+        return deepest
 
     def _resolve_model_triangle_meshes(self, model_meshes, offsets, radius,
                                       cover=None, start=None):
@@ -1677,8 +1855,6 @@ class Player:
             start = (self.pos.x, self.pos.y, self.pos.z)
 
         radius_sq = radius * radius
-        ground_normal = None
-        ground_brush = None
         ceiling_hit = False
         wall_normal = None
         half = self._half
@@ -1752,30 +1928,14 @@ class Player:
                             continue
                         distance = math.sqrt(max(0.0, distance_sq))
 
-                        if distance > 1e-6:
-                            # Closest-point displacement is the true normal for
-                            # face, edge and vertex contacts. It is winding-
-                            # independent and pushes away from a deck edge.
-                            contact_normal = (dx / distance, dy / distance,
-                                              dz / distance)
-                        else:
-                            # At exact coincidence, choose the face side which
-                            # opposes the current movement.
-                            into = (self.velocity.x * nx + self.velocity.y * ny
-                                    + self.velocity.z * nz)
-                            sign = -1.0 if into > 0.0 else 1.0
-                            contact_normal = (nx * sign, ny * sign, nz * sign)
+                        contact_normal = _model_triangle_contact_normal(
+                            (dx, dy, dz), distance, (nx, ny, nz), closest,
+                            (float(self.pos.x), float(self.pos.y), float(self.pos.z)),
+                            (float(self.velocity.x), float(self.velocity.y),
+                             float(self.velocity.z)),
+                        )
 
-                        if (contact_normal[1] >= PM_GROUND_NORMAL
-                                and self.velocity.y <= 1e-3
-                                and distance <= radius + 0.25):
-                            if (ground_normal is None
-                                    or contact_normal[1] > ground_normal[1]):
-                                ground_normal = contact_normal
-                                ground_brush = brush
-                        elif (contact_normal[1] <= -0.3
-                              and self.velocity.y > 0.0
-                              and distance <= radius + 0.25):
+                        if contact_normal[1] <= -0.3 and self.velocity.y > 0.0:
                             ceiling_hit = True
                         elif abs(contact_normal[1]) < PM_GROUND_NORMAL:
                             wall_normal = contact_normal
@@ -1794,21 +1954,11 @@ class Player:
             self.pos.x += push[0]
             self.pos.y += push[1]
             self.pos.z += push[2]
-            if push_normal[1] >= PM_GROUND_NORMAL:
-                if (ground_normal is None
-                        or push_normal[1] > ground_normal[1]):
-                    ground_normal = push_normal
-                    ground_brush = push_brush
-            elif push_normal[1] <= -0.3:
+            if push_normal[1] <= -0.3:
                 ceiling_hit = True
             elif abs(push_normal[1]) < PM_GROUND_NORMAL:
                 wall_normal = push_normal
 
-        if ground_normal is not None:
-            if self.velocity.y < 0.0:
-                self.velocity.y = 0.0
-            self.on_ground = True
-            self.ground_object = ground_brush
         if ceiling_hit and self.velocity.y > 0.0:
             self.velocity.y = 0.0
         if wall_normal is not None:
