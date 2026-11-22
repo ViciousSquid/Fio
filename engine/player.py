@@ -80,11 +80,6 @@ def _closest_point_on_triangle(p, a, b, c):
     def dot(u, v):
         return u[0] * v[0] + u[1] * v[1] + u[2] * v[2]
 
-    def along(origin, u, v, t):
-        return (origin[0] + u[0] * t + v[0] * t,
-                origin[1] + u[1] * t + v[1] * t,
-                origin[2] + u[2] * t + v[2] * t)
-
     ab, ac, ap = sub(b, a), sub(c, a), sub(p, a)
     d1, d2 = dot(ab, ap), dot(ac, ap)
     if d1 <= 0.0 and d2 <= 0.0:
@@ -1337,7 +1332,8 @@ class Player:
 
         # A few relaxation passes: each pushes out of the deepest overlap, then
         # re-tests, so a capsule touching several faces settles cleanly.
-        for _ in range(4):            if cover is not None and not cover.holds(self.pos.x, self.pos.y, self.pos.z):
+        for _ in range(4):
+            if cover is not None and not cover.holds(self.pos.x, self.pos.y, self.pos.z):
                 self.pos.x, self.pos.y, self.pos.z = start
                 return True
             deepest = 1e-4
