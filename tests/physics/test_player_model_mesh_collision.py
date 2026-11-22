@@ -303,7 +303,7 @@ def test_mesh_slide_is_rechecked_against_aabb_boxes():
     # The wall slide redirects the player into this neighbouring box. The
     # original integrated endpoint is clear of it, so only a post-mesh AABB
     # pass can keep the player out.
-    box = {"pos": [-15.0, 115.0, 85.0], "size": [50.0, 50.0, 50.0]}
+    box = {"pos": [25.0, 115.0, 85.0], "size": [50.0, 50.0, 50.0]}
     player = _player_at(x=100.0, y=50.0, z=-100.0)
     player.velocity = glm.vec3(-1500.0, 0.0, 1500.0)
 
@@ -320,7 +320,7 @@ def test_mesh_slide_is_rechecked_against_aabb_boxes():
         and p_max.y > b_min[1] and p_min.y < b_max[1]
         and p_max.z > b_min[2] and p_min.z < b_max[2]
     )
-    assert player.pos.x >= 35.0 - 1e-2
+    assert player.pos.x >= 75.0 - 1e-2
 
 
 def test_model_ceiling_correction_keeps_the_capsule_below_the_surface():
