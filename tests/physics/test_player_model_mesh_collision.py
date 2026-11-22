@@ -526,3 +526,27 @@ def test_constraint_cycle_rolls_back_instead_of_publishing_convex_penetration():
         and p_max.y > -100.0 and p_min.y < 200.0
         and p_max.z > -100.0 and p_min.z < 100.0
     )
+
+
+def test_convex_ceiling_contact_is_validated_after_relaxation():
+    ceiling = {'pos': [0.0, 110.0, 0.0], 'size': [2000.0, 20.0, 2000.0]}
+    planes = [
+        (-1.0, 0.0, 0.0, 1000.0), (1.0, 0.0, 0.0, 1000.0),
+        (0.0, -1.0, 0.0, -100.0), (0.0, 1.0, 0.0, 120.0),
+        (0.0, 0.0, -1.0, 1000.0), (0.0, 0.0, 1.0, 1000.0),
+    ]
+    shape = (planes, [],
+             ([-1000.0, 100.0, -1000.0],
+              [1000.0, 120.0, 1000.0]), None)
+    player = _player_at(y=80.0)
+    player.velocity = glm.vec3(0.0, 100.0, 0.0)
+
+    player._resolve_mesh_capsule([ceiling], [shape])
+
+    assert player.pos.y == pytest.approx(50.0, abs=1e-3)
+    assert player.velocity.y == 0.0
+    assert player._convex_max_penetration(
+        [[ceiling, planes, shape[2], None, None]],
+        [(0.0, -25.0, 0.0), (0.0, 0.0, 0.0), (0.0, 25.0, 0.0)],
+        25.0,
+    ) <= 1e-4
