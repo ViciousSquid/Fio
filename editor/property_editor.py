@@ -2796,11 +2796,6 @@ class PropertyEditor(QWidget):
             "Enable collision with this model. Leave Physics Enabled off for stationary scenery."
         )
 
-        def set_checkbox(widget, value):
-            widget.blockSignals(True)
-            widget.setChecked(bool(value))
-            widget.blockSignals(False)
-
         def on_physics_toggled(checked):
             # Dynamics and collision are separate authoring choices:
             # gravity/pushing must not be switched on merely to make scenery
