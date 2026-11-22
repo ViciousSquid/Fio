@@ -132,6 +132,7 @@ def _closest_point_on_triangle(p, a, b, c):
             a[1] + ab[1] * v + ac[1] * w,
             a[2] + ab[2] * v + ac[2] * w)
 
+
 def _closest_point_on_triangle_xz(x, z, triangle):
     """Return the triangle height and squared XZ distance to its projection.
 
