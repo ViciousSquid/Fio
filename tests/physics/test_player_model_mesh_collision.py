@@ -484,14 +484,19 @@ def test_nonfinite_model_bounds_do_not_publish_a_nan_collision_proxy():
 
 
 def test_constraint_cycle_rolls_back_instead_of_publishing_convex_penetration():
-    a = (0.0, -100.0, -500.0)
-    b = (0.0, 200.0, -500.0)
-    c = (0.0, 200.0, 500.0)
-    d = (0.0, -100.0, 500.0)
-    model = _model_collision_brushes(
-        _quad(a, b, c, d, (1.0, 0.0, 0.0)), solid=True
+    # The model mesh is present in this resolve, but does not touch the
+    # endpoint. The convex wall pushes x=90 to x=55; the adjacent AABB then
+    # pushes it back to x=75, which re-enters the convex wall. The relaxation
+    # must detect that cycle and reject the endpoint.
+    mesh_wall = _model_collision_brushes(
+        _quad((500.0, -100.0, -500.0),
+              (500.0, 200.0, -500.0),
+              (500.0, 200.0, 500.0),
+              (500.0, -100.0, 500.0),
+              (1.0, 0.0, 0.0)),
+        solid=True
     )[0]
-    box = {'pos': [25.0, 115.0, 85.0], 'size': [50.0, 50.0, 50.0]}
+    aabb = {'pos': [25.0, 50.0, 0.0], 'size': [50.0, 100.0, 200.0]}
     convex = {'pos': [90.0, 50.0, 0.0], 'size': [20.0, 300.0, 200.0]}
     planes = [
         (-1.0, 0.0, 0.0, -80.0), (1.0, 0.0, 0.0, 100.0),
@@ -503,22 +508,18 @@ def test_constraint_cycle_rolls_back_instead_of_publishing_convex_penetration():
         ([80.0, -100.0, -100.0], [100.0, 200.0, 100.0]),
         None,
     )
-    model_shape = ([], model['_mesh_triangles'], model['_mesh_bounds'], None)
-    player = _player_at(x=0.0, y=50.0, z=50.0)
-    player.pos = glm.vec3(0.0, 50.0, 50.0)
-    player.velocity = glm.vec3(-1500.0, 0.0, 1500.0)
+    mesh_shape = ([], mesh_wall['_mesh_triangles'],
+                  mesh_wall['_mesh_bounds'], None)
+    player = _player_at(x=90.0, y=50.0, z=0.0)
 
-    _aabb, meshes, _shapes = _gather([model], [])
+    _aabb, _meshes, _shapes = _gather([mesh_wall], [])
     player._resolve_mesh_capsule(
-        [convex, model], [convex_shape, model_shape],
-        sweep_start=(150.0, 50.0, -100.0),
-        aabb_brushes=[box],
+        [convex, mesh_wall], [convex_shape, mesh_shape],
+        sweep_start=(150.0, 50.0, 0.0),
+        aabb_brushes=[aabb],
     )
 
-    # The constraints cannot be satisfied at the slide endpoint. The resolver
-    # must reject that endpoint rather than publishing a capsule inside the
-    # convex wall after the AABB correction has undone the convex push.
-    assert tuple(player.pos) == pytest.approx((150.0, 50.0, -100.0))
+    assert tuple(player.pos) == pytest.approx((150.0, 50.0, 0.0))
     p_min = player.pos - player._half
     p_max = player.pos + player._half
     assert not (
@@ -526,7 +527,6 @@ def test_constraint_cycle_rolls_back_instead_of_publishing_convex_penetration():
         and p_max.y > -100.0 and p_min.y < 200.0
         and p_max.z > -100.0 and p_min.z < 100.0
     )
-
 
 def test_convex_ceiling_contact_is_validated_after_relaxation():
     ceiling = {'pos': [0.0, 110.0, 0.0], 'size': [2000.0, 20.0, 2000.0]}
