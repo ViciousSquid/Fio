@@ -1028,13 +1028,14 @@ class Player:
         #    (Likewise: a push past the broad phase runs it again in full.)
         if self._resolve_mesh_capsule(
                 mesh_brushes, mesh_shapes, cover,
-                sweep_start=mesh_sweep_start, aabb_brushes=aabb_brushes
+                sweep_start=mesh_sweep_start, aabb_brushes=aabb_brushes,
+                terrain=terrain
         ):
             full, cover = cover.full, None
             aabb_brushes, mesh_brushes, mesh_shapes = _gather(*full)
             self._resolve_mesh_capsule(
                 mesh_brushes, mesh_shapes, sweep_start=mesh_sweep_start,
-                aabb_brushes=aabb_brushes
+                aabb_brushes=aabb_brushes, terrain=terrain
             )
 
         # 2. Terrain collision
@@ -1397,7 +1398,7 @@ class Player:
 
     def _resolve_mesh_capsule(self, mesh_brushes, mesh_shapes=None, cover=None,
                               sweep_start=None, _resolve_models=True,
-                              aabb_brushes=None):
+                              aabb_brushes=None, terrain=None):
         """Resolve the player capsule against angled (mesh) brushes by pushing
         it out of any penetration, and set ground/ceiling state from the
         contact normals.
@@ -1492,13 +1493,14 @@ class Player:
             self.on_ground = False
             self.ground_object = None
             self._apply_final_ground_state(
-                model_meshes, shapes, aabb_brushes, offsets, radius
+                model_meshes, shapes, aabb_brushes, offsets, radius, terrain
             )
 
         def apply_final_ground_state():
             if _resolve_models:
                 self._apply_final_ground_state(
-                    model_meshes, shapes, aabb_brushes, offsets, radius
+                    model_meshes, shapes, aabb_brushes, offsets, radius,
+                    terrain
                 )
 
         start = entry_pos if cover is not None else None
@@ -1528,7 +1530,7 @@ class Player:
                     return "retry"
                 if shapes and self._resolve_mesh_capsule(
                         mesh_brushes, mesh_shapes, cover,
-                        _resolve_models=False
+                        _resolve_models=False, terrain=terrain
                 ):
                     return "retry"
                 if aabb_brushes:
@@ -2003,7 +2005,7 @@ class Player:
         return deepest
 
     def _apply_final_ground_state(self, model_meshes, shapes, aabb_brushes,
-                                  offsets, radius):
+                                  offsets, radius, terrain=None):
         """Publish grounding only when the final capsule position has support."""
         self.on_ground = False
         self.ground_object = None
@@ -2014,6 +2016,11 @@ class Player:
             support = self._find_aabb_support(aabb_brushes)
         if support is None:
             support = self._find_convex_support(shapes, offsets, radius)
+        if (support is None and terrain is not None and terrain.is_solid()):
+            terrain_height = terrain.get_height_at_safe(self.pos.x, self.pos.z)
+            if (terrain_height is not None
+                    and abs(float(self.pos.y - self._half.y) - terrain_height) <= 0.25):
+                support = terrain
         if support is not None:
             if self.velocity.y < 0.0:
                 self.velocity.y = 0.0
