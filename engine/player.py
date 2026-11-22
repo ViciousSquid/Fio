@@ -1922,7 +1922,7 @@ class Player:
         """Return (supporting convex brush, world-space support normal)."""
         if not shapes or not offsets:
             return None
-        bottom_index = min(range(len(offsets)), key=lambda i: offsets[i])
+        bottom_index = min(range(len(offsets)), key=lambda i: offsets[i][1])
         for shape in shapes:
             brush, planes, _bounds, frame, turned = shape
             if not planes:
