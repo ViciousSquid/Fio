@@ -239,3 +239,100 @@ def test_player_update_sweeps_against_a_model_wall_from_either_side(start_x, dir
     assert player.pos.x == pytest.approx(start_x, abs=1e-2)
     assert player.velocity.x == pytest.approx(0.0, abs=1e-3)
 
+
+
+
+def test_jump_leaving_a_model_deck_is_not_cancelled_by_the_face_sweep():
+    brush = _model_collision_brushes(_platform(), solid=True)[0]
+    player = _player_at(y=50.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    player.on_ground = True
+    player.ground_object = brush
+
+    player.update(
+        0.1, glm.vec3(0.0), True, False, [brush], gravity=0.0,
+    )
+
+    assert player.pos.y > 50.0
+    assert player.velocity.y > 0.0
+    assert not player.on_ground
+    assert player.ground_object is None
+
+
+def test_stationary_player_is_not_ejected_below_a_reversed_deck():
+    triangles = [
+        (tuple(reversed(face)), (0.0, -1.0, 0.0))
+        for face, _normal in _platform()
+    ]
+    brush = _model_collision_brushes(triangles, solid=True)[0]
+    player = _player_at(y=25.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+
+    _resolve_model_mesh(player, brush)
+
+    assert player.pos.y == pytest.approx(50.0, abs=1e-3)
+    assert player.on_ground
+    assert player.ground_object is brush
+
+
+def test_swept_edge_contact_does_not_leave_player_grounded_after_sliding_off():
+    brush = _model_collision_brushes(
+        _platform(x0=-100.0, x1=0.0), solid=True
+    )[0]
+    player = _player_at(x=20.0, y=50.0)
+    player.velocity = glm.vec3(50.0, 0.0, 0.0)
+
+    _aabb, meshes, shapes = _gather([brush], [])
+    player._resolve_mesh_capsule(
+        meshes, shapes, sweep_start=(-30.0, 50.0, 0.0)
+    )
+
+    assert player.pos.x == pytest.approx(20.0, abs=1e-2)
+    assert not player.on_ground
+    assert player.ground_object is None
+
+
+def test_mesh_slide_is_rechecked_against_aabb_boxes():
+    a = (0.0, -100.0, -500.0)
+    b = (0.0, 200.0, -500.0)
+    c = (0.0, 200.0, 500.0)
+    d = (0.0, -100.0, 500.0)
+    wall = _model_collision_brushes(
+        _quad(a, b, c, d, (1.0, 0.0, 0.0)), solid=True
+    )[0]
+    # The wall slide redirects the player into this neighbouring box. The
+    # original integrated endpoint is clear of it, so only a post-mesh AABB
+    # pass can keep the player out.
+    box = {"pos": [-15.0, 50.0, 85.0], "size": [50.0, 100.0, 50.0]}
+    player = _player_at(x=100.0, y=50.0, z=-100.0)
+    player.velocity = glm.vec3(-1500.0, 0.0, 1500.0)
+
+    player.update(
+        0.1, glm.vec3(0.0), False, False, [wall, box], gravity=0.0,
+    )
+
+    p_min = player.pos - player._half
+    p_max = player.pos + player._half
+    b_min = [box["pos"][i] - box["size"][i] * 0.5 for i in range(3)]
+    b_max = [box["pos"][i] + box["size"][i] * 0.5 for i in range(3)]
+    assert not (
+        p_max.x > b_min[0] and p_min.x < b_max[0]
+        and p_max.y > b_min[1] and p_min.y < b_max[1]
+        and p_max.z > b_min[2] and p_min.z < b_max[2]
+    )
+    assert player.pos.x >= 35.0 - 1e-2
+
+
+def test_model_ceiling_correction_keeps_the_capsule_below_the_surface():
+    triangles = [
+        (tuple(reversed(face)), (0.0, -1.0, 0.0))
+        for face, _normal in _platform(y=100.0)
+    ]
+    brush = _model_collision_brushes(triangles, solid=True)[0]
+    player = _player_at(y=80.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+
+    _resolve_model_mesh(player, brush)
+
+    assert player.pos.y + player.height * 0.5 <= 100.0 + 1e-3
+    assert player.pos.y == pytest.approx(50.0, abs=1e-3)
