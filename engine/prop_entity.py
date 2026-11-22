@@ -138,10 +138,15 @@ PROP_DEFAULTS = {
     'scale': [1, 1, 1],
 }
 
-#: What a Prop placed to show a model starts as: the Prop defaults (neither
-#: carryable nor solid) in model representation.
+#: What a newly placed, generic model starts as. It is scenery (neither
+#: carryable nor solid), and uses its actual triangles for collision when the
+#: author enables solidity. Model-specific presets below override this:
+#: the Ball and Oil Barrel deliberately use their cheaper AABB.
+#: Existing map records do not pass through for_model(), so their historical
+#: AABB default is unchanged.
 MODEL_PROP_DEFAULTS = {
     'render_mode': 'model',
+    'collision_shape': 'mesh',
 }
 
 #: What a map saved with the old ``Model`` entity meant by one: solid, and not
