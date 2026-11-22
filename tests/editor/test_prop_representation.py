@@ -311,6 +311,28 @@ def visible_rows_above_representation(panel):
     raise AssertionError("no form in the panel carries a Representation row")
 
 
+def test_solid_can_be_enabled_without_turning_on_physics(panel):
+    """Static scenery must not become a falling physics body when made solid."""
+    prop = Prop(pos=[0, 0, 0], properties={
+        'render_mode': 'model',
+        'model_path': Prop.DEFAULT_MODEL_PATH,
+        'physics_enabled': False,
+        'no_collision': True,
+    })
+    representation_combo(panel, prop)
+
+    solid = panel._widgets['prop_solid_cb']
+    physics = panel._widgets['prop_physics_enabled_cb']
+    assert not solid.isChecked()
+    assert not physics.isChecked()
+
+    solid.setChecked(True)
+
+    assert prop.properties['no_collision'] is False
+    assert prop.properties['physics_enabled'] is False
+    assert not physics.isChecked()
+
+
 def test_the_control_does_not_move_when_it_is_used(panel):
     """The reported symptom: the combo jumped when you changed it."""
     prop = Prop(pos=[0, 0, 0])
