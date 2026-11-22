@@ -371,12 +371,19 @@ class LogicCollision:
                 scale = [scale, scale, scale]
             else:
                 scale = list(scale)
+            if (len(pos) < 3 or len(scale) < 3
+                    or not all(math.isfinite(float(v)) for v in pos[:3])
+                    or not all(math.isfinite(float(v)) for v in scale[:3])):
+                debug_log("Collision", f"Skipping model with non-finite transform: {props.get('model_path', '')}")
+                continue
 
             rot = props.get('rotation', [0, 0, 0])
             is_physics_body = physics_enabled
-            # Two shapes, both taken from the model: AABB (the default: a box
-            # around it, the cheap path everything was on) and Mesh (its
-            # triangles). 'auto', which older maps hold, is AABB.
+            # Two shapes, both taken from the model: AABB (the compatibility
+            # default for existing Prop records, and the Ball/Barrel presets)
+            # or Mesh (the model's actual triangles). Newly placed generic
+            # models are assigned Mesh by Prop.for_model(). 'auto', which older
+            # maps hold, remains AABB.
             collision_shape = str(
                 props.get('collision_shape', 'aabb')
             ).lower()
@@ -444,6 +451,9 @@ class LogicCollision:
                     size = [base * scale[i] for i in range(3)]
                     aabb_pos = pos
 
+                if not all(math.isfinite(float(v)) for v in size + aabb_pos):
+                    debug_log("Collision", f"Skipping model with invalid AABB bounds: {model_path}")
+                    continue
                 brushes.append({
                     'pos': aabb_pos,
                     'size': size,
@@ -507,6 +517,9 @@ class LogicCollision:
                 size = [base * scale[i] for i in range(3)]
                 aabb_pos = pos
 
+            if not all(math.isfinite(float(v)) for v in size + aabb_pos):
+                debug_log("Collision", f"Skipping model with invalid AABB fallback: {model_path}")
+                continue
             brushes.append({
                 'pos': aabb_pos,
                 'size': size,
@@ -631,7 +644,11 @@ class LogicCollision:
                 ny = e1[2]*e2[0] - e1[0]*e2[2]
                 nz = e1[0]*e2[1] - e1[1]*e2[0]
                 length = math.sqrt(nx*nx + ny*ny + nz*nz)
-                w_normal = (nx/length, ny/length, nz/length) if length > 0.001 else (0.0, 1.0, 0.0)
+                if not math.isfinite(length) or length <= 1e-8:
+                    # Zero-area faces cannot define collision surfaces.
+                    # Do not publish a degenerate triangle with a fake normal.
+                    continue
+                w_normal = (nx/length, ny/length, nz/length)
 
                 world_tris.append(((w0, w1, w2), w_normal))
 
@@ -714,8 +731,16 @@ class LogicCollision:
                 return None
 
             if verts:
-                min_v = [min(v[i] for v in verts) for i in range(3)]
-                max_v = [max(v[i] for v in verts) for i in range(3)]
+                values = np.asarray(verts, dtype=np.float64)
+                if (values.ndim != 2 or values.shape[1] < 3
+                        or not np.isfinite(values[:, :3]).all()):
+                    debug_log("Collision", f"Non-finite model vertices in {model_path}")
+                    return None
+                min_v = values[:, :3].min(axis=0).tolist()
+                max_v = values[:, :3].max(axis=0).tolist()
+                if not all(math.isfinite(v) for v in min_v + max_v):
+                    debug_log("Collision", f"Non-finite model bounds in {model_path}")
+                    return None
                 return min_v, max_v
         except Exception as e:
             debug_log("Collision", f"Failed to compute {ext.upper()} bounds for {model_path}: {e}")

@@ -713,9 +713,6 @@ class DebugConsole(QWidget):
         # Track enabled categories
         self.enabled_categories = set(self.CATEGORY_COLORS.keys())
 
-        # Auto-scroll flag
-        self.auto_scroll = True
-
         # Message count
         self.message_count = 0
         #: Lines currently in the document (bounded; see MAX_DOCUMENT_LINES).
@@ -763,19 +760,6 @@ class DebugConsole(QWidget):
         self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
         self.filter_combo.setMinimumWidth(200)
         toolbar.addWidget(self.filter_combo)
-
-        # Separator
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.VLine)
-        sep1.setStyleSheet("color: #444;")
-        toolbar.addWidget(sep1)
-
-        # Auto-scroll checkbox
-        self.auto_scroll_cb = QCheckBox("Auto-scroll")
-        self.auto_scroll_cb.setChecked(True)
-        self.auto_scroll_cb.setStyleSheet("color: #aaa;")
-        self.auto_scroll_cb.toggled.connect(self._on_auto_scroll_toggled)
-        toolbar.addWidget(self.auto_scroll_cb)
 
         # Filter Empty Checkbox
         self.filter_empty_cb = QCheckBox("Filter Empty")
@@ -896,6 +880,8 @@ class DebugConsole(QWidget):
         # Console text area
         self.console = LogoTextBrowser(self._logo_path, self)
         self.console.setReadOnly(True)
+        # Output insertion schedules its own deferred scroll after QTextDocument
+        # layout. Do not follow every range change: resizing must not move a reader.
         self.console.setFont(QFont("IBM Plex Mono", self.font_size))
         self.console.setOpenLinks(False)
         self.console.anchorClicked.connect(self._on_anchor_clicked)
@@ -1158,10 +1144,9 @@ class DebugConsole(QWidget):
         self.command_input.add_history(cmd)
         self.command_input.clear()
 
-        # Auto-scroll to show the command we just typed
-        if self.auto_scroll:
-            self.console.setTextCursor(cursor)
-            self.console.ensureCursorVisible()
+        # Keep the newest command visible.
+        self.console.setTextCursor(cursor)
+        self.console.ensureCursorVisible()
 
         # Pass the raw string to whatever is listening
         self.command_issued.emit(cmd)
@@ -1538,6 +1523,11 @@ class DebugConsole(QWidget):
         if html is not None:
             self._insert_lines([html])
 
+    def _scroll_to_latest(self):
+        """Keep the console at the scrollbar's real maximum after output layout."""
+        scrollbar = self.console.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
     def _insert_lines(self, lines):
         """Insert formatted lines at the end in one edit, and scroll once."""
         if not lines:
@@ -1545,9 +1535,13 @@ class DebugConsole(QWidget):
         cursor = self.console.textCursor()
         cursor.movePosition(QTextCursor.End)
         cursor.insertHtml(''.join(lines))
-        if self.auto_scroll:
-            self.console.setTextCursor(cursor)
-            self.console.ensureCursorVisible()
+        self.console.setTextCursor(cursor)
+        self.console.ensureCursorVisible()
+        self._scroll_to_latest()
+        # QTextDocument may settle its layout and scrollbar range after this
+        # insertion returns. Defer only this output-triggered scroll; arbitrary
+        # range changes (such as resizing) must preserve the reader's position.
+        QTimer.singleShot(0, self._scroll_to_latest)
         self.message_count += len(lines)
         self._document_lines += len(lines)
         self._show_message_count()
@@ -1889,10 +1883,6 @@ class DebugConsole(QWidget):
         lines = [self._format_message(category, message)
                  for category, message in logger.get_buffer()]
         self._insert_lines([line for line in lines if line is not None])
-
-    def _on_auto_scroll_toggled(self, checked: bool):
-        """Handle auto-scroll toggle."""
-        self.auto_scroll = checked
 
     def clear(self):
         """Clear the console and buffer."""

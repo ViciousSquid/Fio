@@ -1,9 +1,10 @@
-"""A physics Prop's body is a box derived from its model, not a point.
+"""A physics Prop's body is derived from its model, not a point.
 
 Two solid physics Props meet at their models' bounds -- stacked, the upper one
-rests a model's height above the lower; side by side, one stops against the
-other's face -- in either Collision Shape a Prop can choose (AABB, the
-default, or Mesh), and for a map that still says "auto" (which is AABB).
+rests on the lower; side by side, one stops against the other's face. Existing
+Prop records and the Ball/Barrel presets use AABB for compatibility; newly
+placed generic models use their actual triangles (Mesh). A map that still says
+"auto" also remains AABB.
 """
 import pytest
 
@@ -86,7 +87,7 @@ def _show_physics_tab(main_window):
                               if tabs.tabText(i) == "Physics"))
 
 
-def test_the_collision_shape_is_aabb_or_mesh_and_aabb_by_default(main_window):
+def test_existing_prop_records_default_to_aabb_but_can_choose_mesh(main_window):
     from editor.things import Thing
     from PyQt5.QtWidgets import QComboBox
 

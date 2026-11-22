@@ -14,7 +14,8 @@ pytest.importorskip("PyQt5", reason="the property panel is editor-tier")
 
 from editor.main_window import MainWindow               # noqa: E402
 from editor.property_editor import PropertyEditor      # noqa: E402
-from engine.prop_entity import PROP_DEFAULTS, Prop     # noqa: E402
+from engine.prop_entity import (PROP_DEFAULTS, Prop,
+                                legacy_model_properties)  # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -190,6 +191,31 @@ def _collision_brushes_for(things):
     return LogicCollision(thread).build_model_collision_brushes()
 
 
+def test_new_custom_models_use_mesh_collision_without_changing_old_maps():
+    """New placements get surface collision; existing records keep AABB."""
+    model_path = 'assets/models/prop_book.obj'
+    placed = Prop.for_model(model_path, pos=[0, 0, 0],
+                             properties={'no_collision': False})
+    assert placed.properties['collision_shape'] == 'mesh'
+
+    brushes = _collision_brushes_for([placed])
+    assert len(brushes) == 1
+    assert brushes[0]['_collision_mode'] == 'mesh'
+    assert brushes[0]['_mesh_triangles']
+
+    # The author can still request a box for an individual new model.
+    boxed = Prop.for_model(model_path, pos=[0, 0, 0],
+                           properties={'collision_shape': 'aabb'})
+    assert boxed.properties['collision_shape'] == 'aabb'
+
+    # Old Model records are converted to Props without acquiring the new
+    # placement default. They retain their historical AABB behaviour.
+    legacy = Prop(pos=[0, 0, 0], properties=legacy_model_properties({
+        'model_path': model_path,
+    }))
+    assert legacy.properties['collision_shape'] == 'aabb'
+
+
 def test_a_default_sprite_prop_has_no_collision():
     prop = Prop(pos=[0, 0, 0])
     assert prop.properties['render_mode'] == 'billboard'
@@ -309,6 +335,58 @@ def visible_rows_above_representation(panel):
         return sum(1 for r, w in rows.items()
                    if r < target and w.isVisibleTo(panel))
     raise AssertionError("no form in the panel carries a Representation row")
+
+
+def test_solid_can_be_enabled_without_turning_on_physics(panel):
+    """Static scenery must not become a falling physics body when made solid."""
+    prop = Prop(pos=[0, 0, 0], properties={
+        'render_mode': 'model',
+        'model_path': Prop.DEFAULT_MODEL_PATH,
+        'physics_enabled': False,
+        'no_collision': True,
+    })
+    representation_combo(panel, prop)
+    physics_index = next(
+        index for index in range(panel.tab_widget.count())
+        if panel.tab_widget.tabText(index) == "Physics"
+    )
+    panel.tab_widget.setCurrentIndex(physics_index)
+
+    solid = panel._widgets['prop_solid_cb']
+    physics = panel._widgets['prop_physics_enabled_cb']
+    assert not solid.isChecked()
+    assert not physics.isChecked()
+
+    solid.setChecked(True)
+
+    assert prop.properties['no_collision'] is False
+    assert prop.properties['physics_enabled'] is False
+    assert not physics.isChecked()
+
+
+def test_enabling_topples_enables_physics_and_solid(panel):
+    """Toppling must still enable both of its required physics prerequisites."""
+    prop = Prop(pos=[0, 0, 0], properties={
+        'render_mode': 'model',
+        'model_path': Prop.DEFAULT_MODEL_PATH,
+        'physics_enabled': False,
+        'no_collision': True,
+        'topples': False,
+    })
+    representation_combo(panel, prop)
+    physics_index = next(
+        index for index in range(panel.tab_widget.count())
+        if panel.tab_widget.tabText(index) == "Physics"
+    )
+    panel.tab_widget.setCurrentIndex(physics_index)
+
+    panel._widgets['prop_topples_cb'].setChecked(True)
+
+    assert prop.properties['topples'] is True
+    assert prop.properties['physics_enabled'] is True
+    assert prop.properties['no_collision'] is False
+    assert panel._widgets['prop_physics_enabled_cb'].isChecked()
+    assert panel._widgets['prop_solid_cb'].isChecked()
 
 
 def test_the_control_does_not_move_when_it_is_used(panel):
