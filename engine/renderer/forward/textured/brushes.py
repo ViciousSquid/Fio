@@ -78,6 +78,9 @@ class TexturedMixin:
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('textured', lights)
+        emissive_loc = uniforms['emissive_factor']
+        if emissive_loc is not None and emissive_loc != -1:
+            gl.glUniform3f(emissive_loc, 0.0, 0.0, 0.0)
 
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(view)
