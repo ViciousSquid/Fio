@@ -1993,16 +1993,36 @@ class Player:
                 delta = (sphere[0] - closest[0], sphere[1] - closest[1],
                          sphere[2] - closest[2])
                 distance_sq = sum(v * v for v in delta)
-                if distance_sq > limit_sq:
-                    continue
-                distance = math.sqrt(max(0.0, distance_sq))
-                contact_normal = _model_triangle_contact_normal(
-                    delta, distance, face_normal, closest, centre, velocity
+                if distance_sq <= limit_sq:
+                    distance = math.sqrt(max(0.0, distance_sq))
+                    contact_normal = _model_triangle_contact_normal(
+                        delta, distance, face_normal, closest, centre, velocity
+                    )
+                    if contact_normal[1] > best_normal_y:
+                        best_normal_y = contact_normal[1]
+                        best_brush = brush
+                        best_normal = contact_normal
+
+                # The player hull has a flat supporting footprint. At the
+                # leading edge of a stepped tread, the lower capsule sphere
+                # can be more than one radius from the triangle even though
+                # the tread is directly under the overlapping hull. Accept
+                # that contact only when the actual feet plane meets a
+                # walkable triangle within the horizontal capsule footprint.
+                feet_y = float(self.pos.y - self._half.y)
+                top, footprint_distance_sq = _closest_point_on_triangle_xz(
+                    centre[0], centre[2], tri
                 )
-                if contact_normal[1] > best_normal_y:
-                    best_normal_y = contact_normal[1]
-                    best_brush = brush
-                    best_normal = contact_normal
+                if (footprint_distance_sq <= radius * radius + 1e-6
+                        and abs(feet_y - top) <= 0.25):
+                    support_point = (centre[0], top, centre[2])
+                    contact_normal = _oriented_triangle_normal(
+                        face_normal, support_point, centre, velocity
+                    )
+                    if contact_normal[1] > best_normal_y:
+                        best_normal_y = contact_normal[1]
+                        best_brush = brush
+                        best_normal = contact_normal
         return (best_brush, best_normal) if best_brush is not None else None
 
     def _model_mesh_max_penetration(self, model_meshes, offsets, radius):
