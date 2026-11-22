@@ -2783,7 +2783,7 @@ class PropertyEditor(QWidget):
             _Style.CHECKBOX,
         )
         physics_cb.setToolTip(
-            "Enable gravity, pushing and dropped-object physics for this prop"
+            "Enable dynamic simulation (gravity and pushing). This is independent of Solid."
         )
 
         solid_cb = _make_checkbox(
@@ -2793,8 +2793,7 @@ class PropertyEditor(QWidget):
             _Style.CHECKBOX,
         )
         solid_cb.setToolTip(
-            "Make this prop physically solid. Solid and Physics can be "
-            "controlled independently after enabling either one."
+            "Enable collision with this model. Leave Physics Enabled off for stationary scenery."
         )
 
         def set_checkbox(widget, value):
@@ -2803,21 +2802,13 @@ class PropertyEditor(QWidget):
             widget.blockSignals(False)
 
         def on_physics_toggled(checked):
+            # Dynamics and collision are separate authoring choices:
+            # gravity/pushing must not be switched on merely to make scenery
+            # solid, and disabling dynamics must not remove static collision.
             self.update_object_prop('physics_enabled', bool(checked))
-            # Enabling physics implies collision, but disabling physics does
-            # not force collision off. This leaves the two properties
-            # independently editable after the initial enable.
-            if checked and not solid_cb.isChecked():
-                set_checkbox(solid_cb, True)
-                self.update_object_prop('no_collision', False)
 
         def on_solid_toggled(checked):
             self.update_object_prop('no_collision', not bool(checked))
-            # Enabling solidity implies physics, but disabling solidity does
-            # not force physics off. This permits physics-without-collision.
-            if checked and not physics_cb.isChecked():
-                set_checkbox(physics_cb, True)
-                self.update_object_prop('physics_enabled', True)
 
         physics_cb.toggled.connect(on_physics_toggled)
         solid_cb.toggled.connect(on_solid_toggled)
