@@ -713,9 +713,6 @@ class DebugConsole(QWidget):
         # Track enabled categories
         self.enabled_categories = set(self.CATEGORY_COLORS.keys())
 
-        # Auto-scroll flag
-        self.auto_scroll = True
-
         # Message count
         self.message_count = 0
         #: Lines currently in the document (bounded; see MAX_DOCUMENT_LINES).
@@ -769,13 +766,6 @@ class DebugConsole(QWidget):
         sep1.setFrameShape(QFrame.VLine)
         sep1.setStyleSheet("color: #444;")
         toolbar.addWidget(sep1)
-
-        # Auto-scroll checkbox
-        self.auto_scroll_cb = QCheckBox("Auto-scroll")
-        self.auto_scroll_cb.setChecked(True)
-        self.auto_scroll_cb.setStyleSheet("color: #aaa;")
-        self.auto_scroll_cb.toggled.connect(self._on_auto_scroll_toggled)
-        toolbar.addWidget(self.auto_scroll_cb)
 
         # Filter Empty Checkbox
         self.filter_empty_cb = QCheckBox("Filter Empty")
@@ -1158,10 +1148,9 @@ class DebugConsole(QWidget):
         self.command_input.add_history(cmd)
         self.command_input.clear()
 
-        # Auto-scroll to show the command we just typed
-        if self.auto_scroll:
-            self.console.setTextCursor(cursor)
-            self.console.ensureCursorVisible()
+        # Keep the newest command visible.
+        self.console.setTextCursor(cursor)
+        self.console.ensureCursorVisible()
 
         # Pass the raw string to whatever is listening
         self.command_issued.emit(cmd)
@@ -1545,9 +1534,8 @@ class DebugConsole(QWidget):
         cursor = self.console.textCursor()
         cursor.movePosition(QTextCursor.End)
         cursor.insertHtml(''.join(lines))
-        if self.auto_scroll:
-            self.console.setTextCursor(cursor)
-            self.console.ensureCursorVisible()
+        self.console.setTextCursor(cursor)
+        self.console.ensureCursorVisible()
         self.message_count += len(lines)
         self._document_lines += len(lines)
         self._show_message_count()
@@ -1889,10 +1877,6 @@ class DebugConsole(QWidget):
         lines = [self._format_message(category, message)
                  for category, message in logger.get_buffer()]
         self._insert_lines([line for line in lines if line is not None])
-
-    def _on_auto_scroll_toggled(self, checked: bool):
-        """Handle auto-scroll toggle."""
-        self.auto_scroll = checked
 
     def clear(self):
         """Clear the console and buffer."""
