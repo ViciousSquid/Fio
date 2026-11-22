@@ -569,6 +569,8 @@ class Player:
         self._cover = None
         self.physics_enabled = physics_enabled
         self.step_height = 18.0  # Max height the player can step up automatically
+        # Downward allowance for mesh-footprint support, refreshed per physics tick.
+        self._mesh_support_snap_distance = 0.25
 
         # Water / swimming state (refreshed every update)
         self.in_water = False          # any meaningful immersion (wading or deeper)
@@ -879,6 +881,11 @@ class Player:
         if gravity is None:
             gravity = world_gravity()
         self._gravity = gravity
+        # A grounded player receives gravity before collision resolution. Permit
+        # the footprint probe to recover that one-tick drop at lower frame rates.
+        self._mesh_support_snap_distance = max(
+            0.25, abs(float(gravity)) * float(delta) * float(delta) + 1e-3
+        )
         # --- Build collider list ---
         if spatial_grid:
             # Use the grid to get only nearby static brushes
@@ -1777,10 +1784,12 @@ class Player:
             return 0.0
 
         half = self._half
-        player_min = (self.pos.x - half.x, self.pos.y - half.y,
-                      self.pos.z - half.z)
-        player_max = (self.pos.x + half.x, self.pos.y + half.y,
-                      self.pos.z + half.z)
+        player_min = glm.vec3(
+            self.pos.x - half.x, self.pos.y - half.y, self.pos.z - half.z
+        )
+        player_max = glm.vec3(
+            self.pos.x + half.x, self.pos.y + half.y, self.pos.z + half.z
+        )
         blocked = []
         for brush, triangles, _bounds in model_meshes:
             if not self._has_headroom(brush, player_min, player_max):
@@ -1969,6 +1978,10 @@ class Player:
         best_normal_y = PM_GROUND_NORMAL
         best_brush = None
         best_normal = None
+        best_footprint_top = None
+        support_snap_distance = max(
+            0.25, float(self._mesh_support_snap_distance)
+        )
 
         for brush, triangles, bounds in model_meshes:
             if bounds:
@@ -2010,12 +2023,14 @@ class Player:
                 # inspect walkable triangles whose height range reaches the
                 # feet plane; then use the actual triangle projection.
                 if (abs(float(face_normal[1])) >= PM_GROUND_NORMAL
-                        and tri_min[1] - 0.25 <= feet_y <= tri_max[1] + 0.25):
+                        and tri_min[1] - support_snap_distance <= feet_y
+                        <= tri_max[1] + 0.25):
                     top, footprint_distance_sq = _closest_point_on_triangle_xz(
                         centre[0], centre[2], tri
                     )
+                    support_gap = top - feet_y
                     if (footprint_distance_sq <= radius * radius + 1e-6
-                            and abs(feet_y - top) <= 0.25):
+                            and -0.25 <= support_gap <= support_snap_distance + 1e-6):
                         support_point = (centre[0], top, centre[2])
                         contact_normal = _oriented_triangle_normal(
                             face_normal, support_point, centre, velocity
@@ -2024,6 +2039,12 @@ class Player:
                             best_normal_y = contact_normal[1]
                             best_brush = brush
                             best_normal = contact_normal
+                            best_footprint_top = top
+        # Snap only downward/inward motion onto the actual accepted surface.
+        # Positive separating velocity is left untouched so jumping still detaches.
+        if (best_footprint_top is not None and velocity[1] <= 1e-3
+                and feet_y < best_footprint_top):
+            self.pos.y = best_footprint_top + float(self._half.y)
         return (best_brush, best_normal) if best_brush is not None else None
 
     def _model_mesh_max_penetration(self, model_meshes, offsets, radius):
