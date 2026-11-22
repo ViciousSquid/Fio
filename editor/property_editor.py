@@ -2975,7 +2975,9 @@ class PropertyEditor(QWidget):
                 "Cheap, and the steady choice for anything stacked.\n"
                 "Mesh: collisions use the model's actual shape -- other physics "
                 "objects rest on its real surface and are stopped by its real "
-                "sides. Costs more, in proportion to the model's triangles."
+                "sides. Costs more, in proportion to the model's triangles.\n"
+                "Newly placed custom models use Mesh by default; the Ball and "
+                "Oil Barrel presets and older maps keep AABB."
             ),
         )
         reverse_shape_labels = {label: value for value, label in shape_labels.items()}
