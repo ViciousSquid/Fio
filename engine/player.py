@@ -1533,11 +1533,14 @@ class Player:
                             continue
                         distance = math.sqrt(max(0.0, distance_sq))
 
+                        signed_side = dx * nx + dy * ny + dz * nz
                         if abs(ny) >= PM_GROUND_NORMAL:
-                            # A horizontal or walkable slope uses its authored
-                            # face normal. Top faces push up; underside faces
-                            # push down. OBJ winding therefore remains meaningful.
-                            contact_normal = (nx, ny, nz)
+                            # Decks and treads are two-sided collision
+                            # surfaces. OBJ face winding may point either way;
+                            # orient the contact normal toward the capsule so
+                            # a player above a deck is always supported.
+                            side = 1.0 if signed_side >= 0.0 else -1.0
+                            contact_normal = (nx * side, ny * side, nz * side)
                         elif distance > 1e-6:
                             # Vertical faces are two-sided: push away from the
                             # closest point, whichever side the player occupies.
