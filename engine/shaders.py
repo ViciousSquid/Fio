@@ -614,6 +614,7 @@ in highp vec3 FragPos;
 in vec3 Normal;
 uniform vec3 object_color;
 uniform float alpha;
+uniform vec3 emissive_factor;
 struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS) + """];
 uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
@@ -634,6 +635,7 @@ void main() {
             result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
         }
     }
+    result += emissive_factor;
     FragColor = vec4(applyFog(result, FragPos), alpha);
 }""",
 
@@ -677,6 +679,7 @@ in highp vec2 TexCoords;
 
 uniform sampler2D texture_diffuse;
 uniform vec4 model_tint;
+uniform vec3 emissive_factor;
 struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS) + """];
 uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
@@ -703,6 +706,7 @@ void main() {
             result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
         }
     }
+    result += emissive_factor;
     FragColor = vec4(applyFog(result, FragPos), texColor.a);
 }""",
 
@@ -2418,6 +2422,7 @@ in vec3 FragPos;
 in vec3 Normal;
 uniform vec3 object_color;
 uniform float alpha;
+uniform vec3 emissive_factor;
 struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
 uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
@@ -2438,6 +2443,7 @@ void main() {
             result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
         }
     }
+    result += emissive_factor;
     FragColor = vec4(applyFog(result, FragPos), alpha);
 }"""
 
@@ -2475,6 +2481,7 @@ in vec3 Normal;
 in vec2 TexCoords;
 uniform sampler2D texture_diffuse;
 uniform vec4 model_tint;
+uniform vec3 emissive_factor;
 struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
 uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """void main() {
@@ -2498,6 +2505,7 @@ uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """void main() {
             result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
         }
     }
+    result += emissive_factor;
     FragColor = vec4(applyFog(result, FragPos), texColor.a);
 }"""
 
