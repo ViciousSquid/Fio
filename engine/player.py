@@ -904,9 +904,9 @@ class Player:
         fall_speed = float(self.velocity.y)
         mesh_sweep_start = (float(self.pos.x), float(self.pos.y), float(self.pos.z))
 
-        # A. Horizontal movement with AABB collision.  This integrates X/Z
-        # once (it advances pos even with an empty brush list), so mesh brushes
-        # must NOT integrate again — they are resolved by depenetration below.
+        # A. Horizontal movement with AABB collision. This integrates X/Z
+        # once, even with an empty brush list. Mesh brushes do not integrate a
+        # second time: their already-integrated displacement is swept below.
         # (Each pass tests where its move puts the player, and a step up
         # from there: the broad phase must cover that first.)
         if cover is not None and not cover.holds(
@@ -1322,24 +1322,22 @@ class Player:
         it out of any penetration, and set ground/ceiling state from the
         contact normals.
 
-        This runs *after* the shared position integration (the AABB pass moves
-        X/Z, ``pos.y += vel.y*dt`` moves Y), so it only corrects for angled
-        geometry.  A discrete depenetration model is what makes ramps behave:
-        walking into an incline embeds the capsule, then the push-out along the
-        face normal lifts the feet onto the slope (you climb) and leaves the
-        body resting exactly on the surface instead of sinking in — while a
-        vertical angled face just shoves you back like a wall.
+        This runs after the shared X/Y/Z position integration. Model surfaces
+        are swept from the frame's starting position to the integrated endpoint
+        before discrete depenetration, preventing a fast player from crossing a
+        thin triangle wall between ticks.
 
-        Each brush is a convex solid, so a sphere is depenetrated with the
-        separating-plane rule: the plane of greatest signed distance gives the
-        minimum push out.  That works whether the sphere merely clips a face or
-        has its centre fully inside the solid (which the earlier triangle test
-        missed, letting the player tunnel through angled walls).
+        Convex brushes remain solids and use their separating planes: the plane
+        of greatest signed distance gives the minimum push out, including when
+        the capsule centre is inside the solid. Non-convex model Props instead
+        use their actual triangle surfaces. The two constraint sets are
+        alternated after contact so a model correction cannot leave the player
+        embedded in a convex brush.
 
         With *cover* (the tick's mover broad phase, :class:`_Reach`), a
-        relaxation pass that would start where the broad phase no longer
-        covers it puts the player back where this began and returns True,
-        with nothing else changed: the caller runs it again on every mover.
+        relaxation pass that leaves the covered area restores position,
+        velocity and ground state to their entry values and returns True; the
+        caller then retries against the complete mover list.
         """
         if not mesh_brushes:
             return False
