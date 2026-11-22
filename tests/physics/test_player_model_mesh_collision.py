@@ -9,8 +9,8 @@ import pytest
 from editor.editor_state import EditorState
 from engine.logic_thread import LogicThread
 from engine.player import Player, _gather
-from engine.spatial_grid import SpatialGrid
 from engine.prop_entity import Prop
+from engine.spatial_grid import SpatialGrid
 from engine.threaded_game_state import ThreadedGameState
 
 pytestmark = pytest.mark.qt
@@ -25,8 +25,6 @@ def _platform(y=0.0, x0=-100.0, x1=100.0):
     c, d = (x1, y, 100.0), (x1, y, -100.0)
     # Winding gives the top face an upward normal.
     return _quad(a, b, c, d, (0.0, 1.0, 0.0))
-
-
 
 def _staircase():
     """Three 12-unit risers with real vertical faces and horizontal treads."""
