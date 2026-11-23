@@ -59,12 +59,14 @@ def test_the_pack_models_resolve_through_the_asset_reader():
         assert asset_archives.asset_exists(model), model
         assert asset_archives.asset_archive_name(model) == "bundled_reel_to_reel.fiopak"
         assert asset_archives.asset_bytes(model)[:4] == b"glTF"
-    listed = set(asset_archives.asset_files("assets/models", (".glb",)))
+    listed = {p.replace(os.sep, "/")              # a backslash on Windows
+              for p in asset_archives.asset_files("assets/models", (".glb",))}
     assert set(MODELS) <= listed, "the Asset Browser would not list them"
 
 
 def test_a_reel_spins_about_its_hub():
     """A reel is 40 x 40 x 9.35, its hub on local Z: Axis 'auto' is Z."""
+    pytest.importorskip("OpenGL", reason="the GLB loader imports PyOpenGL")
     from engine import asset_archives
     from engine.glb_loader import GLBLoader
     from engine.model_rotate import axis_index
