@@ -116,6 +116,13 @@ def capture_frames(app, names=None, size=SIZE):
                 view.start_time = origin
                 random.seed(1234)
                 np.random.seed(1234)
+                # The grass sways on a clock of its own that starts at its
+                # first draw: a paint Qt delivered while the map loaded (on
+                # the real clock) must not have started it.
+                held = getattr(getattr(view, "renderer", None), "_terrain_gl_state", None)
+                if held is not None:
+                    held[1].grass_time = 0.0
+                    held[1]._grass_last_time = clock[0]
 
                 x, y, z, yaw, pitch = camera or _default_camera(session.state)
                 session.logic.camera.set_editor_camera(glm.vec3(x, y, z), yaw, pitch, 90.0)
