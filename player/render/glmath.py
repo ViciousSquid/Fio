@@ -14,6 +14,8 @@ import math
 
 import numpy as np
 
+from engine.model_spin import spin_matrix
+
 
 def identity() -> "np.ndarray":
     return np.identity(4, dtype=np.float32)
@@ -149,7 +151,15 @@ def column_major(mat):
     return np.ascontiguousarray(np.asarray(mat, dtype=np.float32).T)
 
 
-def entity_matrix(position, properties):
+def entity_matrix(position, properties, spin=None):
+    """A model's world matrix: ``T @ Ry(yaw) @ Rx(pitch) @ Rz(roll) @ S``.
+
+    *spin* is ``(axis, angle_deg)``: a spinning model (engine.model_spin)
+    turns about its own axis after its scale and before its placed rotation,
+    ``T @ R(rotation) @ R_spin @ S`` -- the desktop's order
+    (engine.entity_table._model_transform_columns). None, or an angle of 0,
+    is the placed model exactly.
+    """
     rotation = properties.get('rotation', (0, 0, 0))
     pitch, yaw, roll = (math.radians(float(v)) for v in rotation)
     cp, sp, cy, sy = math.cos(pitch), math.sin(pitch), math.cos(yaw), math.sin(yaw)
@@ -160,4 +170,28 @@ def entity_matrix(position, properties):
     size = properties.get('scale', (1, 1, 1))
     if isinstance(size, (float, int)):
         size = (size, size, size)
-    return mul(translate(*position), ry, rx, rotate_z(roll), scale(*size))
+    parts = [translate(*position), ry, rx, rotate_z(roll)]
+    if spin is not None:
+        axis, angle = spin
+        try:
+            angle = float(angle or 0.0)
+        except (TypeError, ValueError):
+            angle = 0.0
+        if angle and math.isfinite(angle):
+            turn = identity()
+            turn[:3, :3] = spin_matrix(axis, angle)
+            parts.append(turn)
+    parts.append(scale(*size))
+    return mul(*parts)
+
+
+def spin_of(item):
+    """``(axis, angle_deg)``: a model item's runtime spin (Prop._spin_axis
+    and Prop._spin_angle; no spin for anything without them)."""
+    return (getattr(item, '_spin_axis', 2), getattr(item, '_spin_angle', 0.0))
+
+
+def item_matrix(item):
+    """The world matrix a placed model *item* draws with -- the same for
+    its colour pass, its culling and its shadows -- spin included."""
+    return entity_matrix(item.pos, item.properties, spin=spin_of(item))
