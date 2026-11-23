@@ -110,6 +110,8 @@ def carried_entities(brushes, things):
         name = _group_name(props)
         if not name or name not in by_name or props.get('parent_mover'):
             continue
+        if props.get('type') == 'light' and str(props.get('path_target') or '').strip():
+            continue        # a light on a path is moved by its path (engine.light_paths)
         if getattr(thing, 'pos', None) is None:
             continue
         links.append((thing, by_name[name]))

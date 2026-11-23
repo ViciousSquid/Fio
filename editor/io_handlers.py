@@ -186,6 +186,21 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('light', 'toggleshadows', light_toggle_shadows)
     io_manager.register_input_handler('light', 'fadein', light_fade_in)
     io_manager.register_input_handler('light', 'fadeout', light_fade_out)
+
+    # Path following (engine.light_paths): a light whose Path Start names a
+    # path node; one without a path ignores these.
+    def light_start_path(entity, param, logic):
+        logic.light_path_runtime.start_path(entity)
+
+    def light_stop_path(entity, param, logic):
+        logic.light_path_runtime.stop_path(entity)
+
+    def light_toggle_path(entity, param, logic):
+        logic.light_path_runtime.toggle_path(entity)
+
+    io_manager.register_input_handler('light', 'startpath', light_start_path)
+    io_manager.register_input_handler('light', 'stoppath', light_stop_path)
+    io_manager.register_input_handler('light', 'togglepath', light_toggle_path)
     
     # ==========================================================================
     # EFFECT INPUTS

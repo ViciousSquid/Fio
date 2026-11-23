@@ -2652,6 +2652,7 @@ class PropertyEditor(QWidget):
         if isinstance(thing, Light):
             self.add_color_picker_widget(form, thing, 'colour')
             self._build_attach_to_mover(form, thing)
+            self._build_follow_path(form, thing)
 
         if isinstance(thing, Portal):
             self._build_attach_to_mover(form, thing, prefix='portal_')
@@ -3424,6 +3425,73 @@ class PropertyEditor(QWidget):
         cb.toggled.connect(on_toggle)
         combo.currentTextChanged.connect(on_changed)
         form.addRow(lbl, combo)
+
+    def _build_follow_path(self, form, thing):
+        """A Light travelling along a path-node chain in Play
+        (engine.light_paths): its first node, speed and whether it sets off
+        with Play. A light attached to a mover follows the mover instead."""
+        from engine.light_paths import LIGHT_PATH_DEFAULTS, MAX_PATH_SPEED
+        props = thing.properties
+        current = str(props.get('path_target') or '')
+        cb = _make_checkbox("Follow Path", bool(current), None)
+        cb.setToolTip("Travel along a chain of path nodes in Play, pausing at\n"
+                      "each node's Wait Time; a chain that loops back keeps going.\n"
+                      "I/O: StartPath, StopPath, TogglePath; OnPathNodeReached,\n"
+                      "OnPathEnd. Ignored while attached to a mover.")
+        form.addRow("", cb)
+
+        combo = ClickableComboBox()
+        combo.addItem("(none)")
+        nodes = sorted({t.properties.get('name', '') for t in self.editor.state.things
+                        if isinstance(t, PathNode) and t.properties.get('name')})
+        for name in nodes:
+            combo.addItem(name)
+        if current:
+            idx = combo.findText(current)
+            if idx < 0:
+                combo.addItem(current + " (missing)")
+                idx = combo.count() - 1
+            combo.setCurrentIndex(idx)
+        combo.setToolTip("The path node the light travels to first")
+        start_lbl = QLabel("Path Start:")
+        form.addRow(start_lbl, combo)
+
+        speed = _make_spin(props.get('path_speed', LIGHT_PATH_DEFAULTS['path_speed']),
+                           0.0, MAX_PATH_SPEED, suffix=" u/s", decimals=1, step=8.0,
+                           tooltip="World units a second, times each node's Speed")
+        speed_lbl = QLabel("Path Speed:")
+        form.addRow(speed_lbl, speed)
+
+        start_on = _make_checkbox("Start moving with Play",
+                                  bool(props.get('path_start_on', True)), None)
+        start_on.setToolTip("Off: the light waits where it is for StartPath")
+        form.addRow("", start_on)
+
+        rows = (start_lbl, combo, speed_lbl, speed, start_on)
+
+        def refresh():
+            on = cb.isChecked()
+            for w in rows:
+                w.setVisible(on)
+                w.setEnabled(not props.get('parent_mover'))
+
+        def on_toggle(checked):
+            if not checked:
+                self.update_object_prop('path_target', '')
+                combo.blockSignals(True)
+                combo.setCurrentIndex(0)
+                combo.blockSignals(False)
+            refresh()
+
+        def on_node(text):
+            clean = text.replace(" (missing)", "")
+            self.update_object_prop('path_target', '' if clean == "(none)" else clean)
+
+        cb.toggled.connect(on_toggle)
+        combo.currentTextChanged.connect(on_node)
+        speed.valueChanged.connect(lambda v: self.update_object_prop('path_speed', float(v)))
+        start_on.toggled.connect(lambda c: self.update_object_prop('path_start_on', bool(c)))
+        refresh()
 
     def _build_portal_target(self, form, thing):
         current = thing.properties.get('portal_target', '')
@@ -4512,6 +4580,9 @@ class PropertyEditor(QWidget):
                 'colour',
                 'parent_mover',
                 'parent_offset',
+                'path_target',
+                'path_speed',
+                'path_start_on',
             ):
                 continue
 

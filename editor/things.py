@@ -13,6 +13,7 @@ import uuid
 import importlib
 
 from engine.change_journal import TrackedAttribute, TrackedPosition, touch
+from engine.light_paths import LIGHT_PATH_DEFAULTS
 from engine.constants import (PLAYER_HULL_SIZE, SHADOW_BIAS_DEFAULT,
                               SHADOW_SOFTNESS_DEFAULT)
 from engine.portal_transform import (
@@ -592,6 +593,10 @@ class Light(Thing):
         # light to (mover.pos + parent_offset) every tick during play.
         self.properties.setdefault('parent_mover', '')
         self.properties.setdefault('parent_offset', [0.0, 0.0, 0.0])
+        # Travelling along a path-node chain in Play (engine.light_paths);
+        # a light parented to a mover ignores its path.
+        for key, value in LIGHT_PATH_DEFAULTS.items():
+            self.properties.setdefault(key, value)
 
     def get_color(self):
         color = self.properties.get('colour', [255, 255, 255])

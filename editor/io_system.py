@@ -989,8 +989,13 @@ def register_default_io():
             IODef('Hide', 'Hide this light entity'),
             IODef('Show', 'Show this light entity'),
             IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('StartPath', 'Travel along its path nodes (or carry on from where it paused)'),
+            IODef('StopPath', 'Pause where it is on its path'),
+            IODef('TogglePath', 'Travel along its path, or pause'),
         ],
         outputs=[
+            IODef('OnPathNodeReached', 'Fired at each path node reached (value: the node name)'),
+            IODef('OnPathEnd', 'Fired when it reaches the end of its path'),
             IODef('OnTurnedOn', 'Fired when light turns on'),
             IODef('OnTurnedOff', 'Fired when light turns off'),
             IODef('OnShadowsEnabled', 'Fired when shadow casting is enabled'),
