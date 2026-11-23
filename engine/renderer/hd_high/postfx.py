@@ -73,6 +73,7 @@ in vec2 vUV;
 uniform vec4 uParams;      // radius (world), bias, intensity, radius in pixels at unit distance
 uniform vec2 uPixel;       // one full-resolution pixel, in uv
 uniform int uTaps;         // samples (the quality tier's), at most 16
+uniform vec4 uTurn;        // cos, sin of the turn between two taps; cos, sin of half of it
 """ + _VIEW_POS_GLSL + """
 void main() {
     highp float depth = textureLod(uDepth, vUV, 0.0).r;
@@ -94,11 +95,16 @@ void main() {
     float spin = fioDither(gl_FragCoord.xy) * 6.2831853;
     float total = 0.0;
     int TAPS = clamp(uTaps, 4, 16);
+    // The taps wind a spiral, each a fixed turn on from the last: the
+    // first direction's sine and cosine, then a rotation a tap (uTurn),
+    // instead of a sine and a cosine for every one.
+    vec2 dir = vec2(cos(spin), sin(spin));
+    dir = vec2(dir.x * uTurn.z - dir.y * uTurn.w, dir.x * uTurn.w + dir.y * uTurn.z);
     for (int i = 0; i < 16; i++) {
         if (i >= TAPS) break;
         float t = (float(i) + 0.5) / float(TAPS);
-        float angle = spin + t * 6.2831853 * 5.0;
-        vec2 uv = vUV + vec2(cos(angle), sin(angle)) * (t * reach) * uPixel;
+        vec2 uv = vUV + dir * (t * reach) * uPixel;
+        dir = vec2(dir.x * uTurn.x - dir.y * uTurn.y, dir.x * uTurn.y + dir.y * uTurn.x);
         highp vec3 v = fioViewAt(uv) - p;
         float vv = dot(v, v);
         float vn = dot(v, n);
@@ -682,7 +688,11 @@ class PostFXMixin:
             gl.glUniform4f(program['uParams'], env.ao_radius, env.ao_radius * 0.04,
                            1.0, projection[1][1] * height * 0.5)
             gl.glUniform2f(program['uPixel'], 1.0 / width, 1.0 / height)
-            gl.glUniform1i(program['uTaps'], int(env.ao_taps))
+            taps = max(4, min(16, int(env.ao_taps)))
+            gl.glUniform1i(program['uTaps'], taps)
+            turn = 2.0 * math.pi * 5.0 / taps
+            gl.glUniform4f(program['uTurn'], math.cos(turn), math.sin(turn),
+                           math.cos(turn * 0.5), math.sin(turn * 0.5))
             self._env_fullscreen()
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['ao_blur'])
             program = self._postfx_program('ao_blur', AO_BLUR_FRAG)
