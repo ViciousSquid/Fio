@@ -348,3 +348,57 @@ def test_models_that_do_not_turn_keep_still_collision(fio_session, monkeypatch):
     assert "_carried_travel" not in body
     assert not _proxies_of(session, ghost)
     session.stop_play()
+
+
+# ---------------------------------------------------------------------------
+# The player's headroom test reads the mesh where it is now
+# ---------------------------------------------------------------------------
+
+def _clear(player, proxy, centre, half=(16.0, 28.0, 16.0)):
+    """Player._has_headroom for a standing hull centred at *centre*."""
+    import glm
+    lo = glm.vec3(centre[0] - half[0], centre[1] - half[1], centre[2] - half[2])
+    hi = glm.vec3(centre[0] + half[0], centre[1] + half[1], centre[2] + half[2])
+    return player._has_headroom(proxy, lo, hi)
+
+
+def test_headroom_reads_a_carried_mesh_where_it_has_been_carried(fio_session, monkeypatch):
+    session = fio_session(_with_things(
+        _level(_lift(speed=400.0)),
+        _prop("drum", pos=(0, 108, 0), scale=[1, 1, 1], rotate_enabled=False,
+              brush_group="lift")))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    drum = _thing(session, "drum")
+    session.start_play()
+    proxy = _proxy(session, drum)
+    player = session.logic.player_runtime.player
+    authored = (20.0, 140.0, 0.0)               # inside the drum as placed
+    assert not _clear(player, proxy, authored)
+
+    session.step(30)
+
+    risen = float(drum.pos[1]) - 108.0
+    assert risen > 80.0
+    assert _clear(player, proxy, authored), "the drum's vacated place still blocks"
+    assert not _clear(player, proxy, (authored[0], authored[1] + risen, authored[2])), (
+        "the drum where it has been carried leaves headroom")
+    session.stop_play()
+
+
+def test_headroom_reads_a_turned_mesh_where_it_has_turned(fio_session, monkeypatch):
+    session = fio_session(_with_things(_level(), _prop()))
+    monkeypatch.setattr(session.window, "_write_autosave", lambda: None)
+    slab = _thing(session, "slab")
+    session.start_play()
+    proxy = _proxy(session, slab)
+    player = session.logic.player_runtime.player
+    placed, turned = (70.0, 32.0, 0.0), (0.0, 32.0, -70.0)
+    assert not _clear(player, proxy, placed)
+    assert _clear(player, proxy, turned)
+
+    _turn(session, slab)
+
+    assert _clear(player, proxy, placed), "the slab's old footprint still blocks"
+    assert not _clear(player, proxy, turned), "the turned slab leaves headroom"
+    session.stop_play()
+    assert not _clear(player, proxy, placed), "Stop must put the authored mesh back"
