@@ -26,6 +26,11 @@ pytestmark = [pytest.mark.gl, pytest.mark.slow]
 def test_classic_draws_the_stored_frames_from_the_stored_shaders():
     environment = dict(os.environ, PYTHONHASHSEED="0")
     environment.pop("QT_QPA_PLATFORM", None)
+    # The capture is its own process with its own look: nothing an earlier
+    # test set for Qt (a scale factor changes the view's size in pixels).
+    for name in list(environment):
+        if name.startswith("QT_") and name != "QT_QPA_PLATFORM_PLUGIN_PATH":
+            del environment[name]
     result = subprocess.run(
         [sys.executable, os.path.join(REPO_ROOT, "tools", "hd_golden.py"), "--check"],
         cwd=REPO_ROOT, env=environment, capture_output=True, text=True, timeout=1500)

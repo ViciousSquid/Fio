@@ -210,6 +210,8 @@ AUTHORED_ATTRIBUTES = {
 RESOURCE_BUILDERS = {
     # A model's draw groups, resolved once per loaded model.
     ("core/resources.py", "_model_draw_groups"): {"materials", "groups"},
+    # HD_High's own resolution of the same groups, with their surface values.
+    ("hd_high/core_ext.py", "model_draw_groups"): {"materials", "groups"},
     # A convex brush's mesh, built when its geometry handle is first resolved
     # (only when the table's geometry_version has moved).
     ("core/geometry.py", "tessellate_geo"): {"convex"},
@@ -222,6 +224,7 @@ RESOURCE_BUILDERS = {
 AUTHORED_KEYS = {"mtl_dir", "material", "textures", "is_trigger", "is_mover"}
 AUTHORED_KEY_READERS = {
     ("core/resources.py", "_model_draw_groups"),      # group['material']
+    ("hd_high/core_ext.py", "model_draw_groups"),     # the same, for HD_High
     ("core/resources.py", "_resolve_model_texture_path"),   # on a texture miss
 }
 

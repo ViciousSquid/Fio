@@ -198,7 +198,7 @@ Fio draws through a renderer contract (`engine/renderer`), and ships two rendere
 
 | | **Classic** | **HD_High** |
 | --- | --- | --- |
-| What it is | Fio's original forward renderer (`engine/renderer/forward`). The default. | A separate, physically based renderer (`engine/renderer/hd_high`). |
+| What it is | Fio's original forward renderer (`engine/renderer/forward`). What Fio falls back to when no renderer is set, or HD_High cannot start. | A separate, physically based renderer (`engine/renderer/hd_high`). |
 | Lighting | Lambert per lamp, in display space | Physically based surfaces (GGX specular, energy-conserving diffuse), a sun with a filtered shadow map, sky light, Forward+ clustered lamp culling |
 | Materials | The diffuse texture | Diffuse + normal/height + AO/roughness/metalness/emission maps for every surface, parallax |
 | Frame | Straight to the display | HDR target, ambient occlusion, screen-space reflections, bloom, sun shafts, tone mapping, grading, FXAA |

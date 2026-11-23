@@ -43,7 +43,7 @@ def _capture(tree, renderer):
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from tests.helpers import golden
     from tests.helpers import gl as glh
-    frames = golden.capture_frames(app, renderer=None if renderer == "Classic" else renderer)
+    frames = golden.capture_frames(app, renderer=renderer)
     with glh.GLTestContext(16, 16):
         import configparser
         config = configparser.ConfigParser()

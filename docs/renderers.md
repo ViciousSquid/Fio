@@ -15,7 +15,8 @@ imports the other.
 | Package | `engine/renderer/forward` | `engine/renderer/hd_high` |
 | Class | `ForwardRenderer` | `HDHighRenderer` |
 | Registry name | `Forward` (alias `Classic`) | `HD_High` |
-| Default | yes | no |
+| Shipped `settings.ini` starts with | | yes |
+| Used when no renderer is set, or HD_High cannot start | yes | |
 | Low-power ARM mode | yes (its reduced shaders) | never chosen |
 | Android player | yes | no |
 
