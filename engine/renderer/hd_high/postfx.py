@@ -31,7 +31,12 @@ from engine import hd_graphics
 from engine.renderer.hd_high import surface
 from engine.renderer.hd_high.environment import FULLSCREEN_VERT, _Program
 
-BLOOM_LEVELS = 6
+#: Bloom's chain starts at a quarter of the frame's size and halves from
+#: there. (It used to start at half size with one more level: the half-size
+#: level cost as much as all the others together, for the tightest sixth of
+#: a glow that is a blur to begin with; BLOOM_GAIN makes up its share.)
+BLOOM_LEVELS = 5
+BLOOM_GAIN = 6.0 / 5.0
 
 _VIEW_POS_GLSL = """
 uniform mat4 uProjection;
@@ -247,7 +252,8 @@ void main() {
 }
 """
 
-#: The bright part of the frame, at half size (13 taps, Jimenez).
+#: The bright part of the frame at a quarter of its size, then each level
+#: at half the one before (13 taps, Jimenez).
 BLOOM_DOWN_FRAG = """#version 330 core
 precision highp float;
 layout(location = 0) out vec4 FragColor;
@@ -272,12 +278,11 @@ vec3 fioTap(vec2 uv) {
 void main() {
     vec2 t = uTexel;
     if (uParams.x > 0.5) {
-        // The first level reads the whole frame and decodes every tap: five
-        // taps (each the mean of four texels) instead of thirteen. The
-        // levels below, a fraction of the size, keep the wide filter.
-        vec3 sum = fioTap(vUV) * 4.0 + fioTap(vUV + t) + fioTap(vUV - t)
+        // The first level, a quarter of the frame's size: each pixel is the
+        // mean of the sixteen texels under it, in four filtered taps.
+        vec3 sum = fioTap(vUV + t) + fioTap(vUV - t)
                  + fioTap(vUV + vec2(t.x, -t.y)) + fioTap(vUV + vec2(-t.x, t.y));
-        FragColor = vec4(max(sum * 0.125, vec3(0.0)), 1.0);
+        FragColor = vec4(max(sum * 0.25, vec3(0.0)), 1.0);
         return;
     }
     vec3 a = fioTap(vUV + t * vec2(-2.0, 2.0));
@@ -574,8 +579,9 @@ class PostFXMixin:
         tex['ldr'] = _texture(gl.GL_RGBA8, width, height, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE)
         fbo['ldr'] = _framebuffer(tex['ldr'])
         w, h = width, height
-        for _level in range(BLOOM_LEVELS):
-            w, h = max(1, w // 2), max(1, h // 2)
+        for level in range(BLOOM_LEVELS):
+            shrink = 4 if level == 0 else 2
+            w, h = max(1, w // shrink), max(1, h // shrink)
             texture = _texture(gl.GL_R11F_G11F_B10F, w, h, gl.GL_RGB, gl.GL_FLOAT)
             self._postfx_bloom.append((texture, _framebuffer(texture), w, h))
             if w == 1 and h == 1:
@@ -845,7 +851,8 @@ class PostFXMixin:
         self._postfx_bind(program, 'uBloom', 1, self._postfx_bloom[0][0])
         self._postfx_bind(program, 'uShafts', 2, tex['shafts'])
         self._postfx_bind(program, 'uNoise', surface.NOISE_UNIT, self._env_noise())
-        gl.glUniform4f(program['uParams'], exposure, env.bloom, env.saturation, env.contrast)
+        gl.glUniform4f(program['uParams'], exposure, env.bloom * BLOOM_GAIN, env.saturation,
+                       env.contrast)
         gl.glUniform4f(program['uParams2'], env.vignette, env.grain, 1.0 if shafts else 0.0,
                        self._env_time % 64.0)
         gl.glUniform3f(program['uTint'], *env.tint)

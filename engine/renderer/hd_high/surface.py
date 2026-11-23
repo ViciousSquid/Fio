@@ -270,7 +270,13 @@ vec3 fioLight(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float rough, vec3 r
 // Steep parallax with a linear refinement: the texture coordinate the view
 // ray reaches in the height field of uNormalMap's alpha.
 highp vec2 fioParallax(highp vec2 uv, highp vec2 dx, highp vec2 dy, highp vec2 reach, float nov) {
-    float count = mix(20.0, 8.0, nov);
+    // A step a texel of the height map is as fine as the map can tell
+    // apart: a relief that moves the lookup three texels takes four steps,
+    // not twenty, and one that moves it less than half a texel takes none.
+    highp vec2 texels = abs(reach) * vec2(textureSize(uNormalMap, 0));
+    float span = max(texels.x, texels.y);
+    if (span < 0.5) return uv;
+    float count = min(mix(20.0, 8.0, nov), max(ceil(span), 4.0));
     float layer = 1.0 / count;
     highp vec2 delta = reach * layer;
     float depth = 0.0;
