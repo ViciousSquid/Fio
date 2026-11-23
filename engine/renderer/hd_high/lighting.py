@@ -43,37 +43,14 @@ def _split_casters(table, slots):
 #:
 #: The filter is the same disk, in texels of the map, with the same bias. It
 #: is taken in nine comparisons the hardware filters (each the mean of four
-#: texels' tests) instead of twenty single ones.
+#: texels' tests) instead of twenty single ones, and the cube face is found
+#: once a lookup, not once a tap.
 POINT_SHADOW_GLSL = """
 #define MAX_SHADOW_LIGHTS """ + str(shaders.MAX_SHADOW_LIGHTS) + """
 uniform highp sampler2DArrayShadow shadowMaps;    // layer = slot * 6 + cube face
 // Per shadow slot: x the face's width in texels, y that width over a layer's
 // (a light's own map size may be smaller than the array's).
 uniform vec2 uShadowFace[MAX_SHADOW_LIGHTS];
-
-// 1 where the map's depth along *d* is no nearer than *ref*, 0 where it is
-// (filtered over the four texels around).
-float _shadowTap(int idx, highp vec3 d, highp float ref) {
-    highp vec3 a = abs(d);
-    highp vec2 uv;
-    highp float ma;
-    float face;
-    if (a.x >= a.y && a.x >= a.z) {
-        ma = a.x; face = d.x > 0.0 ? 0.0 : 1.0;
-        uv = vec2(d.x > 0.0 ? -d.z : d.z, -d.y);
-    } else if (a.y >= a.z) {
-        ma = a.y; face = d.y > 0.0 ? 2.0 : 3.0;
-        uv = vec2(d.x, d.y > 0.0 ? d.z : -d.z);
-    } else {
-        ma = a.z; face = d.z > 0.0 ? 4.0 : 5.0;
-        uv = vec2(d.z > 0.0 ? d.x : -d.x, -d.y);
-    }
-    vec2 f = uShadowFace[idx];
-    highp float width = max(f.x, 1.0);
-    uv = clamp((uv / max(ma, 1e-9) * 0.5 + 0.5) * width, vec2(0.5), vec2(width - 0.5))
-       * (f.y / width);
-    return texture(shadowMaps, vec4(uv, float(idx) * 6.0 + face, ref));
-}
 
 // Each shadow slot's filter, from the Light that owns it: x = softness (the
 // PCF disk radius in map texels), y = bias multiplier. 0 stands for the
@@ -104,11 +81,37 @@ float calcPointShadow(int idx, highp vec3 fragToLight, highp float farPlane, flo
                               0.0, 10.0);
     highp float bias = (diskRadius + (texel + diskRadius) * (1.0 + slope)) * shadowFilter.y;
     highp float ref = (currentDepth - bias) / farPlane;
-    float lit = _shadowTap(idx, lookDir, ref);
-    for (int s = 0; s < 8; ++s) {
-        vec3 corner = vec3((s & 1) == 0 ? 1.0 : -1.0, (s & 2) == 0 ? 1.0 : -1.0,
-                           (s & 4) == 0 ? 1.0 : -1.0);
-        lit += _shadowTap(idx, lookDir + corner * diskRadius, ref);
+    // The face the direction falls on and where on it (in texels), as a
+    // cube lookup finds them -- once: the disk's taps are steps across that
+    // face, kept on it at its edges.
+    highp vec3 a = abs(lookDir);
+    highp vec2 uv;
+    highp float ma;
+    float face;
+    if (a.x >= a.y && a.x >= a.z) {
+        ma = a.x; face = lookDir.x > 0.0 ? 0.0 : 1.0;
+        uv = vec2(lookDir.x > 0.0 ? -lookDir.z : lookDir.z, -lookDir.y);
+    } else if (a.y >= a.z) {
+        ma = a.y; face = lookDir.y > 0.0 ? 2.0 : 3.0;
+        uv = vec2(lookDir.x, lookDir.y > 0.0 ? lookDir.z : -lookDir.z);
+    } else {
+        ma = a.z; face = lookDir.z > 0.0 ? 4.0 : 5.0;
+        uv = vec2(lookDir.z > 0.0 ? lookDir.x : -lookDir.x, -lookDir.y);
+    }
+    vec2 f = uShadowFace[idx];
+    highp float width = max(f.x, 1.0);
+    highp vec2 at = (uv / max(ma, 1e-9) * 0.5 + 0.5) * width;
+    highp float toLayer = f.y / width;
+    highp float layer = float(idx) * 6.0 + face;
+    highp vec2 low = vec2(0.5);
+    highp vec2 high = vec2(width - 0.5);
+    float r = shadowFilter.x;
+    float lit = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            highp vec2 tap = clamp(at + vec2(float(x), float(y)) * r, low, high) * toLayer;
+            lit += texture(shadowMaps, vec4(tap, layer, ref));
+        }
     }
     return 1.0 - lit / 9.0;
 }
