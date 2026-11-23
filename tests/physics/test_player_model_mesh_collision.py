@@ -722,3 +722,33 @@ def test_tread_lift_needs_headroom(ceiling_bottom, lifted):
     else:
         assert player.pos.y < 62.0 - 0.5, "the refused lift leaves the player sinking"
         assert not player.on_ground
+
+
+def test_step_up_checks_the_lift_where_it_starts():
+    """The step lifts the capsule where it stands, then sweeps it forward.
+
+    A model ceiling 100.5 high ending at x=-41.1 clears the lifted hull at
+    the destination (x=-20) but not at the start (x=-23.3): the top sphere
+    would be lifted 2.7 units into its edge and then swept out of it, a
+    crossing nothing afterwards can see. That step is refused.
+    """
+    ceiling = [((
+        (-400.0, 100.5, -100.0), (-41.1, 100.5, -100.0), (-41.1, 100.5, 100.0)),
+        (0.0, -1.0, 0.0)), ((
+        (-400.0, 100.5, -100.0), (-41.1, 100.5, 100.0), (-400.0, 100.5, 100.0)),
+        (0.0, -1.0, 0.0))]
+    open_brush = _model_collision_brushes(_staircase(), solid=True)[0]
+    low_brush = _model_collision_brushes(_staircase() + ceiling, solid=True)[0]
+    start = (-23.333, 50.0 - 800.0 / 3600.0, 0.0)
+
+    lifted = {}
+    for name, brush in (("open", open_brush), ("low", low_brush)):
+        player = _player_at(x=-20.0, y=start[1])
+        player.velocity = glm.vec3(200.0, -800.0 / 60.0, 0.0)
+        player.on_ground = True
+        _aabb, meshes, shapes = _gather([brush], [])
+        player._resolve_mesh_capsule(meshes, shapes, sweep_start=start)
+        lifted[name] = player.pos.y
+
+    assert lifted["open"] == pytest.approx(62.0, abs=0.05), "an open stair still steps"
+    assert lifted["low"] < 55.0, "the lift would cross the ceiling's edge"

@@ -1867,12 +1867,24 @@ class Player:
         lifted_max = glm.vec3(
             player_max[0], lifted_y + half.y, player_max[2]
         )
-        for brush, _triangles, _bounds in model_meshes:
-            if not self._has_headroom(brush, lifted_min, lifted_max):
-                return 0.0
-        for brush in aabb_brushes or ():
-            if not self._has_headroom(brush, lifted_min, lifted_max):
-                return 0.0
+        # The lift happens where the capsule starts this tick and the sweep
+        # then carries it forward, so the lifted hull must be clear there as
+        # well as at the destination: a ceiling edge cleared at the end but
+        # not at the start would be crossed by the lift and swept out of
+        # again, where nothing afterwards can see it.
+        start_min = glm.vec3(
+            start_x - half.x, lifted_y - half.y, start_z - half.z
+        )
+        start_max = glm.vec3(
+            start_x + half.x, lifted_y + half.y, start_z + half.z
+        )
+        for lo, hi in ((lifted_min, lifted_max), (start_min, start_max)):
+            for brush, _triangles, _bounds in model_meshes:
+                if not self._has_headroom(brush, lo, hi):
+                    return 0.0
+            for brush in aabb_brushes or ():
+                if not self._has_headroom(brush, lo, hi):
+                    return 0.0
 
         self.pos.y = lifted_y
         return rise
