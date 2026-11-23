@@ -172,18 +172,18 @@ def test_in_play_one_machine_runs_and_the_buttons_drive_the_reels(fio_session):
     press("Toggle_Tall_Reels")
     session.step(120)
     for name in TALL_REELS:
-        assert logic.prop_runtime.rotate_speed_of(reels[name]) == pytest.approx(
+        assert logic.prop_runtime.rotate_velocity_of(reels[name]) == pytest.approx(
             reels[name].properties["rotate_speed"]), name
 
     press("Reverse_Wide_Reels")
     session.step(180)
     for name in WIDE_REELS:
-        assert logic.prop_runtime.rotate_speed_of(reels[name]) == pytest.approx(
+        assert logic.prop_runtime.rotate_velocity_of(reels[name]) == pytest.approx(
             -reels[name].properties["rotate_speed"]), name
 
     press("Toggle_Tall_Reels")
     session.step(120)
     for name in TALL_REELS:
-        assert logic.prop_runtime.rotate_speed_of(reels[name]) == 0.0, name
+        assert logic.prop_runtime.rotate_velocity_of(reels[name]) == 0.0, name
     session.stop_play()
     assert all(reel._rotate_angle == 0.0 for reel in reels.values())
