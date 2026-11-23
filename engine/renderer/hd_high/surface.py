@@ -40,7 +40,7 @@ ENV_MAP_UNIT = 18
 NORMAL_MAP_UNIT = 19
 MATERIAL_MAP_UNIT = 20
 NOISE_UNIT = 21
-SKY_COVER_UNIT = 22
+SKY_LIGHT_UNIT = 22
 
 #: The programs :func:`surface_source` is applied to (those built from
 #: ``lit.frag`` / ``textured.frag``).
@@ -67,7 +67,7 @@ LIGHT_GRID_DEPTH = 32
 SURFACE_SAMPLERS = (('uSunShadow', SUN_SHADOW_UNIT), ('uEnvMap', ENV_MAP_UNIT),
                     ('uNormalMap', NORMAL_MAP_UNIT),
                     ('uMaterialMap', MATERIAL_MAP_UNIT), ('uNoise', NOISE_UNIT),
-                    ('uSkyCover', SKY_COVER_UNIT), ('uLightGrid', LIGHT_GRID_UNIT))
+                    ('uSkyLight', SKY_LIGHT_UNIT), ('uLightGrid', LIGHT_GRID_UNIT))
 
 #: Value noise and the cloud layer, shared by the sky and by the cloud
 #: shadows the surfaces receive, so a shadow on the ground is under the cloud
@@ -165,9 +165,9 @@ uniform vec4 uMaterial;            // x maps bound, y parallax depth (world unit
 uniform vec4 uSurfaceDefault;      // x roughness, y metalness, z detail strength, w unused
 uniform vec4 uAtmosphere;          // x haze density, y haze height falloff, z cloud shadow strength, w unused
 uniform vec4 uEnvParams2;          // x the environment map is a probe's whole sphere, y haze colour from uHazeColor, z gain on the environment map
-uniform highp mat4 uSkyMatrix;     // world -> the sky cover map's clip space (looking straight down)
-uniform highp sampler2DShadow uSkyCover;
-uniform vec4 uSkyCoverParams;      // x filter radius (uv), y depth bias, z on, w normal offset (world)
+uniform highp sampler3D uSkyLight; // the sky light volume (skylight.py): r light, g whether the cell is open
+uniform highp vec4 uSkyLightOrigin; // xyz the volume's corner (world), w normal offset (world)
+uniform highp vec4 uSkyLightScale;  // xyz 1 / the volume's extent, w 0 off, 1 on, 2 on and a window on a larger map
 uniform highp usampler2D uLightGrid;   // Forward+: row = cluster, column k = the cluster's k-th lamp (255: no more)
 uniform vec4 uLightGridParams;     // x, z of the grid's corner, 1 / cell size, 1 while the grid is in use
 uniform vec2 uLightGridHeight;     // y of the grid's bottom, 1 / layer height
@@ -218,24 +218,26 @@ float fioSunShadow(highp vec3 pos, vec3 ng) {
               + uw2 * vw2 * fioSunTap(base, u2, v2, s.z);
     return mix(1.0, lit / 144.0, uSunShadowParams.w);
 }
-// How much of the sky a point can see, 0 under a roof .. 1 in the open:
-// whether anything stands over it, softened over a few texels. Sky light is
-// scaled by it, so a room is lit by its lamps and the sky lights only what
-// lies under it. The point is first moved off its surface (uSkyCoverParams.w)
-// so that the inside face of a wall is tested inside the room.
+// How much of the sky's light reaches a point, 0 in a closed room .. 1 in
+// the open: all of it where nothing is overhead, and what spreads in through
+// the windows and doors indoors (the sky light volume, skylight.py). Sky
+// light is scaled by it. The point is first moved off its surface
+// (uSkyLightOrigin.w), into the room it faces; the filtered light is divided
+// by the filtered share of open cells, which leaves the cells a wall fills
+// out of the filter, so a wall is lit by its own side.
 float fioSkyVisible(highp vec3 pos, vec3 ng) {
-    if (uSkyCoverParams.z <= 0.0) return 1.0;
-    highp vec4 clip = uSkyMatrix * vec4(pos + ng * uSkyCoverParams.w, 1.0);
-    highp vec3 s = clip.xyz * 0.5 + 0.5;
-    if (s.x <= 0.0 || s.x >= 1.0 || s.y <= 0.0 || s.y >= 1.0) return 1.0;
-    highp float z = s.z - uSkyCoverParams.y;
-    float r = uSkyCoverParams.x;
-    float open = texture(uSkyCover, vec3(s.xy, z)) * 2.0;
-    open += texture(uSkyCover, vec3(s.xy + vec2(r, 0.0), z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(-r, 0.0), z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(0.0, r), z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(0.0, -r), z));
-    return open / 6.0;
+    if (uSkyLightScale.w <= 0.0) return 1.0;
+    highp vec3 q = (pos + ng * uSkyLightOrigin.w - uSkyLightOrigin.xyz) * uSkyLightScale.xyz;
+    // Beside the volume or above it there is only sky (below it, its floor).
+    if (q.x <= 0.0 || q.x >= 1.0 || q.z <= 0.0 || q.z >= 1.0 || q.y >= 1.0) return 1.0;
+    vec2 s = textureLod(uSkyLight, q, 0.0).rg;
+    float open = clamp(s.r / max(s.g, 1e-4), 0.0, 1.0) * smoothstep(FIO_OPEN_LOW, FIO_OPEN_HIGH, s.g);
+    if (uSkyLightScale.w > 1.5) {
+        // A window that follows the view: eased into the open at its rim.
+        highp vec2 rim = min(q.xz, 1.0 - q.xz);
+        open = mix(1.0, open, clamp(min(rim.x, rim.y) * 12.0, 0.0, 1.0));
+    }
+    return open;
 }
 float fioCloudShadow(highp vec3 pos) {
     if (uAtmosphere.z <= 0.0) return 1.0;
@@ -291,6 +293,10 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
               vec3 emission, float src);
 void fioLegacyMain();
 """
+
+from engine.renderer.hd_high import skylight as _skylight
+SURFACE_GLSL = (SURFACE_GLSL.replace('FIO_OPEN_LOW', repr(_skylight.OPEN_LOW))
+                .replace('FIO_OPEN_HIGH', repr(_skylight.OPEN_HIGH)))
 
 SURFACE_SHADE_GLSL = """
 // Light a surface. *src* is the surface's own opacity.

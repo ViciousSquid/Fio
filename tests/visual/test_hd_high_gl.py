@@ -2,8 +2,8 @@
 
 HD_High (``engine/renderer/hd_high``) is created through the registry like any
 renderer and drawn with on a real GL context: every sky mode draws without a
-GL error; an indoor map keeps the brightness Classic gives it; sky light
-lands only where the sky is overhead; the host swaps Classic and HD_High live
+GL error; an indoor map keeps the brightness Classic gives it; daylight
+spreads through a window and stops at a wall; the host swaps Classic and HD_High live
 and Classic's picture is unchanged by the round trip; and a texture's
 material maps are found beside it, or made and kept on disk when it has none.
 """
@@ -170,7 +170,7 @@ def test_every_sky_mode_draws(sky, sun):
             assert not glh.is_blank(pixels)
             assert renderer.environment.enabled and renderer.environment.sky_mode == sky
             assert bool(renderer._env_shadow_ready) == sun
-            assert bool(renderer._env_cover_ready) == (sky != "none")
+            assert bool(renderer._env_skylight_ready) == (sky != "none")
             # A sky was drawn above the horizon; indoors the clear colour.
             top = glh.luminance(glh.region(pixels, 0.0, 0.0, 1.0, 0.15)).mean()
             assert (top > 60.0) == (sky != "none"), (sky, top)
@@ -201,33 +201,65 @@ def test_an_indoor_map_is_as_bright_as_classic_shows_it():
     assert 0.6 < ratio < 1.6, means
 
 
-def test_sky_light_lands_only_where_the_sky_is_overhead():
-    """A floor half under a roof, under a sky with no lamps: the open half is
-    lit by the sky, the roofed half is not -- and no light leaks across."""
-    from engine import hd_graphics
+def _daylight_room(window):
+    """A closed room on a wide floor, with a window in its +x wall or none."""
     from tests.helpers.worlds import box_brush
-    brushes = [box_brush("floor", (0, -16, 0), (4096, 32, 4096)),
-               box_brush("roof", (-1024, 400, 0), (2048, 32, 4096))]
+    brushes = [box_brush("floor", (0, -16, 0), (2048, 32, 2048)),
+               box_brush("roof", (0, 264, 0), (544, 16, 544)),
+               box_brush("west", (-264, 128, 0), (16, 256, 544)),
+               box_brush("north", (0, 128, -264), (544, 256, 16)),
+               box_brush("south", (0, 128, 264), (544, 256, 16)),
+               box_brush("east a", (264, 128, -168), (16, 256, 208)),
+               box_brush("east b", (264, 128, 168), (16, 256, 208)),
+               box_brush("sill", (264, 32, 0), (16, 64, 128)),
+               box_brush("head", (264, 224, 0), (16, 64, 128))]
+    if not window:
+        brushes.append(box_brush("plug", (264, 128, 0), (16, 128, 128)))
+    return brushes
+
+
+def test_daylight_spreads_through_a_window_and_stops_at_a_wall():
+    """Under a sky with no lamps, seen from inside a room: with a window the
+    floor is lit, brightest by the window; with the window walled up the
+    room is dark. Outside, the ground is as bright either way."""
+    from engine import hd_graphics
     glh.reset_texture_cache()
-    with glh.GLTestContext(240, 120) as context:
+    seen = {}
+    with glh.GLTestContext(240, 150) as context:
         renderer = glh.make_renderer(_config(), name="HD_High")
         try:
             renderer.set_background_image(PANORAMA)
-            renderer.set_hd_sky(hd_graphics.sky_settings({}, PANORAMA))
-            # From the open side's edge, low, looking along the roof's edge:
-            # the roofed floor is on the left, the open floor on the right.
-            pixels = _frame(context, renderer, brushes, [], aspect=2.0, fov_deg=80.0,
-                            eye=(0.0, 200.0, 1800.0), target=(0.0, 0.0, 0.0))
-            if os.environ.get("FIO_TEST_IMAGES"):
-                from PIL import Image
-                Image.fromarray(pixels).save(os.path.join(os.environ["FIO_TEST_IMAGES"], "cover.png"))
-            covered = glh.luminance(glh.region(pixels, 0.05, 0.75, 0.35, 0.95)).mean()
-            open_sky = glh.luminance(glh.region(pixels, 0.65, 0.75, 0.95, 0.95)).mean()
-            assert open_sky > 60.0, open_sky
-            assert covered < open_sky * 0.35, (covered, open_sky)
+            # A fixed exposure: the room is compared with itself.
+            renderer.set_hd_sky(hd_graphics.sky_settings(
+                {"hd_grain": 0.0, "hd_sun": False}, PANORAMA))
+            renderer.environment.exposure = 1.0
+            renderer.SKY_LIGHT_INTERVAL = 0.0       # each change at once
+            for window in (True, False):
+                # From the far wall, looking down at the floor toward the window.
+                pixels = _frame(context, renderer, _daylight_room(window), [], aspect=1.6,
+                                fov_deg=80.0, eye=(-220.0, 180.0, 0.0),
+                                target=(200.0, 0.0, 0.0))
+                if os.environ.get("FIO_TEST_IMAGES"):
+                    from PIL import Image
+                    Image.fromarray(pixels).save(os.path.join(
+                        os.environ["FIO_TEST_IMAGES"], "daylight_%s.png" % window))
+                near = glh.luminance(glh.region(pixels, 0.35, 0.45, 0.65, 0.6)).mean()
+                far = glh.luminance(glh.region(pixels, 0.35, 0.85, 0.65, 0.98)).mean()
+                outside = _frame(context, renderer, _daylight_room(window), [], aspect=1.6,
+                                 fov_deg=80.0, eye=(900.0, 300.0, 0.0),
+                                 target=(500.0, 0.0, 0.0))
+                ground = glh.luminance(glh.region(outside, 0.3, 0.6, 0.7, 0.95)).mean()
+                seen[window] = (near, far, ground)
+            assert renderer._env_skylight_ready
+            assert renderer.sun_shadow_stats.get("sky light", 0) >= 2
         finally:
             renderer.cleanup()
     glh.reset_texture_cache()
+    (near, far, ground), (dark_near, dark_far, dark_ground) = seen[True], seen[False]
+    assert near > 40.0 and near > far * 1.3, seen          # daylight, fading into the room
+    assert far > dark_far + 8.0, seen                      # ... and reaching its far side
+    assert max(dark_near, dark_far) < near * 0.25, seen    # walled up: dark
+    assert ground > 60.0 and abs(ground - dark_ground) < 3.0, seen
 
 
 def test_exposure_follows_the_view_from_under_a_roof_to_under_the_sky():
@@ -497,7 +529,7 @@ def test_every_stock_map_draws_with_hd_high(tmp_path):
     output = result.stdout + result.stderr
     assert result.returncode == 0, output[-3000:]
     assert "Traceback" not in output, output[output.index("Traceback"):][:3000]
-    for sign in ("[Environment] disabled", "sun shadows off", "sky cover off",
+    for sign in ("[Environment] disabled", "sun shadows off", "sky light off",
                  "Shader Error", "failed to start"):
         assert sign not in output, sign
     with open(tmp_path / "manifest.json") as handle:
