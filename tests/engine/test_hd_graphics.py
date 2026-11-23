@@ -235,3 +235,20 @@ def test_the_generated_shader_keeps_light_loops_below_main():
     assert terrain is not None and "lights[i]" not in terrain[:terrain.index("void main()")]
     # A shader of another shape is left alone.
     assert surface.surface_source(DEFAULT_SHADERS["sprite.frag"]) is DEFAULT_SHADERS["sprite.frag"]
+
+
+def test_hd_highs_small_n_crossovers_are_classics_code():
+    """HD_High keeps its own copies of two modules with a small-N crossover
+    (it shares no code with the classic renderer). They are the classic
+    modules word for word, so the tests that hold each crossover's two paths
+    to the same answer hold these too; this fails the day a copy drifts."""
+    import os
+    from tests.helpers.paths import repo_path
+    for name in ("explosion_rows.py", "decals.py"):
+        with open(repo_path("engine", "renderer", "forward", name), encoding="utf-8") as handle:
+            classic = handle.read()
+        with open(repo_path("engine", "renderer", "hd_high", name), encoding="utf-8") as handle:
+            copy = handle.read()
+        copy = copy.replace("HDHighRenderer", "ForwardRenderer").replace("hd_high", "forward")
+        assert copy == classic, name
+    del os

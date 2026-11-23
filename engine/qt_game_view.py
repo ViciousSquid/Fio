@@ -1526,9 +1526,10 @@ class QtGameView(QOpenGLWidget):
         _pmgr = self.logic_thread.plugins if self.logic_thread is not None else None
         # The map's Primary PlayerStart owns the panorama in both editor and Play.
         self.renderer.set_background_image(self.sky_image_path)
-        if getattr(self.renderer, 'hd', False):
-            self.renderer.set_hd_sky(self.hd_sky_settings)
-            self.renderer.hd_preview = self.hd_preview
+        # The map's HD sky rides in the frame input like everything else a
+        # renderer is told: plain data, for a renderer that lights from it.
+        self._render_config["hd_sky"] = self.hd_sky_settings
+        self._render_config["hd_preview"] = self.hd_preview
         if _pmgr is not None and _pmgr.has_listeners("render.pre_scene"):
             _pmgr.emit("render.pre_scene", viewport=self, renderer=self.renderer,
                        projection=self.projection_matrix, view=self.view_matrix,

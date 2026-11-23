@@ -611,6 +611,13 @@ class EnvironmentMixin:
         if self._portal_scene_pass:
             # A portal's view is part of the frame it is drawn into.
             return self._env_active and not self._probe_capture_pass
+        # The map's sky and the editor's HD preview come with the frame.
+        sky = config.get('hd_sky', None)
+        if sky is not None:
+            self._hd_sky = sky
+        preview = config.get('hd_preview', None)
+        if preview is not None:
+            self.hd_preview = bool(preview)
         if (not self.surface_shading or current_mode != RENDER_MODE_LIT
                 or self._probe_capture_pass or self._shader_init_failed
                 or not (self.hd_preview or config.get('play_mode', False))
