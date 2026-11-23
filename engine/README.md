@@ -106,7 +106,7 @@
 | `forward/shaders.py` | The forward renderer's shaders. |
 | `hd_high/__init__.py` | Exports `HDHighRenderer`: the **HD_High** renderer, separate from Classic and swapped with it live. |
 | `hd_high/renderer.py` | `HDHighRenderer`: the frame, with the HD frame around it. |
-| `hd_high/environment.py` | Sun and shadow map, sky cover, sky modes, exposure, reflection fallback, material maps, Forward+ light clusters. |
+| `hd_high/environment.py` | Sun and shadow map, sky light volume, sky modes, exposure, reflection fallback, material maps, Forward+ light clusters. |
 | `hd_high/surface.py` | Physically based shading for the lit programs and the terrain. |
 | `hd_high/postfx.py` | HDR target, ambient occlusion, reflections, bloom, sun shafts, tone mapping, grading, FXAA. |
 | `hd_high/hdr.py` | Keeps the non-physical programs' colours through the tone curve. |

@@ -13,7 +13,7 @@ draws -- sprites, water, glass, portals, decals, terrain, the editor's
 overlays -- is drawn here too, and shares only ``engine.renderer.core`` (the
 infrastructure any renderer may reuse). What it adds is its own:
 
-* ``environment.py`` -- sun and filtered shadow map, sky cover, sky modes
+* ``environment.py`` -- sun and filtered shadow map, the sky light volume, sky modes
   (none / panorama / procedural), exposure, the reflection fallback,
   material companion maps;
 * ``surface.py`` -- physically based shading of the lit programs;

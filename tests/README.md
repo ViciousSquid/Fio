@@ -96,7 +96,7 @@ handful of tests that use real threads and real time.
 | `tests/editor/` | Component editing, selection modes, the property editor, Qt object lifetime |
 | `tests/integration/` | End-to-end workflows across the editor, runtime, plugins and renderer |
 | `tests/regression/` | One test per fixed defect, stating the invariant that was broken |
-| `tests/visual/` | The `gl` tier: a lit cube, its shadow, and a moving light; the **Classic lock** (`test_classic_golden.py`: stock maps drawn pixel for pixel as stored, and every program's final shader source; `test_classic_lock.py`: source digests, no trace of HD_High); the **HD_High** renderer (`test_hd_high_gl.py`: sky modes, indoor brightness, sky cover, Forward+, live swapping, material maps, every stock map) |
+| `tests/visual/` | The `gl` tier: a lit cube, its shadow, and a moving light; the **Classic lock** (`test_classic_golden.py`: stock maps drawn pixel for pixel as stored, and every program's final shader source; `test_classic_lock.py`: source digests, no trace of HD_High); the **HD_High** renderer (`test_hd_high_gl.py`: sky modes, indoor brightness, daylight through a window, the 16-sampler limit, Forward+, live swapping, material maps, every stock map) |
 | `tests/tools/` | The tools: the material map generator and the stock textures' maps (`test_material_maps.py`) |
 | `tests/performance/` | Work-per-frame guards and the renderer benchmark |
 | `tests/soak/` | Opt-in soak tier: Play/Stop sessions, editor history, map round trips, physics activation, decals, sky panoramas |

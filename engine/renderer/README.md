@@ -46,7 +46,7 @@ everything Fio draws; what makes it HD_High is in the first five files):
 | Part | What it is |
 |---|---|
 | `renderer.py` | `HDHighRenderer`: the frame, pass by pass, with the HD frame around it. |
-| `environment.py` | The sun and its shadow map (static and moving layers), the sky cover map, sky modes (none / panorama / procedural), exposure, the reflection fallback, material maps, Forward+ light clusters. |
+| `environment.py` | The sun and its shadow map (static and moving layers), the sky light volume (`skylight.py`: daylight that spreads through windows and doors), sky modes (none / panorama / procedural), exposure, the reflection fallback, material maps, Forward+ light clusters. |
 | `surface.py` | Physically based shading, added to the lit programs' and the terrain's fragment sources when they are compiled. |
 | `postfx.py` | The HDR target, ambient occlusion, screen-space reflections, bloom, sun shafts, tone mapping, grading, FXAA; the benchmark's pass timestamps. |
 | `hdr.py` | How the programs that are not physically shaded (sprites, particles, water, glass, the sky image) keep their colours through the tone curve. |

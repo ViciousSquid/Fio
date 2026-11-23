@@ -50,11 +50,46 @@ GPU milliseconds per pass (GL timestamps between the passes):
 * **Ambient occlusion, reflections, bloom and compose** (tone mapping, grade, FXAA) are full-screen passes: a fixed cost per pixel whatever the map, about two and a quarter times as much at 1920x1080 as at 1280x720.
 * **Sun shadows** and **sun shafts** read 0.0 because none of these maps has a sun (their sky is `none`, or a panorama with the sun off), and because the sun's shadow map is not redrawn on a still frame.
 
+## After the optimisation pass
+
+The tables above were taken before HD_High's frame was optimised; they are kept for the split between passes and how it scales with resolution. Measured again on the same machine and driver at 1280x720 (`--frames 12`), GPU milliseconds for the whole frame:
+
+| Map | Before | After |
+| --- | ---: | ---: |
+| Office_Corridor | 70.9 | 52.7 |
+| _SHOWCASE | 199.3 | 158.5 |
+| MonsterTest | 103.3 | 92.9 |
+| Terrain_Test_small2 | 47.1 | 32.9 |
+
+and per pass, after:
+
+| Map | Scene | Ambient occlusion | Reflections | Blended | Bloom | Compose |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Office_Corridor | 21.3 | 7.3 | 6.8 | 0.0 | 3.9 | 13.0 |
+| _SHOWCASE | 115.0 | 8.0 | 8.4 | 7.1 | 4.1 | 13.7 |
+| MonsterTest | 49.1 | 7.9 | 7.7 | 10.9 | 4.3 | 13.5 |
+| Terrain_Test_small2 | 6.9 | 1.4 | 7.2 | 0.0 | 4.0 | 13.6 |
+
+What changed:
+
+* **Reflections.** The pass used to shade every physically based pixel to add a rough surface's blurred environment light. That light is added when the surface is shaded; only a surface smooth enough to be traced is marked for the pass, a pixel with nothing to do is passed through, and the result is no longer copied back (the two colour textures change places).
+* **Ambient occlusion.** A depth sample's view position comes from the projection's own terms, not a matrix product; the taps are turned, not given a sine and cosine each; the blur is nine single fetches.
+* **Bloom** starts at a quarter of the frame's size, one level fewer.
+* **Point-light shadows** are one depth array (see below), filtered in nine hardware comparisons with the cube face found once a lookup.
+* **Parallax mapping** steps by the texels the relief spans.
+* **Sky light** is one filtered sample of a 3D texture (the sky light volume) in place of six comparisons against the cover map.
+
+The scene pass is still what grows with a map, and on a software rasteriser HD_High remains several times Classic's cost.
+
+## Samplers
+
+A fragment shader is guaranteed 16 samplers, and some drivers (macOS) give no more: a program that uses more does not link. HD_High's lit programs sample 10 textures and the terrain 16. The point lights' shadow maps are six layers a light of one depth array behind one sampler (not a cube sampler a light), and the sky light volume took the cover map's sampler. `tests/visual/test_hd_high_gl.py` counts every program's.
+
 ## Video memory
 
 At 1920x1080, by what it is for:
 
-| Map | Frame targets | Bloom | Sun shadow maps | Sky cover map | Environment maps | Material maps |
+| Map | Frame targets | Bloom | Sun shadow maps | Sky light volume (was: sky cover map) | Environment maps | Material maps |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Office_Corridor | 70.0 MB | 2.6 MB | 0.0 MB | 0.0 MB | 1.3 MB | 0.0 MB |
 | _SHOWCASE | 70.0 MB | 2.6 MB | 0.0 MB | 16.0 MB | 1.3 MB | 40.2 MB |

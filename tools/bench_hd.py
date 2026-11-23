@@ -11,7 +11,7 @@ offscreen framebuffer from the map's PlayerStart, and measured over
 
 * ``gpu ms``: the whole ``render_scene`` in a ``GL_TIME_ELAPSED`` query;
 * per pass, for HD_High, from GL timestamps the renderer takes between its
-  passes: sun shadows (and sky cover), scene (the opaque world), ambient
+  passes: sun shadows (and the sky light volume), scene (the opaque world), ambient
   occlusion, reflections (and the resolve), blended, bloom, sun shafts,
   compose (tone mapping, grade, FXAA);
 * ``cpu ms``: the wall time of ``render_scene`` itself (Python and
