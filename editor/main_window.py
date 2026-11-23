@@ -1880,6 +1880,12 @@ class MainWindow(QMainWindow):
         # with nothing in it (and its bounding box raised).
         self.state.selected_objects = [o for o in (objects or []) if o is not None]
         primary = self.primary_selection()
+        spin = getattr(self, 'spin_preview', None)
+        if spin is not None and spin.active and spin.prop is not primary:
+            # Another selection ends the spin preview -- before the panel
+            # changes page, so the Preview button it resets is the one that
+            # started it, not one on the page about to be shown.
+            self.stop_spin_preview()
         self.update_all_ui(selection_only=True)
         self.selection_changed.emit()
 
@@ -3294,6 +3300,10 @@ class MainWindow(QMainWindow):
         # Only once Play is certain to start: a refused Play must leave the
         # side panel on the tab the author was using.
         self._store_and_switch_to_debug_console()
+        # The game drives a model's spin itself: an editor preview of one
+        # ends here, the model back as placed.
+        if getattr(self, 'spin_preview', None) is not None and self.spin_preview.active:
+            self.stop_spin_preview()
 
         if hasattr(self, 'mode_label'):
             self.mode_label.setText("PLAY MODE")

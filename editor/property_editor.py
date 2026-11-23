@@ -1,5 +1,6 @@
 from engine.asset_qt import load_icon
 import copy
+import math
 import re
 import json
 from types import SimpleNamespace
@@ -491,7 +492,11 @@ def _fire_icon(path):
         pixmap = QPixmap(path)
         icon = QIcon(pixmap.scaled(36, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                      if not pixmap.isNull() else pixmap)
-        _FIRE_ICONS[path] = icon
+        if not pixmap.isNull():
+            # A still that failed to load (the path is relative to the
+            # project, and the working directory was elsewhere) is tried
+            # again next time, not remembered blank for the session.
+            _FIRE_ICONS[path] = icon
     return icon
 
 
@@ -2406,6 +2411,15 @@ class PropertyEditor(QWidget):
             # widgets (a placed model is a Prop: the commonest selection).
             self._add_deferred_tab(lambda t=thing: self._create_prop_physics_tab(t),
                                    "Physics")
+            # Animation (a model's spin): on every Prop page, built on first
+            # showing like Physics, and hidden unless the Prop shows a model.
+            # Always present, so the tabs after it keep their indexes, and
+            # switching Representation shows or hides it without a rebuild
+            # (_refresh_animation_tab).
+            index = self._add_deferred_tab(
+                lambda t=thing: self._create_prop_animation_tab(t), "Animation")
+            self._widgets['animation_tab'] = self.tab_widget.widget(index)
+            self._refresh_animation_tab(thing)
 
         advanced_tab = self._create_thing_advanced_tab(thing)
         if advanced_tab is not None:
@@ -2619,6 +2633,7 @@ class PropertyEditor(QWidget):
                     for row in (sprite_path_row, sprite_size_row):
                         self._set_form_row_visible(form, row, not is_model)
                     refresh_variant_row()
+                    self._refresh_animation_tab(thing)
 
                 def refresh_variant_row():
                     shown = (thing.properties.get('render_mode', 'model') != 'billboard'
@@ -3015,6 +3030,173 @@ class PropertyEditor(QWidget):
         )
         section.addLayout(physics_form)
         parent_layout.addWidget(section)
+
+    @staticmethod
+    def _shows_animation_tab(thing):
+        """Whether *thing* has an Animation tab: a Prop showing a model."""
+        if not isinstance(thing, Prop):
+            return False
+        props = thing.properties
+        return (str(props.get('render_mode', 'model')).lower() == 'model'
+                and bool(props.get('model_path')))
+
+    def _refresh_animation_tab(self, thing):
+        """Show the page's Animation tab only while *thing* shows a model;
+        hidden, a spin preview of it stops."""
+        holder = self._widgets.get('animation_tab')
+        tabs = self.tab_widget
+        if holder is None or tabs is None:
+            return
+        index = tabs.indexOf(holder)
+        if index < 0:
+            return
+        shown = self._shows_animation_tab(thing)
+        tabs.setTabVisible(index, shown)
+        preview = getattr(self.editor, 'spin_preview', None)
+        if not shown and preview is not None and preview.prop is thing:
+            self.editor.stop_spin_preview()
+
+    #: The Animation tab's Axis choices, in the order of model_spin.SPIN_AXES.
+    SPIN_AXIS_LABELS = ("Auto (thinnest side)", "X", "Y", "Z")
+
+    def _create_prop_animation_tab(self, thing):
+        """A model Prop's Animation tab: its spin, and a Preview of it."""
+        w = QWidget(self.tab_widget)
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
+        form = QFormLayout()
+        form.setSpacing(4)
+        self._build_spin_ui(form, thing)
+        section = CollapsibleSection("Spin", expanded=True, count=form.rowCount())
+        section.addLayout(form)
+        layout.addWidget(section)
+        layout.addStretch()
+        return w
+
+    def _build_spin_ui(self, form, thing):
+        """The Spin rows (engine.model_spin): off by default; on, the model
+        turns about its own axis in Play -- at the start, or when an I/O
+        input starts it -- spinning up and down over the ramp."""
+        from engine.model_spin import (SPIN_DEFAULTS, SPIN_AXES,
+                                       MAX_SPIN_SPEED, MAX_SPIN_RAMP)
+        props = thing.properties
+
+        def number(key):
+            try:
+                value = float(props.get(key, SPIN_DEFAULTS[key]))
+            except (TypeError, ValueError):
+                return SPIN_DEFAULTS[key]
+            return value if math.isfinite(value) else SPIN_DEFAULTS[key]
+
+        spin_cb = _make_checkbox("Spin", bool(props.get('spin_enabled', False)),
+                                 None, _Style.CHECKBOX)
+        spin_cb.setToolTip(
+            "The model can spin about one of its own axes -- a reel on its "
+            "hub, a fan, a wheel. It spins in Play when Spinning at start is "
+            "on, or when an I/O input starts it.")
+        form.addRow("", spin_cb)
+
+        labels = self.SPIN_AXIS_LABELS
+        axis = str(props.get('spin_axis', 'auto')).lower()
+        if axis not in SPIN_AXES:
+            axis = 'auto'
+        axis_combo = _make_combo(
+            list(labels), labels[SPIN_AXES.index(axis)],
+            tooltip="The model's own axis it spins about. Auto: its thinnest "
+                    "side -- a reel's, a fan's or a wheel's hub.")
+        form.addRow("Axis:", axis_combo)
+
+        speed_spin = _make_spin(
+            number('spin_speed'), -MAX_SPIN_SPEED, MAX_SPIN_SPEED,
+            suffix=" °/s", decimals=1, step=15.0,
+            tooltip="Degrees a second at full speed. Negative spins the "
+                    "other way.")
+        form.addRow("Speed:", speed_spin)
+
+        ramp_spin = _make_spin(
+            number('spin_ramp'), 0.0, MAX_SPIN_RAMP, suffix=" s", decimals=2,
+            step=0.1,
+            tooltip="Seconds to spin up to full speed, and to coast down to a "
+                    "stop. 0: starts and stops at once.")
+        form.addRow("Spin-up / down:", ramp_spin)
+
+        autostart_cb = _make_checkbox(
+            "Spinning at start", bool(props.get('spin_autostart', False)),
+            None, _Style.CHECKBOX)
+        autostart_cb.setToolTip(
+            "Spinning at full speed from the moment Play starts. Off, it "
+            "waits for a StartSpin or ToggleSpin input.")
+        form.addRow("", autostart_cb)
+
+        note = QLabel(
+            "In Play, the I/O inputs StartSpin, StopSpin, ToggleSpin, "
+            "ReverseSpin and SetSpinSpeed control it, and the outputs "
+            "OnSpinStarted and OnSpinStopped fire as it starts and stops.")
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            "QLabel { color: #88AAFF; font-style: italic; padding: 4px; }")
+        form.addRow("", note)
+
+        preview_btn = self._preview_button("▶ Preview Spin", self.toggle_spin_preview)
+        preview_btn.setToolTip(
+            "Spin the model in the 3D view, as it will in Play. Stops when "
+            "pressed again, the selection changes, the map is saved or Play "
+            "starts; the model goes back as placed.")
+        preview = getattr(self.editor, 'spin_preview', None)
+        if preview is not None and preview.prop is thing:
+            # Rebuilt while its preview runs: the button shows it running.
+            preview_btn.blockSignals(True)
+            preview_btn.setChecked(True)
+            preview_btn.setText("■ Stop Preview")
+            preview_btn.blockSignals(False)
+        form.addRow("", preview_btn)
+
+        self._widgets.update({
+            'spin_enabled_cb': spin_cb,
+            'spin_axis_combo': axis_combo,
+            'spin_speed_spin': speed_spin,
+            'spin_ramp_spin': ramp_spin,
+            'spin_autostart_cb': autostart_cb,
+            'spin_preview_btn': preview_btn,
+        })
+        rows = (axis_combo, speed_spin, ramp_spin, autostart_cb, preview_btn)
+
+        def previewing():
+            preview = getattr(self.editor, 'spin_preview', None)
+            return (preview is not None and preview.active
+                    and preview.prop is self.current_object)
+
+        def refresh():
+            on = spin_cb.isChecked()
+            for widget in rows:
+                widget.setEnabled(on)
+
+        def on_spin(checked):
+            self.update_object_prop('spin_enabled', bool(checked))
+            if not checked and previewing():
+                self.editor.stop_spin_preview()
+            refresh()
+
+        def on_axis(label):
+            if label not in labels:
+                return
+            self.update_object_prop('spin_axis', SPIN_AXES[labels.index(label)])
+            if previewing():
+                # The axis is chosen as a preview starts (Auto measures the
+                # model): start again about the new one.
+                self.editor.start_spin_preview(self.current_object)
+
+        # Speed and Ramp are read by the preview every tick.
+        spin_cb.toggled.connect(on_spin)
+        axis_combo.currentTextChanged.connect(on_axis)
+        speed_spin.valueChanged.connect(
+            lambda v: self.update_object_prop('spin_speed', float(v)))
+        ramp_spin.valueChanged.connect(
+            lambda v: self.update_object_prop('spin_ramp', float(v)))
+        autostart_cb.toggled.connect(
+            lambda checked: self.update_object_prop('spin_autostart', bool(checked)))
+        refresh()
 
     def _build_effect_ui(self, form, thing):
         """Compact authoring UI for the one Effect primitive."""
@@ -6388,6 +6570,21 @@ class PropertyEditor(QWidget):
                 if btn:
                     btn.setText("▶ Preview Door")
                 self.editor.stop_mover_preview()
+
+    def toggle_spin_preview(self, checked):
+        """The Animation tab's Preview button: spin the model in the 3D view."""
+        if not self.editor:
+            return
+        btn = self._widgets.get('spin_preview_btn')
+        if checked:
+            if btn:
+                btn.setText("■ Stop Preview")
+            if not self.editor.start_spin_preview(self.current_object):
+                self.editor.stop_spin_preview()     # nothing to spin: button up
+        else:
+            if btn:
+                btn.setText("▶ Preview Spin")
+            self.editor.stop_spin_preview()
 
     def on_respawn_toggled(self, state):
         collect_respawns = bool(state)
