@@ -53,7 +53,7 @@ jobs:
       - name: Install headless runtime baseline
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest "numpy==2.5.3" "PyGLM==2.8.3" "pygame-ce==2.5.8" "Pillow==11.3.0"
+          python -m pip install pytest "numpy==2.5.3" "PyGLM==2.8.3" "pygame-ce==2.5.8" "Pillow==11.3.0" "PyOpenGL==3.1.10"
       - name: Verify headless dependency versions
         run: |
           python - <<'PY'
