@@ -125,6 +125,53 @@ def test_stop_puts_the_light_back_where_it_was_placed():
     assert light.pos == [5.0, 6.0, 7.0]
 
 
+def test_a_play_restarted_without_a_stop_still_stops_where_it_was_placed():
+    light = _Light((5, 6, 7), path_target='a')
+    runtime, io = _paths(light, _Node('a', (300, 0, 0)))
+    _run(runtime, 1.0)
+    runtime.start()                                    # restarted, no Stop
+    assert light.pos == [5.0, 6.0, 7.0]
+    _run(runtime, 1.0)
+    runtime.stop()
+    assert light.pos == [5.0, 6.0, 7.0]
+
+
+def test_stop_path_from_a_node_s_arrival_stops_it_at_that_node():
+    light = _Light((0, 0, 0), path_target='a')
+    runtime, io = _paths(light, _Node('a', (10, 0, 0), 'b'), _Node('b', (30, 0, 0)))
+    fire = io.fire_output
+
+    def stop_on_arrival(entity, output, **kwargs):
+        fire(entity, output, **kwargs)
+        if output == 'OnPathNodeReached':
+            runtime.stop_path(entity)
+
+    io.fire_output = stop_on_arrival
+    runtime.update(0.25)                               # would reach x=25
+    assert light.pos == pytest.approx([10.0, 0.0, 0.0])
+    io.fire_output = fire
+    assert runtime.start_path(light)
+    runtime.update(0.1)                                # on to b, no second arrival at a
+    assert light.pos == pytest.approx([20.0, 0.0, 0.0])
+    assert io.fired == [('OnPathNodeReached', 'a')]
+
+
+def test_a_saved_journey_carries_on_from_where_it_was_saved():
+    light = _Light((0, 0, 0), path_target='a', id='lamp-1')
+    runtime, io = _paths(light, _Node('a', (100, 0, 0), 'b'), _Node('b', (100, 0, 100)))
+    _run(runtime, 0.5)
+    saved = runtime.snapshot()
+    saved_pos = list(light.pos)
+    _run(runtime, 1.0)                                 # on past a, towards b
+    light.pos = list(saved_pos)                        # the load's overlay
+    runtime.restore(saved)
+    runtime.update(1.0 / 60.0)
+    assert light.pos[0] == pytest.approx(saved_pos[0] + 100.0 / 60.0)
+    assert light.pos[2] == pytest.approx(0.0)
+    runtime.stop()
+    assert light.pos == [0.0, 0.0, 0.0]                # home is still as placed
+
+
 def test_a_light_attached_to_a_mover_ignores_its_path():
     light = _Light((0, 0, 0), path_target='a', parent_mover='lift')
     assert not follows_a_path(light)

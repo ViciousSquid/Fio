@@ -66,7 +66,9 @@ class LightPaths:
 
     def start(self):
         """Play started: every path-following Light sets off (or waits)."""
-        self.journeys = {}
+        # A Play restarted without a Stop: back where they were placed first,
+        # or the next Stop would leave each where this restart found it.
+        self.stop()
         Light = self.light_type
         if Light is None:
             return
@@ -95,6 +97,43 @@ class LightPaths:
         for journey in self.journeys.values():
             journey['light'].pos = list(journey['home'])
         self.journeys = {}
+
+    # -- saving -------------------------------------------------------------
+
+    #: A journey's fields a save carries (its light and home are the live
+    #: session's own: a load overlays the same objects).
+    SAVED = ('origin', 'node', 'travelled', 'waiting', 'running', 'ended')
+
+    def snapshot(self):
+        """Every journey's progress, by its light's id (engine.savegame)."""
+        out = {}
+        for journey in self.journeys.values():
+            lid = str(journey['light'].properties.get('id') or '')
+            if lid:
+                out[lid] = {key: (list(journey[key]) if key == 'origin' else journey[key])
+                            for key in self.SAVED}
+        return out
+
+    def restore(self, saved):
+        """Carry on each journey from where :meth:`snapshot` found it, so a
+        loaded light goes on from its saved place, not from where it was."""
+        if not isinstance(saved, dict):
+            return
+        for journey in self.journeys.values():
+            entry = saved.get(str(journey['light'].properties.get('id') or ''))
+            if not isinstance(entry, dict):
+                continue
+            try:
+                origin = [float(v) for v in entry['origin']][:3]
+                if len(origin) != 3:
+                    continue
+                journey.update(origin=origin, node=str(entry['node']),
+                               travelled=max(0.0, float(entry['travelled'])),
+                               waiting=max(0.0, float(entry['waiting'])),
+                               running=bool(entry['running']),
+                               ended=bool(entry['ended']))
+            except (KeyError, TypeError, ValueError):
+                continue
 
     # -- I/O ----------------------------------------------------------------
 
@@ -180,9 +219,10 @@ class LightPaths:
                 wait = float(node.get_wait_time())
                 if wait > 0.0:
                     journey['waiting'] = wait
-                    continue
-                if not self._next(journey):
+                elif not self._next(journey):
                     return
+                if not journey['running']:
+                    return          # stopped by the arrival's output: stay here
 
     def _next(self, journey):
         """On to the current node's next node; False at the end of the path."""

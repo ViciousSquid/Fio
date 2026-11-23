@@ -396,6 +396,20 @@ def test_a_clone_or_paste_is_not_attached_to_the_originals_group(scene):
     window.unsaved_changes = False
 
 
+def test_a_ctrl_v_paste_is_not_attached_to_the_originals_group(scene):
+    from PyQt5.QtGui import QKeyEvent
+    from PyQt5.QtCore import QEvent
+    window, objects = scene
+    window.set_selected_objects([objects['glass'], objects['lamp']])
+    window.copy_selection()
+    window.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_V, Qt.ControlModifier))
+    pasted = window.selected_objects_list()
+    assert len(pasted) == 2 and not any(p is objects['lamp'] for p in pasted)
+    assert {brush_groups.group_of(o) for o in pasted} == {'Door (copy)'}
+    assert brush_groups.group_of(objects['lamp']) == 'Door'
+    window.unsaved_changes = False
+
+
 def test_a_model_is_grouped_through_the_scene_hierarchy(scene, monkeypatch):
     from editor.things import Prop
     window, objects = scene

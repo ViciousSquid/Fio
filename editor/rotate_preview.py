@@ -108,6 +108,15 @@ class RotatePreview(QObject):
         if prop is None or motion is None:
             self.timer.stop()
             return
+        if not self._still_previewed(prop):
+            # Deselected without set_selected_objects (terrain picked) or
+            # replaced by an undo: stop, as a selection change does.
+            stop = getattr(self.main_window, 'stop_rotate_preview', None)
+            if callable(stop):
+                stop()
+            else:
+                self.stop()
+            return
         now = time.perf_counter()
         delta = min(0.1, max(0.0, now - (self._last or now)))
         self._last = now
@@ -125,6 +134,15 @@ class RotatePreview(QObject):
                     self._hold = self.TURN_HOLD
         prop._rotate_angle = motion.angle
         self._repaint()
+
+    def _still_previewed(self, prop):
+        """*prop* is still in the scene and still selected."""
+        state = getattr(self.main_window, 'state', None)
+        if state is None:
+            return True
+        if not any(t is prop for t in getattr(state, 'things', ())):
+            return False
+        return any(o is prop for o in getattr(state, 'selected_objects', ()))
 
     def _repaint(self):
         view = getattr(self.main_window, 'view_3d', None)

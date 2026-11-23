@@ -4831,6 +4831,10 @@ class MainWindow(QMainWindow):
 
                     pasted_objects.append(pasted)
 
+                # Not in the originals' group (as Paste and Clone).
+                from editor import brush_groups
+                brush_groups.regroup_copies(pasted_objects,
+                                            brush_groups.scene_objects(self.state))
                 self.set_selected_objects(pasted_objects)
                 self.show_toast(
                     f"Pasted {len(pasted_objects)} object(s)"

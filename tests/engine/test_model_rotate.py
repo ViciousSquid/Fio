@@ -96,6 +96,17 @@ def test_continuous_reverse_and_set_speed():
     assert m.velocity == -720.0
 
 
+
+def test_speed_zero_then_stop_still_coasts_down_over_its_ease():
+    m = _motion(mr.CONTINUOUS, rotate_speed=180.0, rotate_ease=0.5)
+    _steps(m, 1.0)
+    assert m.velocity == pytest.approx(180.0)
+    m.set_speed(0.0)
+    m.stop()
+    events = _steps(m, 0.55)
+    assert m.velocity == 0.0 and events == ['stopped']
+
+
 # -- Swing -----------------------------------------------------------------------------
 
 def test_swing_sweeps_its_arc_centred_on_the_placement():

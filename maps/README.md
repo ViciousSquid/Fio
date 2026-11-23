@@ -37,5 +37,5 @@ Example game: Top down shooter
 
 ### `Reel_To_Reel_Test.json`
 
-Two tape mainframes from the bundled reel-to-reel pack (`assets/bundled_reel_to_reel.fiopak`). The right one's reels run from the start; use the red button to start and stop the left one's, and the blue button to reverse the right one's - _demonstrates a model Prop's **spin** animation and its **StartSpin/StopSpin/ToggleSpin/ReverseSpin** inputs_. Rebuilt by `tools/make_reel_to_reel_test_map.py`
+Two tape mainframes from the bundled reel-to-reel pack (`assets/bundled_reel_to_reel.fiopak`). The right one's reels run from the start; use the red button to start and stop the left one's, and the blue button to reverse the right one's - _demonstrates a model Prop's **Rotate** animation (the Animation tab) and its **StartRotate/StopRotate/ToggleRotate/ReverseRotate** inputs_. Rebuilt by `tools/make_reel_to_reel_test_map.py`
 

@@ -183,6 +183,8 @@ class RotateMotion:
         self.mode = rotate_mode(props)
         self.speed = rotate_speed(props)          # runtime (SetRotateSpeed)
         self.direction = 1.0                      # ReverseRotate flips it
+        self._eased_to = None                     # Continuous: the velocity eased to
+        self._span = 1.0                          # ... and the speed Ease spans
         self.running = bool(props.get('rotate_autostart')) if running is None else bool(running)
         self.angle = 0.0
         # Continuous: signed degrees a second now.
@@ -241,7 +243,14 @@ class RotateMotion:
             target = self.speed * self.direction if self.running else 0.0
             if self.velocity != target:
                 was = self.velocity
-                rate = None if ease <= 0.0 else max(abs(self.speed), 1.0) / ease
+                # Ease is the time to span the faster of where it is going
+                # and how fast it was going when that was set -- taken then,
+                # so SetRotateSpeed(0) then StopRotate still coasts down over
+                # Ease, not over minutes.
+                if target != self._eased_to:
+                    self._eased_to = target
+                    self._span = max(abs(self.speed), abs(self.velocity), 1.0)
+                rate = None if ease <= 0.0 else self._span / ease
                 self.velocity = approach(self.velocity, target, rate, delta)
                 if was != 0.0 and self.velocity == 0.0 and not self.running:
                     events.append('stopped')

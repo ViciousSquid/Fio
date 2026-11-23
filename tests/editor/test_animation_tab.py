@@ -260,3 +260,25 @@ def test_changing_the_mode_restarts_a_running_preview(main_window, clock):
     assert main_window.rotate_preview.motion.mode == 'swing'
     w['rotate_preview_btn'].setChecked(False)
     main_window.unsaved_changes = False
+
+
+@pytest.mark.parametrize('how', ['deselected', 'removed'])
+def test_the_preview_stops_when_its_model_is_no_longer_selected_or_there(
+        main_window, clock, how):
+    """Picking the terrain clears the selection without set_selected_objects,
+    and an undo replaces the scene's objects: either way the Preview stops."""
+    prop = _model_prop()
+    prop.properties.update(rotate_enabled=True, rotate_ease=0.0)
+    w = _open_animation(main_window, prop)._widgets
+    w['rotate_preview_btn'].setChecked(True)
+    _run(main_window, clock, 0.3)
+    assert prop._rotate_angle != 0.0
+    if how == 'deselected':
+        main_window.state.selected_objects = []
+    else:
+        main_window.state.things.remove(prop)
+    _run(main_window, clock, 0.1)
+    assert not main_window.rotate_preview.active
+    assert prop._rotate_angle == 0.0
+    assert not w['rotate_preview_btn'].isChecked()
+    main_window.unsaved_changes = False
