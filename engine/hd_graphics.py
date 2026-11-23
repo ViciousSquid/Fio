@@ -77,7 +77,7 @@ def display_name(registry_name):
 #: ladder of tiers -- kept in one table so it is easy to retune.
 HD_HIGH = dict(shadow_size=2048, ambient_occlusion=1.0, bloom=1.0, fxaa=True,
                reflections=True, parallax=1.0, sun_shafts=1.0, cloud_shadows=1.0,
-               ao_taps=12, ssr_steps=32)
+               ao_taps=8, ssr_steps=32)
 
 
 # ---------------------------------------------------------------------------
@@ -264,9 +264,18 @@ def _colour(value):
     return tuple(max(0.0, min(255.0, v)) / 255.0 for v in (r, g, b))
 
 
+#: The gamma HD_High decodes display colours with and encodes its frame
+#: with. 2.0, not 2.2: decoding is then a multiply and encoding a square
+#: root, on every texel and every pixel of every pass, where 2.2 is two
+#: pow() calls. The two ends cancel, so a texture still shows as itself;
+#: what differs is the lighting in between, by a few percent in the
+#: mid-tones.
+GAMMA = 2.0
+
+
 def to_linear(colour):
-    """Display (gamma 2.2) colour to linear light, as the shaders decode it."""
-    return tuple(max(0.0, float(c)) ** 2.2 for c in colour)
+    """Display colour to linear light, as the shaders decode it."""
+    return tuple(max(0.0, float(c)) ** GAMMA for c in colour)
 
 
 def sky_settings(properties, sky_image=""):
@@ -469,7 +478,7 @@ def lamp_light(lamps, gain=POINT_LIGHT_GAIN):
             continue
         area = radius * radius
         # The shaders decode a lamp's level like a colour (surface.py).
-        total += area * (float(intensity) * LAMP_KEY_FALLOFF) ** 2.2 * luminance(colour)
+        total += area * (float(intensity) * LAMP_KEY_FALLOFF) ** GAMMA * luminance(colour)
         weight += area
     if weight <= 0.0:
         return 0.0
@@ -540,7 +549,7 @@ def panorama_irradiance(pixels):
     # 16 x 8 texels are plenty for a cosine lobe, as the GPU path's mip was.
     rows = np.linspace(0, height, 9).astype(int)
     cols = np.linspace(0, width, 17).astype(int)
-    linear = (image.astype(np.float64) / 255.0) ** 2.2
+    linear = (image.astype(np.float64) / 255.0) ** GAMMA
     texels = np.empty((8, 16, 3))
     for j in range(8):
         for i in range(16):

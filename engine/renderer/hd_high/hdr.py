@@ -55,15 +55,17 @@ vec3 fioTone(vec3 x) {
 // Display colour -> the gamma-encoded scene value the compose pass's tone
 // curve (at the base exposure) brings back to that colour.
 vec3 fioDisplayToScene(vec3 c) {
-    vec3 f = min(pow(max(c, vec3(0.0)), vec3(2.2)), vec3(%(ceiling).2f));
+    c = max(c, vec3(0.0));
+    vec3 f = min(c * c, vec3(%(ceiling).2f));
     vec3 b = vec3(1.0) - f;
     vec3 x = (-b + sqrt(b * b + 4.0 * f / FIO_TONE_WHITE2)) * (FIO_TONE_WHITE2 * 0.5);
-    return pow(max(x, vec3(0.0)) * fioHdr.y, vec3(1.0 / 2.2));
+    return sqrt(max(x, vec3(0.0)) * fioHdr.y);
 }
 // The reverse: a value read from the HD frame as the display colour it
 // will be shown as.
 vec3 fioSceneToDisplay(vec3 c) {
-    return pow(fioTone(pow(max(c, vec3(0.0)), vec3(2.2)) * fioHdr.z), vec3(1.0 / 2.2));
+    c = max(c, vec3(0.0));
+    return sqrt(fioTone(c * c * fioHdr.z));
 }
 vec4 fioSceneTex(sampler2D s, vec2 uv) {
     vec4 c = texture(s, uv);
@@ -89,7 +91,8 @@ def display_to_scene(colour, base_exposure):
     *linear* scene rgb (for a colour handed to a surface program as a
     uniform: fog, the clear colour)."""
     white2 = hd_graphics.TONE_WHITE ** 2
-    f = np.minimum(np.clip(np.asarray(colour, dtype=np.float64), 0.0, None) ** 2.2,
+    f = np.minimum(np.clip(np.asarray(colour, dtype=np.float64), 0.0, None)
+                   ** hd_graphics.GAMMA,
                    _DISPLAY_CEILING)
     b = 1.0 - f
     x = (-b + np.sqrt(b * b + 4.0 * f / white2)) * (white2 * 0.5)

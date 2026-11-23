@@ -584,7 +584,9 @@ class EnvironmentMixin:
                 value = 0.0
             while gl.glGetError() != gl.GL_NO_ERROR:
                 pass
-            self._env_anisotropy = max(0.0, min(16.0, value))
+            # 4x: most of the gain at a grazing angle for a fraction of
+            # 16x's samples, on three textures a surface.
+            self._env_anisotropy = max(0.0, min(4.0, value))
         return self._env_anisotropy
 
     def _env_noise(self):
@@ -670,7 +672,7 @@ class EnvironmentMixin:
         clear = [float(v) for v in gl.glGetFloatv(gl.GL_COLOR_CLEAR_VALUE)]
         self._env_clear_colour = clear
         scene = hdr.display_to_scene(clear[:3], self._env_base_exposure)
-        gl.glClearColor(*[max(c, 0.0) ** (1.0 / 2.2) for c in scene], clear[3])
+        gl.glClearColor(*[max(c, 0.0) ** (1.0 / hd_graphics.GAMMA) for c in scene], clear[3])
         return True
 
     def _env_end_portal(self):
@@ -705,7 +707,7 @@ class EnvironmentMixin:
         key = (len(slots), float(np.round(params[:, 1].sum(), 1)))
         if key != self._env_lamps_key:
             self._env_lamps_key = key
-            colours = np.power(np.clip(table.light_color[slots], 0.0, None), 2.2)
+            colours = np.power(np.clip(table.light_color[slots], 0.0, None), hd_graphics.GAMMA)
             self._env_lamp_light = hd_graphics.lamp_light(
                 (float(p[0]), float(p[1]), c) for p, c in zip(params, colours))
         return self._env_lamp_light
@@ -1899,12 +1901,11 @@ class EnvironmentMixin:
         pixels = width * height
         half = max(1, width // 2) * max(1, height // 2)
         bloom = sum(w * h * 4 for _t, _f, w, h in self._postfx_bloom)
-        frame = (pixels * 8 * 4 // 3      # colour, RGBA16F with mips
-                 + pixels * 8             # normal, sky cover, roughness
+        frame = (pixels * 8               # colour, RGBA16F
+                 + pixels * 4             # normal, sky visibility, roughness
                  + pixels * 4             # depth and stencil
                  + pixels * 8             # resolved
-                 + pixels * 4             # display
-                 + half * 3) if pixels else 0
+                 + half * 2) if pixels else 0
         shadow = 2 * self._env_shadow_size ** 2 * 4 if self._env_shadow_tex else 0
         cover = (self._env_cover_size ** 2 * 4 * len(surface.SKY_DIRECTIONS)
                  if self._env_cover_tex else 0)
@@ -2047,7 +2048,13 @@ class EnvironmentMixin:
                     emission = float(values.get('emission', 1.0))
                 except (TypeError, ValueError):
                     parallax, emission = 0.0, 1.0
-                if not has_height:
+                # Relief (parallax) follows a height someone made. A height
+                # the generator guessed from a picture is good enough to
+                # bend the light (the normal map) but not to move the
+                # surface: it smears at a grazing angle, and its dozen
+                # samples a pixel are the dearest thing in the shader.
+                if not has_height or (isinstance(values.get('generated'), dict)
+                                      and not values.get('parallax_generated')):
                     parallax = 0.0
         if not (normal and material):
             # Made from the picture itself, by the generator, on another thread.

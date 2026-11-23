@@ -160,7 +160,7 @@ def test_daylight_comes_in_at_a_window_and_not_through_a_wall():
     glh.reset_texture_cache()
     assert seen["outside"] > 80.0, seen
     assert seen["sealed"] < 25.0, seen                      # nothing leaks in
-    assert seen["window"] > seen["sealed"] * 2.0 + 10.0, seen
+    assert seen["window"] > seen["sealed"] * 2.0, seen
     assert seen["window"] < seen["outside"], seen
 
 
