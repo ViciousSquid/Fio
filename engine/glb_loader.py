@@ -60,6 +60,51 @@ def _finite_floats(value, default: List[float]) -> List[float]:
             for i, d in enumerate(default)]
 
 
+def flat_shaded(positions, indices=None, uvs=None):
+    """A triangle primitive without normals, made flat-shaded.
+
+    glTF 2.0 (3.7.2.1): "When normals are not specified, client
+    implementations MUST calculate flat normals." Each triangle gets its own
+    three corners carrying its face normal, so a box stays a box rather than
+    being smoothed into a ball. Returns ``(positions, normals, uvs, indices)``
+    for the unshared corners (*uvs* None when none were given), in the order
+    of the triangles. The Android player does the same
+    (player/render/models.py).
+
+    A model with no normals used to be drawn with every vertex facing up
+    (0, 1, 0): lit as a flat colour whatever way a face pointed, and -- a
+    spinning reel turning that "up" with it -- pulsing dark and light once
+    a turn.
+    """
+    positions = np.asarray(positions, dtype=np.float32)[:, :3]
+    tri = (np.arange(len(positions), dtype=np.int64) if indices is None
+           else np.asarray(indices, dtype=np.int64).reshape(-1))
+    tri = tri[:len(tri) - len(tri) % 3]
+    out_positions = positions[tri]
+    out_uvs = None
+    if uvs is not None and len(uvs) >= len(positions):
+        out_uvs = np.asarray(uvs, dtype=np.float32)[tri]
+    return (out_positions, flat_normals(out_positions), out_uvs,
+            np.arange(len(out_positions), dtype=np.uint32))
+
+
+def flat_normals(corners):
+    """Per-vertex normals for unshared triangle corners (``(3T [+ r], 3)``):
+    each corner its triangle's face normal. A degenerate triangle, and any
+    trailing vertices short of a whole one, keep the default (0, 1, 0)."""
+    corners = np.asarray(corners, dtype=np.float32)[:, :3]
+    normals = np.zeros((len(corners), 3), dtype=np.float32)
+    normals[:, 1] = 1.0
+    whole = len(corners) - len(corners) % 3
+    tris = corners[:whole].reshape(-1, 3, 3).astype(np.float64)
+    face = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+    length = np.linalg.norm(face, axis=1, keepdims=True)
+    face = np.where(length > 1e-12, face / np.maximum(length, 1e-30),
+                    np.array((0.0, 1.0, 0.0)))
+    normals[:whole] = np.repeat(face, 3, axis=0)
+    return normals
+
+
 def _read_bounded(path: str) -> Optional[bytes]:
     """A regular file's bytes, or None if missing, special, or too large.
 
@@ -668,6 +713,16 @@ class GLB:
                 if pos is None or len(pos) == 0:
                     continue
 
+                if (nrm is None or nrm.shape[1] < 3) and mode == 4:
+                    if idx is None:
+                        # Its corners are unshared already: the same
+                        # vertices, each with its triangle's normal.
+                        nrm = flat_normals(pos)
+                    else:
+                        pos, nrm, uvs, idx = flat_shaded(pos, idx, uvs)
+                        if not len(pos):
+                            continue
+
                 prim_vertex_count = len(pos)
                 block = np.zeros((prim_vertex_count, 8), dtype=np.float32)
                 block[:, 0:3] = pos[:, :3]
@@ -708,8 +763,11 @@ class GLB:
         if vertex_blocks:
             interleaved = np.concatenate(vertex_blocks)
             vertex_data = interleaved.reshape(-1)
-            # Store cpu_vertices as (N, 3) numpy array for 2D view projection
-            self.cpu_vertices = np.ascontiguousarray(interleaved[:, 0:3])
+            # Store cpu_vertices as (N, 3) numpy array for 2D view projection.
+            # The model's own vertices, as cpu_triangles numbers them -- not
+            # the GL buffer's, which a flat-shaded primitive has unshared.
+            self.cpu_vertices = np.ascontiguousarray(
+                loader._vertex_array(), dtype=np.float32)
         else:
             vertex_data = np.zeros(0, dtype=np.float32)
             self.cpu_vertices = np.array([], dtype=np.float32)
