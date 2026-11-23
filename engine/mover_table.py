@@ -127,6 +127,12 @@ _EVENT_NAMES = {_FULLY_OPEN: 'OnFullyOpen', _FULLY_CLOSED: 'OnFullyClosed',
 #: An empty row list.
 _NO_ROWS = np.zeros(0, dtype=np.intp)
 
+#: On a carried or turning model's collision proxy (runtime-only):
+#: ``(low, high, turns)``, the box its centre's displacement stays in while
+#: its group's leader travels and it turns about its own pivot, and whether
+#: it turns, which :func:`travel_range` files it for (engine.logic_groups).
+CARRIED_TRAVEL_KEY = '_carried_travel'
+
 
 def _no_logic():
     """A table not yet linked to a logic thread's runtime."""
@@ -153,6 +159,24 @@ def travel_range(brush):
     box = brush_placement.authored_box(brush)
     origin = tuple(float(v) for v in box[:3])
     half = box[3:]
+    carried = brush.get(CARRIED_TRAVEL_KEY)
+    if carried is not None:
+        # A model's collision carried by a group's mover or door, or turning
+        # about its own pivot (engine.logic_groups.CarriedModels): the box
+        # its centre's displacement stays in, worked out from its leader's
+        # travel and its pivot. One that turns reaches its box's radius from
+        # that centre, whichever way it faces.
+        low, high = carried[0], carried[1]
+        turns = bool(carried[2]) if len(carried) > 2 else False
+        ends = (tuple(origin[i] + float(low[i]) for i in range(3)),
+                tuple(origin[i] + float(high[i]) for i in range(3)))
+        margin = 1.0 + 1e-6 * max(abs(v) for end in ends for v in end)
+        lo = tuple(ends[0][i] - margin for i in range(3))
+        hi = tuple(ends[1][i] + margin for i in range(3))
+        if turns:
+            radius = math.sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2])
+            return lo, hi, True, (radius, radius, radius)
+        return lo, hi, False, (float(half[0]), float(half[1]), float(half[2]))
     ends = [origin]
     if brush.get('is_mover'):
         direction = _unit_direction(brush.get('direction', [0, 1, 0]))

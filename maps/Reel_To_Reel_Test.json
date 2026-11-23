@@ -1,0 +1,851 @@
+{
+    "version": 4,
+    "things": [
+        {
+            "type": "playerstart",
+            "pos": [
+                0.0,
+                56.0,
+                160.0
+            ],
+            "properties": {
+                "angle": 90.0,
+                "primary": true,
+                "name": "PlayerStart_1",
+                "id": "9f776daa-59ab-5ec1-98bc-1e165aceef0c",
+                "type": "playerstart",
+                "io_enabled": true,
+                "creation_index": 0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                0.0,
+                280.0,
+                40.0
+            ],
+            "properties": {
+                "radius": 1024.0,
+                "intensity": 1.3,
+                "name": "Light_Room",
+                "id": "1d895728-3712-54a7-a763-1e11d9069627",
+                "type": "light",
+                "io_enabled": true,
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                0.0,
+                200.0,
+                -120.0
+            ],
+            "properties": {
+                "radius": 640.0,
+                "intensity": 0.8,
+                "name": "Light_Machines",
+                "id": "dfae5154-6190-539a-bb9f-838676489142",
+                "type": "light",
+                "io_enabled": true,
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "cookie_enabled": false,
+                "cookie_texture": "",
+                "cookie_shadow_floor": 0.15,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -120.0,
+                0.5,
+                -224.0
+            ],
+            "properties": {
+                "render_mode": "model",
+                "collision_shape": "mesh",
+                "no_collision": false,
+                "physics_enabled": false,
+                "gravity": false,
+                "name": "Mainframe_Tall",
+                "id": "606a6a3f-7e17-52bb-aa7c-440976a2735c",
+                "model_path": "assets/models/reel_mainframe_tall.glb",
+                "type": "prop",
+                "io_enabled": true,
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                120.0,
+                1.0,
+                -226.0
+            ],
+            "properties": {
+                "render_mode": "model",
+                "collision_shape": "mesh",
+                "no_collision": false,
+                "physics_enabled": false,
+                "gravity": false,
+                "name": "Mainframe_Wide",
+                "id": "4934cbf5-cddd-5e56-8423-2cd7e54ca97b",
+                "model_path": "assets/models/reel_mainframe_wide.glb",
+                "type": "prop",
+                "io_enabled": true,
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -142.0,
+                151.5,
+                -186.95
+            ],
+            "properties": {
+                "render_mode": "model",
+                "collision_shape": "mesh",
+                "no_collision": true,
+                "physics_enabled": false,
+                "gravity": false,
+                "name": "Tall_Reel_Supply",
+                "id": "7aa85a0c-540a-5803-9ded-a7c88c1f7250",
+                "rotate_enabled": true,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": -150.0,
+                "rotate_ease": 1.0,
+                "rotate_autostart": false,
+                "model_path": "assets/models/tape_reel_blue.glb",
+                "type": "prop",
+                "io_enabled": true,
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotate_angle": 90.0,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -98.0,
+                151.5,
+                -186.95
+            ],
+            "properties": {
+                "render_mode": "model",
+                "collision_shape": "mesh",
+                "no_collision": true,
+                "physics_enabled": false,
+                "gravity": false,
+                "name": "Tall_Reel_Takeup",
+                "id": "f6e86e1d-e02a-5693-a15f-d4a1872fce73",
+                "rotate_enabled": true,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": -210.0,
+                "rotate_ease": 1.0,
+                "rotate_autostart": false,
+                "model_path": "assets/models/tape_reel_orange.glb",
+                "type": "prop",
+                "io_enabled": true,
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotate_angle": 90.0,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                93.0,
+                143.0,
+                -190.15
+            ],
+            "properties": {
+                "render_mode": "model",
+                "collision_shape": "mesh",
+                "no_collision": true,
+                "physics_enabled": false,
+                "gravity": false,
+                "name": "Wide_Reel_Supply",
+                "id": "c852b518-093f-5182-b7cb-53603c825c58",
+                "rotate_enabled": true,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": -150.0,
+                "rotate_ease": 1.0,
+                "rotate_autostart": true,
+                "model_path": "assets/models/tape_reel_cream.glb",
+                "type": "prop",
+                "io_enabled": true,
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotate_angle": 90.0,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                147.0,
+                143.0,
+                -190.15
+            ],
+            "properties": {
+                "render_mode": "model",
+                "collision_shape": "mesh",
+                "no_collision": true,
+                "physics_enabled": false,
+                "gravity": false,
+                "name": "Wide_Reel_Takeup",
+                "id": "d988de22-f062-542a-82ab-0d680bdb39f4",
+                "rotate_enabled": true,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": -210.0,
+                "rotate_ease": 1.0,
+                "rotate_autostart": true,
+                "model_path": "assets/models/tape_reel_blue.glb",
+                "type": "prop",
+                "io_enabled": true,
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "item",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_item": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotate_angle": 90.0,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "topples": false
+            },
+            "io_connections": []
+        }
+    ],
+    "brushes": [
+        {
+            "id": "feb071f2-dba2-58c1-81c7-f877c556b583",
+            "name": "floor",
+            "pos": [
+                0.0,
+                -16.0,
+                0.0
+            ],
+            "size": [
+                704.0,
+                32.0,
+                576.0
+            ],
+            "textures": {
+                "east": "Tile_03-512x512.png",
+                "west": "Tile_03-512x512.png",
+                "top": "Tile_03-512x512.png",
+                "down": "Tile_03-512x512.png",
+                "north": "Tile_03-512x512.png",
+                "south": "Tile_03-512x512.png"
+            }
+        },
+        {
+            "id": "b7650be7-ccdc-5671-9ee0-e85eede80bda",
+            "name": "ceiling",
+            "pos": [
+                0.0,
+                336.0,
+                0.0
+            ],
+            "size": [
+                704.0,
+                32.0,
+                576.0
+            ],
+            "textures": {
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png",
+                "north": "concrete02.png",
+                "south": "concrete02.png"
+            }
+        },
+        {
+            "id": "499a44f9-95fe-5657-b8b2-339c51f90669",
+            "name": "back_wall",
+            "pos": [
+                0.0,
+                160.0,
+                -272.0
+            ],
+            "size": [
+                640.0,
+                320.0,
+                32.0
+            ],
+            "textures": {
+                "east": "sci_fi_metal_wall_panel.jpg",
+                "west": "sci_fi_metal_wall_panel.jpg",
+                "top": "sci_fi_metal_wall_panel.jpg",
+                "down": "sci_fi_metal_wall_panel.jpg",
+                "north": "sci_fi_metal_wall_panel.jpg",
+                "south": "sci_fi_metal_wall_panel.jpg"
+            }
+        },
+        {
+            "id": "cc3f9a45-9f00-5fc6-9c86-bd006979eb27",
+            "name": "front_wall",
+            "pos": [
+                0.0,
+                160.0,
+                272.0
+            ],
+            "size": [
+                640.0,
+                320.0,
+                32.0
+            ],
+            "textures": {
+                "east": "sci_fi_metal_wall_panel.jpg",
+                "west": "sci_fi_metal_wall_panel.jpg",
+                "top": "sci_fi_metal_wall_panel.jpg",
+                "down": "sci_fi_metal_wall_panel.jpg",
+                "north": "sci_fi_metal_wall_panel.jpg",
+                "south": "sci_fi_metal_wall_panel.jpg"
+            }
+        },
+        {
+            "id": "5dcc782e-2e53-5b31-88ca-706b01ad16f2",
+            "name": "west_wall",
+            "pos": [
+                -336.0,
+                160.0,
+                0.0
+            ],
+            "size": [
+                32.0,
+                320.0,
+                512.0
+            ],
+            "textures": {
+                "east": "sci_fi_metal_wall_panel.jpg",
+                "west": "sci_fi_metal_wall_panel.jpg",
+                "top": "sci_fi_metal_wall_panel.jpg",
+                "down": "sci_fi_metal_wall_panel.jpg",
+                "north": "sci_fi_metal_wall_panel.jpg",
+                "south": "sci_fi_metal_wall_panel.jpg"
+            }
+        },
+        {
+            "id": "674c91a7-2ed0-52db-b513-d16145dfc7d7",
+            "name": "east_wall",
+            "pos": [
+                336.0,
+                160.0,
+                0.0
+            ],
+            "size": [
+                32.0,
+                320.0,
+                512.0
+            ],
+            "textures": {
+                "east": "sci_fi_metal_wall_panel.jpg",
+                "west": "sci_fi_metal_wall_panel.jpg",
+                "top": "sci_fi_metal_wall_panel.jpg",
+                "down": "sci_fi_metal_wall_panel.jpg",
+                "north": "sci_fi_metal_wall_panel.jpg",
+                "south": "sci_fi_metal_wall_panel.jpg"
+            }
+        },
+        {
+            "id": "81f32671-559d-53c1-a47f-e7b2d4d744bb",
+            "name": "toggle_button",
+            "pos": [
+                -216.0,
+                64.0,
+                -252.0
+            ],
+            "size": [
+                16.0,
+                16.0,
+                8.0
+            ],
+            "textures": {
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png",
+                "north": "default.png",
+                "south": "default.png"
+            },
+            "colour": [
+                0.8,
+                0.07,
+                0.08
+            ]
+        },
+        {
+            "id": "d0f79fc0-b43e-5327-bb06-ddb457d92c5f",
+            "name": "Toggle_Tall_Reels",
+            "pos": [
+                -216.0,
+                64.0,
+                -250.0
+            ],
+            "size": [
+                20.0,
+                20.0,
+                12.0
+            ],
+            "textures": {
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "trigger.jpg",
+                "north": "trigger.jpg",
+                "south": "trigger.jpg"
+            },
+            "is_trigger": true,
+            "trigger_type": "Multiple",
+            "trigger_activation": "use",
+            "use_label": "",
+            "io_connections": [
+                {
+                    "output": "OnTrigger",
+                    "target": "Tall_Reel_Supply",
+                    "input": "ToggleRotate",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "7aa85a0c-540a-5803-9ded-a7c88c1f7250"
+                },
+                {
+                    "output": "OnTrigger",
+                    "target": "Tall_Reel_Takeup",
+                    "input": "ToggleRotate",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "f6e86e1d-e02a-5693-a15f-d4a1872fce73"
+                }
+            ]
+        },
+        {
+            "id": "0e52151d-5c5b-5781-9f68-d45c448fc8f0",
+            "name": "reverse_button",
+            "pos": [
+                216.0,
+                64.0,
+                -252.0
+            ],
+            "size": [
+                16.0,
+                16.0,
+                8.0
+            ],
+            "textures": {
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png",
+                "north": "default.png",
+                "south": "default.png"
+            },
+            "colour": [
+                0.1,
+                0.28,
+                0.55
+            ]
+        },
+        {
+            "id": "e9ec4943-7f2a-5999-a144-eeb152400371",
+            "name": "Reverse_Wide_Reels",
+            "pos": [
+                216.0,
+                64.0,
+                -250.0
+            ],
+            "size": [
+                20.0,
+                20.0,
+                12.0
+            ],
+            "textures": {
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "trigger.jpg",
+                "north": "trigger.jpg",
+                "south": "trigger.jpg"
+            },
+            "is_trigger": true,
+            "trigger_type": "Multiple",
+            "trigger_activation": "use",
+            "use_label": "",
+            "io_connections": [
+                {
+                    "output": "OnTrigger",
+                    "target": "Wide_Reel_Supply",
+                    "input": "ReverseRotate",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "c852b518-093f-5182-b7cb-53603c825c58"
+                },
+                {
+                    "output": "OnTrigger",
+                    "target": "Wide_Reel_Takeup",
+                    "input": "ReverseRotate",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "d988de22-f062-542a-82ab-0d680bdb39f4"
+                }
+            ]
+        }
+    ]
+}

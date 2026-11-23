@@ -989,8 +989,13 @@ def register_default_io():
             IODef('Hide', 'Hide this light entity'),
             IODef('Show', 'Show this light entity'),
             IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('StartPath', 'Travel along its path nodes (or carry on from where it paused)'),
+            IODef('StopPath', 'Pause where it is on its path'),
+            IODef('TogglePath', 'Travel along its path, or pause'),
         ],
         outputs=[
+            IODef('OnPathNodeReached', 'Fired at each path node reached (value: the node name)'),
+            IODef('OnPathEnd', 'Fired when it reaches the end of its path'),
             IODef('OnTurnedOn', 'Fired when light turns on'),
             IODef('OnTurnedOff', 'Fired when light turns off'),
             IODef('OnShadowsEnabled', 'Fired when shadow casting is enabled'),
@@ -1030,6 +1035,11 @@ def register_default_io():
             IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
             IODef('Explode', 'Blow up this prop now, if it is Explosive'),
             IODef('Damage', 'Damage this prop (param: amount); an Explosive prop explodes once it has taken its Health', 'int'),
+            IODef('StartRotate', 'Start this model rotating (its Animation tab: Rotate); a Turn model turns to its Angle'),
+            IODef('StopRotate', 'Stop rotating: Continuous coasts down, Swing eases to rest, Turn turns back'),
+            IODef('ToggleRotate', 'Start this model rotating, or stop it'),
+            IODef('ReverseRotate', 'Rotate the other way (a Turn model turns back, or on again)'),
+            IODef('SetRotateSpeed', 'Set the rotate speed for this Play, degrees a second (Continuous: negative is the other way)', 'float'),
         ],
         outputs=[
             IODef('OnCarried', 'Fired when the player carries this prop'),
@@ -1038,6 +1048,8 @@ def register_default_io():
             IODef('OnCollected', 'Fired when the player collects this prop'),
             IODef('OnRespawn', 'Fired when this prop respawns'),
             IODef('OnExplode', 'Fired when this Explosive prop explodes'),
+            IODef('OnRotateStarted', 'Fired when this model starts rotating'),
+            IODef('OnRotateStopped', 'Fired when this model comes to rest (a Turn model: at either end)'),
         ]
     )
 
@@ -1158,31 +1170,6 @@ def register_default_io():
         ]
     )
     
-    # === PROP ===
-    register_io('prop',
-        inputs=[
-            IODef('Enable', 'Enable this prop'),
-            IODef('Disable', 'Disable this prop'),
-            IODef('Collect', 'Collect this prop'),
-            IODef('Respawn', 'Respawn this prop'),
-            IODef('SetValue', 'Set collection value', 'int'),
-            IODef('Drop', 'Release this prop if it is being carried'),
-            IODef('Wake', 'Resume physics simulation'),
-            IODef('Hide', 'Hide this prop'),
-            IODef('Show', 'Show this prop'),
-            IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
-            IODef('Explode', 'Blow up this prop now, if it is Explosive'),
-            IODef('Damage', 'Damage this prop (param: amount); an Explosive prop explodes once it has taken its Health', 'int'),
-        ],
-        outputs=[
-            IODef('OnCarried', 'Fired when the player carries this prop'),
-            IODef('OnDropped', 'Fired when the player drops this prop'),
-            IODef('OnRest', 'Fired when this prop comes to rest'),
-            IODef('OnCollected', 'Fired when the player collects this prop'),
-            IODef('OnRespawn', 'Fired when this prop respawns'),
-            IODef('OnExplode', 'Fired when this Explosive prop explodes'),
-        ]
-    )
 
     # === LEVEL CHANGER ===
     register_io('levelchanger',

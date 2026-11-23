@@ -1215,6 +1215,14 @@ def collision_shape_at(brush, runtime):
         result = (planes, triangles, bounds, frame)
         brush['_collision_entry'] = (key, convex, result)
         return result
+    if brush.get('_collision_mode') == 'mesh' and 'geometry' not in brush:
+        # A model's collision mesh, in world space: moved (and turned) by a
+        # runtime transform when it has one -- before a spin is taken for a
+        # box's, so a turning model keeps its triangles.
+        if runtime is not None:
+            return _carried_mesh(brush, runtime, entry)
+        return (brush.get('_mesh_planes') or [], brush.get('_mesh_triangles'),
+                brush.get('_mesh_bounds'), None)
     if runtime is not None and runtime[6]:
         rotation = _turn_of(brush, runtime)
         if rotation is not None:
@@ -1244,10 +1252,103 @@ def collision_shape_at(brush, runtime):
             result = (solid[1], None, solid[2], Frame(solid[3], runtime[:3], rotation))
             brush['_collision_entry'] = (runtime, placed, result)
             return result
-    if brush.get('_collision_mode') == 'mesh' and 'geometry' not in brush:
-        return (brush.get('_mesh_planes') or [], brush.get('_mesh_triangles'),
-                brush.get('_mesh_bounds'), None)
     return None
+
+
+def _carried_mesh(brush, runtime, entry):
+    """A mesh proxy moved by a runtime transform (a model riding its group's
+    mover, or turning about its own axis: engine.logic_groups.CarriedModels):
+    its world-space mesh where the transform puts it, still in world space --
+    the player's model passes read model triangles as they are. A point
+    ``x`` of the built mesh is at ``P + R (x - A)``: *A* the built mesh's
+    centre, *P* the runtime centre, *R* the runtime spin (none: a
+    translation). Built once per transform (its source hands over a new
+    tuple whenever it moves) and kept with it, so a tick's several questions
+    move it once."""
+    triangles = brush.get('_mesh_triangles')
+    if entry is not None and entry[0] is runtime and entry[1] is triangles:
+        return entry[2]
+    home = _mesh_box(brush)
+    if home is None or not triangles:
+        return (brush.get('_mesh_planes') or [], triangles, brush.get('_mesh_bounds'), None)
+    rotation = _turn_of(brush, runtime) if runtime[6] else None
+    if rotation is not None:
+        result = _turned_mesh(brush, runtime, home, rotation)
+        brush['_collision_entry'] = (runtime, triangles, result)
+        return result
+    dx = runtime[0] - home[0]
+    dy = runtime[1] - home[1]
+    dz = runtime[2] - home[2]
+    moved = [(((a[0] + dx, a[1] + dy, a[2] + dz), (b[0] + dx, b[1] + dy, b[2] + dz),
+               (c[0] + dx, c[1] + dy, c[2] + dz)), normal)
+             for (a, b, c), normal in triangles]
+    lo, hi = brush['_mesh_bounds']
+    bounds = ([lo[0] + dx, lo[1] + dy, lo[2] + dz], [hi[0] + dx, hi[1] + dy, hi[2] + dz])
+    # Planes n . p <= d moved by t: n . p <= d + n . t.
+    planes = [(p[0], p[1], p[2], p[3] + p[0] * dx + p[1] * dy + p[2] * dz)
+              for p in brush.get('_mesh_planes') or ()]
+    result = (planes, moved, bounds, None)
+    brush['_collision_entry'] = (runtime, triangles, result)
+    return result
+
+
+def _mesh_arrays(brush):
+    """A mesh proxy's triangles as ``((n, 3, 3) vertices, (n, 3) normals)``
+    float64 arrays, made once and kept on it (``_mesh_arrays``) against the
+    triangle list they were made from."""
+    triangles = brush.get('_mesh_triangles')
+    cached = brush.get('_mesh_arrays')
+    if cached is not None and cached[0] is triangles:
+        return cached[1], cached[2]
+    verts = np.asarray([tri for tri, _normal in triangles], dtype=np.float64).reshape(-1, 3, 3)
+    normals = np.asarray([normal for _tri, normal in triangles],
+                         dtype=np.float64).reshape(-1, 3)
+    brush['_mesh_arrays'] = (triangles, verts, normals)
+    return verts, normals
+
+
+def turned_mesh_array(brush, runtime):
+    """``(n, 3, 3)``: a mesh proxy's triangles where *runtime* (which turns
+    it) puts them, ``P + R (x - A)`` -- worked out once per transform and
+    kept with it (``_turned_mesh``), for every reader of that transform (the
+    player's passes through :func:`collision_shape`, the spatial grid's
+    height columns)."""
+    cached = brush.get('_turned_mesh')
+    if cached is not None and cached[0] is runtime:
+        return cached[1]
+    verts, _normals = _mesh_arrays(brush)
+    home = _mesh_box(brush)
+    rotation = _turn_of(brush, runtime) if runtime[6] else None
+    centre = np.array(runtime[:3], dtype=np.float64)
+    local = verts - np.array(home[:3], dtype=np.float64)
+    if rotation is not None:
+        local = local @ np.asarray(rotation, dtype=np.float64).T
+    moved = local + centre
+    brush['_turned_mesh'] = (runtime, moved)
+    return moved
+
+
+def _turned_mesh(brush, runtime, home, rotation):
+    """:func:`_carried_mesh` for a transform that turns the mesh: its
+    vertices and normals turned in bulk (NumPy), its bounds the turned
+    vertices' own, its planes ``(R n) . p <= d + (R n) . P - n . A``."""
+    moved = turned_mesh_array(brush, runtime)
+    _verts, normals = _mesh_arrays(brush)
+    turn = np.asarray(rotation, dtype=np.float64)
+    triangles = list(zip(moved.tolist(), (normals @ turn.T).tolist()))
+    flat = moved.reshape(-1, 3)
+    bounds = (flat.min(axis=0).tolist(), flat.max(axis=0).tolist())
+    planes = []
+    ax, ay, az = home[0], home[1], home[2]
+    px, py, pz = runtime[0], runtime[1], runtime[2]
+    for p in brush.get('_mesh_planes') or ():
+        nx = turn[0, 0] * p[0] + turn[0, 1] * p[1] + turn[0, 2] * p[2]
+        ny = turn[1, 0] * p[0] + turn[1, 1] * p[1] + turn[1, 2] * p[2]
+        nz = turn[2, 0] * p[0] + turn[2, 1] * p[1] + turn[2, 2] * p[2]
+        planes.append((float(nx), float(ny), float(nz),
+                       float(p[3] + nx * px + ny * py + nz * pz
+                             - (p[0] * ax + p[1] * ay + p[2] * az))))
+    return (planes, triangles, bounds, None)
 
 
 def collision_frame(brush):

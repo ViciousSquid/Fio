@@ -302,6 +302,10 @@ class MainWindow(QMainWindow):
         # are a dialog keypress apart rather than a re-typed number.
         self.last_hollow_thickness = 16
         self.preview_timer = QTimer(self)  # OPTIMIZATION: Added parent=self for proper cleanup
+        # The Animation tab's Preview (a model's Rotate), stopped wherever the
+        # mover preview is (stop_mover_preview).
+        from editor.rotate_preview import RotatePreview
+        self.rotate_preview = RotatePreview(self)
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
         self.ui = Ui_MainWindow()
@@ -1639,6 +1643,10 @@ class MainWindow(QMainWindow):
             self._translate_object(new_obj, delta)
             clones.append(new_obj)
 
+        # The copies are not attached to the originals (brush_groups).
+        from editor import brush_groups
+        brush_groups.regroup_copies(clones, brush_groups.scene_objects(self.state))
+
         self.set_selected_objects(clones)
         self.show_toast("Cloned — move the cursor and click to place (Esc cancels)")
 
@@ -1876,6 +1884,12 @@ class MainWindow(QMainWindow):
         # with nothing in it (and its bounding box raised).
         self.state.selected_objects = [o for o in (objects or []) if o is not None]
         primary = self.primary_selection()
+        preview = getattr(self, 'rotate_preview', None)
+        if preview is not None and preview.active and preview.prop is not primary:
+            # Another selection ends the rotate preview -- before the panel
+            # changes page, so the Preview button it resets is the one that
+            # started it, not one on the page about to be shown.
+            self.stop_rotate_preview()
         self.update_all_ui(selection_only=True)
         self.selection_changed.emit()
 
@@ -2379,7 +2393,31 @@ class MainWindow(QMainWindow):
                 return t
         return None
 
+    def start_rotate_preview(self, prop):
+        """The Animation tab's Preview: rotate *prop* in the 3D view."""
+        self.rotate_preview.stop()            # (the button that asked stays down)
+        if self.preview_timer.isActive():
+            self.stop_mover_preview()
+        return self.rotate_preview.start(prop)
+
+    def stop_rotate_preview(self):
+        """Stop the Rotate preview, the model back as placed; the Preview
+        button is reset."""
+        stopped = self.rotate_preview.stop()
+        btn = self.property_editor._widgets.get('rotate_preview_btn') \
+            if getattr(self, 'property_editor', None) is not None else None
+        if btn is not None:
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.setText("▶ Preview Rotate")
+            btn.blockSignals(False)
+        return stopped
+
     def stop_mover_preview(self):
+        # Every place a preview must end (selection, Play, save) ends a
+        # rotate preview too.
+        if getattr(self, 'rotate_preview', None) is not None and self.rotate_preview.active:
+            self.stop_rotate_preview()
         if self.preview_timer.isActive():
             self.preview_timer.stop()
             if self.preview_data and self.preview_data.get('obj'):
@@ -2734,6 +2772,11 @@ class MainWindow(QMainWindow):
                 self.state.things.append(pasted)
 
             pasted_objects.append(pasted)
+
+        # Pasted copies are not attached to the originals (brush_groups).
+        from editor import brush_groups
+        brush_groups.regroup_copies(pasted_objects,
+                                    brush_groups.scene_objects(self.state))
 
         self.set_selected_objects(pasted_objects)
         self.show_toast(
@@ -3266,6 +3309,10 @@ class MainWindow(QMainWindow):
         # Only once Play is certain to start: a refused Play must leave the
         # side panel on the tab the author was using.
         self._store_and_switch_to_debug_console()
+        # The game drives a model's Rotate itself: an editor preview of one
+        # ends here, the model back as placed.
+        if getattr(self, 'rotate_preview', None) is not None and self.rotate_preview.active:
+            self.stop_rotate_preview()
 
         if hasattr(self, 'mode_label'):
             self.mode_label.setText("PLAY MODE")
@@ -4784,6 +4831,10 @@ class MainWindow(QMainWindow):
 
                     pasted_objects.append(pasted)
 
+                # Not in the originals' group (as Paste and Clone).
+                from editor import brush_groups
+                brush_groups.regroup_copies(pasted_objects,
+                                            brush_groups.scene_objects(self.state))
                 self.set_selected_objects(pasted_objects)
                 self.show_toast(
                     f"Pasted {len(pasted_objects)} object(s)"

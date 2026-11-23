@@ -186,6 +186,21 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('light', 'toggleshadows', light_toggle_shadows)
     io_manager.register_input_handler('light', 'fadein', light_fade_in)
     io_manager.register_input_handler('light', 'fadeout', light_fade_out)
+
+    # Path following (engine.light_paths): a light whose Path Start names a
+    # path node; one without a path ignores these.
+    def light_start_path(entity, param, logic):
+        logic.light_path_runtime.start_path(entity)
+
+    def light_stop_path(entity, param, logic):
+        logic.light_path_runtime.stop_path(entity)
+
+    def light_toggle_path(entity, param, logic):
+        logic.light_path_runtime.toggle_path(entity)
+
+    io_manager.register_input_handler('light', 'startpath', light_start_path)
+    io_manager.register_input_handler('light', 'stoppath', light_stop_path)
+    io_manager.register_input_handler('light', 'togglepath', light_toggle_path)
     
     # ==========================================================================
     # EFFECT INPUTS
@@ -723,6 +738,33 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('prop', 'setvalue', prop_set_value)
     io_manager.register_input_handler('prop', 'wake', prop_wake)
     io_manager.register_input_handler('prop', 'drop', prop_drop)
+
+    # Rotate animation (engine.model_rotate; the Prop's Animation tab). The
+    # Prop runtime owns the motion; a model without Rotate ignores these.
+    def prop_start_rotate(entity, param, logic):
+        logic.prop_runtime.start_rotate(entity)
+
+    def prop_stop_rotate(entity, param, logic):
+        logic.prop_runtime.stop_rotate(entity)
+
+    def prop_toggle_rotate(entity, param, logic):
+        logic.prop_runtime.toggle_rotate(entity)
+
+    def prop_reverse_rotate(entity, param, logic):
+        logic.prop_runtime.reverse_rotate(entity)
+
+    def prop_set_rotate_speed(entity, param, logic):
+        try:
+            speed = float(param)
+        except (TypeError, ValueError):
+            return
+        logic.prop_runtime.set_rotate_speed(entity, speed)
+
+    io_manager.register_input_handler('prop', 'startrotate', prop_start_rotate)
+    io_manager.register_input_handler('prop', 'stoprotate', prop_stop_rotate)
+    io_manager.register_input_handler('prop', 'togglerotate', prop_toggle_rotate)
+    io_manager.register_input_handler('prop', 'reverserotate', prop_reverse_rotate)
+    io_manager.register_input_handler('prop', 'setrotatespeed', prop_set_rotate_speed)
 
     # ==========================================================================
     # LOGIC_RELAY INPUTS

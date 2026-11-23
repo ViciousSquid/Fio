@@ -58,6 +58,8 @@ class PropSession:
         #: Props already reported as giving an item that does not resolve.
         self._reported_items = set()
         self.respawn_fades = {}
+        #: Rotating models: id(prop) -> (prop, RotateMotion).
+        self.rotations = {}
         self._by_id = {}
         self._cells = CellIndex()
         self._filed = {}
@@ -211,11 +213,13 @@ class PropSession:
         self.rebuild()
         for prop in self.props:
             prop._respawn_fade_alpha = 1.0
+        self._start_rotations()
 
     def stop(self):
         for prop in self.props:
             self._release(prop)
             prop._respawn_fade_alpha = 1.0
+        self._stop_rotations()
         self.held = None
         self.props = []
         self._by_id = {}
@@ -226,6 +230,108 @@ class PropSession:
         self._cells.clear()
         self._filed.clear()
         self._max_reach = self.DEFAULT_CARRY_REACH
+
+    # -- Rotate animation (engine.model_rotate) ------------------------------
+    #
+    # A model Prop with Rotate on turns about its own axis during Play --
+    # continuously, swinging, or turning to an angle -- driven by one
+    # RotateMotion each (the same one the Animation tab's Preview runs). Only
+    # the angle reaches the Prop (``_rotate_angle``, runtime state the
+    # renderer draws); nothing is written into its properties, so Stop
+    # leaves the map as it was.
+
+    def _start_rotations(self):
+        from .model_rotate import RotateMotion, axis_index, rotates_in_play
+        self.rotations = {}
+        for prop in self.props:
+            prop._rotate_angle = 0.0
+            props = prop.properties
+            if not rotates_in_play(props):      # off, not a model, or physics
+                continue
+            bounds = None
+            if str(props.get('rotate_axis', 'auto')).lower() not in ('x', 'y', 'z'):
+                runtime = getattr(self.logic, 'collision_runtime', None)
+                try:
+                    bounds = runtime.compute_model_bounds(props['model_path']) if runtime else None
+                except Exception:
+                    bounds = None
+            prop._rotate_axis = axis_index(props.get('rotate_axis'), bounds)
+            motion = RotateMotion(props)
+            self.rotations[id(prop)] = (prop, motion)
+            prop._rotate_angle = motion.angle
+
+    def _stop_rotations(self):
+        for prop, _motion in self.rotations.values():
+            prop._rotate_angle = 0.0
+        for prop in self.props:
+            prop._rotate_angle = 0.0
+        self.rotations = {}
+
+    def _update_rotations(self, delta):
+        if not self.rotations:
+            return
+        turned = False
+        for prop, motion in list(self.rotations.values()):
+            before = motion.angle
+            for event in motion.step(delta):
+                if event == 'stopped':
+                    self._fire(prop, "OnRotateStopped")
+            if motion.angle != before:
+                prop._rotate_angle = motion.angle
+                turned = True
+        if turned:
+            # A solid model's collision turns with it (engine.logic_groups.
+            # CarriedModels), before physics steps against it.
+            groups = getattr(getattr(self.logic, 'mover_runtime', None), 'groups', None)
+            if groups is not None:
+                groups.follow_models()
+
+    def _motion(self, prop):
+        entry = self.rotations.get(id(prop))
+        return None if entry is None else entry[1]
+
+    def start_rotate(self, prop):
+        """StartRotate (Turn: turn to its Angle); fires OnRotateStarted."""
+        motion = self._motion(prop)
+        if motion is None or not motion.start():
+            return False
+        self._fire(prop, "OnRotateStarted")
+        return True
+
+    def stop_rotate(self, prop):
+        """StopRotate: Continuous coasts down, Swing eases to rest where it
+        is, Turn turns back; OnRotateStopped once it has come to rest."""
+        motion = self._motion(prop)
+        if motion is None or not motion.stop():
+            return False
+        if not motion.moving:
+            self._fire(prop, "OnRotateStopped")
+        return True
+
+    def toggle_rotate(self, prop):
+        motion = self._motion(prop)
+        if motion is None:
+            return False
+        return self.stop_rotate(prop) if motion.running else self.start_rotate(prop)
+
+    def reverse_rotate(self, prop):
+        """ReverseRotate: the other way (Turn: back, or on again)."""
+        motion = self._motion(prop)
+        if motion is None:
+            return False
+        if motion.mode == 'turn':
+            return self.toggle_rotate(prop)
+        return motion.reverse()
+
+    def set_rotate_speed(self, prop, speed):
+        """SetRotateSpeed: degrees a second, for this Play only."""
+        motion = self._motion(prop)
+        return False if motion is None else motion.set_speed(speed)
+
+    def rotate_velocity_of(self, prop):
+        """A Continuous rotation's speed now, degrees a second (0: none)."""
+        motion = self._motion(prop)
+        return 0.0 if motion is None else motion.velocity
 
     # -- I/O --------------------------------------------------------------
 
@@ -243,6 +349,8 @@ class PropSession:
     # -- interaction ------------------------------------------------------
 
     def tick(self, delta, use_pressed):
+        # Machinery turns whether or not there is a player to look at it.
+        self._update_rotations(delta)
         player = self.logic.player_runtime.player
         if player is None:
             return

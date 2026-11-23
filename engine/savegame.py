@@ -342,6 +342,15 @@ def _capture_moving_brushes(logic) -> dict:
     return out
 
 
+def _capture_light_paths(logic) -> dict:
+    """Each path-following light's journey, by UUID (engine.light_paths)."""
+    paths = getattr(logic, "light_path_runtime", None)
+    try:
+        return _jsonify(paths.snapshot()) if paths is not None else {}
+    except Exception:
+        return {}
+
+
 def _restore_moving_brushes(logic, saved) -> None:
     """Put mover and door brushes back where :func:`_capture_moving_brushes`
     found them: into the mover table, which owns their runtime transform
@@ -430,6 +439,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
                          for k, s in logic.timing_runtime.timer_states.items()},
         "pending_io_events": _capture_pending_events(logic),
         "moving_brushes": _capture_moving_brushes(logic),
+        "light_paths": _capture_light_paths(logic),
         "mover_path_states": {
             str(i): _jsonify(_public_state(s))
             for i, s in (logic.mover_runtime.mover_path_states or {}).items()},
@@ -858,6 +868,14 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # Mover/door brush transforms first: the states below animate from them.
     try:
         _restore_moving_brushes(logic, runtime.get("moving_brushes"))
+    except Exception:
+        pass
+    # Path-following lights: their journeys, or the next tick puts each back
+    # where it had got to before the load (its pos is the level overlay's).
+    try:
+        paths = getattr(logic, "light_path_runtime", None)
+        if paths is not None:
+            paths.restore(runtime.get("light_paths"))
     except Exception:
         pass
     if "mover_path_states" in runtime:

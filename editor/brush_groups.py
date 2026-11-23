@@ -147,6 +147,36 @@ def set_group(brushes, name):
             props.pop(GROUP_KEY, None)
 
 
+def regroup_copies(copies, scene):
+    """Take fresh copies (a clone, a paste) out of their originals' groups.
+
+    A copy joining its original's group would be attached to the original
+    -- moved by it in the editor, carried by its mover in Play -- which is
+    never what copying is for. Copies of two or more members of one group
+    become a group of their own, ``'<name> (copy)'`` (numbered while taken
+    in *scene*), so a copied lift and its lamp still move together; a lone
+    copy is ungrouped. Returns ``{old name: new name}`` for the new groups.
+    """
+    by_group = {}
+    for copy in copies:
+        name = group_of(copy)
+        if name:
+            by_group.setdefault(name, []).append(copy)
+    taken = set(groups(scene))
+    renamed = {}
+    for name, copied in by_group.items():
+        if len(copied) < 2:
+            set_group(copied, '')
+            continue
+        new, number = '%s (copy)' % name, 2
+        while new in taken:
+            new, number = '%s (copy %d)' % (name, number), number + 1
+        taken.add(new)
+        set_group(copied, new)
+        renamed[name] = new
+    return renamed
+
+
 def rename(brushes, old, new):
     """Rename group *old* to *new*; a name already in use merges the two."""
     new = str(new or '').strip()

@@ -185,6 +185,7 @@ class LogicSession:
             logic.mover_runtime._init_movers()
             logic.mover_runtime._init_doors()
             logic.parenting_runtime._init_parented_lights()
+            logic.light_path_runtime.start()
             logic.parenting_runtime._init_parented_portals()
 
             # Bake swept-mesh collision for angled (clipped/convex) brushes so
@@ -200,6 +201,9 @@ class LogicSession:
                 for b in logic.collision_runtime._model_collision_brushes
                 if b.get("_physics_body")
             ]
+            # A solid model riding a group's mover, or turning (Rotate), takes
+            # its collision with it.
+            logic.collision_runtime.carry_moving_models()
             logic.collision_runtime.refresh_collision_brushes_cache()
 
             # Runtime effect state belongs to this play session, not authoring.
@@ -383,6 +387,7 @@ class LogicSession:
             logic.mover_runtime._reset_movers()
             logic.mover_runtime._reset_doors()
             logic.parenting_runtime._reset_parented_lights()
+            logic.light_path_runtime.stop()
             logic.parenting_runtime._reset_parented_portals()
             logic.collision_runtime.clear_angled_brush_collision()
             logic.interaction_runtime.current_hud_message = ""

@@ -362,19 +362,80 @@ def test_an_unresolved_entity_keeps_its_group():
     assert 'brush_group' not in ghost.to_dict()['properties']
 
 
-def test_a_cloned_or_pasted_entity_stays_in_its_group_as_a_brush_does(scene):
+def test_a_clone_or_paste_is_not_attached_to_the_originals_group(scene):
+    """Copies are their own: a lone copy is ungrouped; copies of two or more
+    members of a group form a group of their own, so they still move
+    together without being carried by (or carrying) the originals."""
     window, objects = scene
     window.set_selected_objects([objects['glass'], objects['lamp']])
     window.copy_selection()
     window.paste_selection()
     pasted = window.selected_objects_list()
     assert len(pasted) == 2
-    assert [brush_groups.group_of(o) for o in pasted] == ['Door', 'Door']
+    assert [brush_groups.group_of(o) for o in pasted] == ['Door (copy)', 'Door (copy)']
+    assert brush_groups.group_of(objects['lamp']) == 'Door'          # untouched
+    window.paste_selection()                                          # again: a new one
+    assert {brush_groups.group_of(o) for o in window.selected_objects_list()} == {
+        'Door (copy 2)'}
 
     window.set_selected_objects([_thing(window, 'lamp')])
     window.clone_selected_object()
     clone = window.selected_objects_list()[0]
     window.finish_clone_placement()
     assert clone is not _thing(window, 'lamp')
-    assert brush_groups.group_of(clone) == 'Door'
+    assert brush_groups.group_of(clone) == ''
+    assert brush_groups.group_of(_thing(window, 'lamp')) == 'Door'
+    # A clone of the group's members together: a group of its own.
+    door = brush_groups.members(brush_groups.scene_objects(window.state), 'Door')
+    window.set_selected_objects(door)
+    window.clone_selected_object()
+    clones = window.selected_objects_list()
+    window.finish_clone_placement()
+    assert len(clones) == len(door)
+    assert {brush_groups.group_of(o) for o in clones} == {'Door (copy 3)'}
     window.unsaved_changes = False
+
+
+def test_a_ctrl_v_paste_is_not_attached_to_the_originals_group(scene):
+    from PyQt5.QtGui import QKeyEvent
+    from PyQt5.QtCore import QEvent
+    window, objects = scene
+    window.set_selected_objects([objects['glass'], objects['lamp']])
+    window.copy_selection()
+    window.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_V, Qt.ControlModifier))
+    pasted = window.selected_objects_list()
+    assert len(pasted) == 2 and not any(p is objects['lamp'] for p in pasted)
+    assert {brush_groups.group_of(o) for o in pasted} == {'Door (copy)'}
+    assert brush_groups.group_of(objects['lamp']) == 'Door'
+    window.unsaved_changes = False
+
+
+def test_a_model_is_grouped_through_the_scene_hierarchy(scene, monkeypatch):
+    from editor.things import Prop
+    window, objects = scene
+    model = Prop.for_model('assets/models/Oil_Drum.obj', pos=[0, 0, 0])
+    model.properties['name'] = 'drum'
+    window.state.things.append(model)
+    window.update_all_ui()
+    monkeypatch.setattr(window, '_run_brush_group_dialog',
+                        lambda dialog: dialog.name_box.setCurrentText('Door') or True)
+    hierarchy = window.scene_hierarchy
+    chosen = []
+
+    def exec_(menu, *_args):
+        action = next(a for a in menu.actions() if a.text() == "Add to Group...")
+        chosen.append(action)
+        action.trigger()
+        return action
+
+    monkeypatch.setattr(QMenu, 'exec_', exec_)
+    window.set_selected_objects([model])
+    item = _section(window, 'Things')['drum']
+    hierarchy.open_menu(hierarchy.tree.visualItemRect(item).center())
+
+    assert chosen
+    assert brush_groups.group_of(_thing(window, 'drum')) == 'Door'
+    # In the door's group, it is carried with the door.
+    every = brush_groups.scene_objects(window.state)
+    mates = brush_groups.with_mates(every, [_brush(window, 'door')])
+    assert any(m is _thing(window, 'drum') for m in mates)

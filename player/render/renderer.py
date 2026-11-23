@@ -684,7 +684,7 @@ class GLESRenderer:
                         model[:3, 2] = np.cross(right, up)
                         model[:3, 3] = position
                     else:
-                        model = glmath.entity_matrix(item.pos, item.properties)
+                        model = glmath.item_matrix(item)
             if source and source[0] == 'static':
                 # Retain a cell if any authored brush centre is in range; the
                 # merged AABB centre may lie beyond the distance boundary.

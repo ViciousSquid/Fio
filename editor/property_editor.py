@@ -1,5 +1,6 @@
 from engine.asset_qt import load_icon
 import copy
+import math
 import re
 import json
 from types import SimpleNamespace
@@ -491,7 +492,11 @@ def _fire_icon(path):
         pixmap = QPixmap(path)
         icon = QIcon(pixmap.scaled(36, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                      if not pixmap.isNull() else pixmap)
-        _FIRE_ICONS[path] = icon
+        if not pixmap.isNull():
+            # A still that failed to load (the path is relative to the
+            # project, and the working directory was elsewhere) is tried
+            # again next time, not remembered blank for the session.
+            _FIRE_ICONS[path] = icon
     return icon
 
 
@@ -2406,6 +2411,15 @@ class PropertyEditor(QWidget):
             # widgets (a placed model is a Prop: the commonest selection).
             self._add_deferred_tab(lambda t=thing: self._create_prop_physics_tab(t),
                                    "Physics")
+            # Animation (a model's Rotate): on every Prop page, built on first
+            # showing like Physics, and hidden unless the Prop shows a model.
+            # Always present, so the tabs after it keep their indexes, and
+            # switching Representation shows or hides it without a rebuild
+            # (_refresh_animation_tab).
+            index = self._add_deferred_tab(
+                lambda t=thing: self._create_prop_animation_tab(t), "Animation")
+            self._widgets['animation_tab'] = self.tab_widget.widget(index)
+            self._refresh_animation_tab(thing)
 
         advanced_tab = self._create_thing_advanced_tab(thing)
         if advanced_tab is not None:
@@ -2619,6 +2633,7 @@ class PropertyEditor(QWidget):
                     for row in (sprite_path_row, sprite_size_row):
                         self._set_form_row_visible(form, row, not is_model)
                     refresh_variant_row()
+                    self._refresh_animation_tab(thing)
 
                 def refresh_variant_row():
                     shown = (thing.properties.get('render_mode', 'model') != 'billboard'
@@ -2652,6 +2667,7 @@ class PropertyEditor(QWidget):
         if isinstance(thing, Light):
             self.add_color_picker_widget(form, thing, 'colour')
             self._build_attach_to_mover(form, thing)
+            self._build_follow_path(form, thing)
 
         if isinstance(thing, Portal):
             self._build_attach_to_mover(form, thing, prefix='portal_')
@@ -3015,6 +3031,230 @@ class PropertyEditor(QWidget):
         )
         section.addLayout(physics_form)
         parent_layout.addWidget(section)
+
+    @staticmethod
+    def _shows_animation_tab(thing):
+        """Whether *thing* has an Animation tab: a Prop showing a model."""
+        if not isinstance(thing, Prop):
+            return False
+        props = thing.properties
+        return (str(props.get('render_mode', 'model')).lower() == 'model'
+                and bool(props.get('model_path')))
+
+    def _refresh_animation_tab(self, thing):
+        """Show the page's Animation tab only while *thing* shows a model;
+        hidden, a Rotate preview of it stops."""
+        holder = self._widgets.get('animation_tab')
+        tabs = self.tab_widget
+        if holder is None or tabs is None:
+            return
+        index = tabs.indexOf(holder)
+        if index < 0:
+            return
+        shown = self._shows_animation_tab(thing)
+        tabs.setTabVisible(index, shown)
+        preview = getattr(self.editor, 'rotate_preview', None)
+        if not shown and preview is not None and preview.prop is thing:
+            self.editor.stop_rotate_preview()
+
+    #: The Animation tab's Axis and Mode choices, in the order of
+    #: model_rotate.ROTATE_AXES and ROTATE_MODES.
+    ROTATE_AXIS_LABELS = ("Auto (thinnest side)", "X", "Y", "Z")
+    ROTATE_MODE_LABELS = ("Continuous", "Swing", "Turn to angle")
+
+    def _create_prop_animation_tab(self, thing):
+        """A model Prop's Animation tab: its Rotate, and a Preview of it."""
+        w = QWidget(self.tab_widget)
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
+        form = QFormLayout()
+        form.setSpacing(4)
+        self._build_rotate_ui(form, thing)
+        section = CollapsibleSection("Rotate", expanded=True, count=form.rowCount())
+        section.addLayout(form)
+        layout.addWidget(section)
+        layout.addStretch()
+        return w
+
+    def _build_rotate_ui(self, form, thing):
+        """The Rotate rows (engine.model_rotate): off by default; on, the
+        model turns about its own axis in Play -- continuously, swinging or
+        turning to an angle -- from the start, or when an I/O input starts
+        it."""
+        from engine.model_rotate import (ROTATE_DEFAULTS, ROTATE_AXES, ROTATE_MODES,
+                                         MAX_ROTATE_SPEED, MAX_ROTATE_ANGLE,
+                                         MAX_ROTATE_EASE, CONTINUOUS, SWING, TURN,
+                                         rotate_mode)
+        props = thing.properties
+
+        def number(key):
+            try:
+                value = float(props.get(key, ROTATE_DEFAULTS[key]))
+            except (TypeError, ValueError):
+                return ROTATE_DEFAULTS[key]
+            return value if math.isfinite(value) else ROTATE_DEFAULTS[key]
+
+        rotate_cb = _make_checkbox("Rotate", bool(props.get('rotate_enabled', False)),
+                                   None, _Style.CHECKBOX)
+        rotate_cb.setToolTip(
+            "The model rotates about one of its own axes in Play -- round and "
+            "round, swinging back and forth, or turning to an angle -- from the "
+            "start, or when an I/O input starts it.")
+        form.addRow("", rotate_cb)
+        from engine.model_rotate import physics_owns_turn
+        if physics_owns_turn(props):
+            note = QLabel("Physics is on, so the physics simulation turns this "
+                          "model: Rotate does not run in Play.")
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #FFAC1C;")
+            self._widgets['rotate_physics_note'] = note
+            form.addRow("", note)
+
+        mode_labels = self.ROTATE_MODE_LABELS
+        mode = rotate_mode(props)
+        mode_combo = _make_combo(
+            list(mode_labels), mode_labels[ROTATE_MODES.index(mode)],
+            tooltip="Continuous: round and round (a fan, a wheel, a reel).\n"
+                    "Swing: back and forth across Angle, centred on how it was "
+                    "placed (a CCTV camera, a sign, a pendulum).\n"
+                    "Turn to angle: turns by Angle and stops; again, it turns "
+                    "back (a valve, a lever, a hatch).")
+        form.addRow("Mode:", mode_combo)
+
+        labels = self.ROTATE_AXIS_LABELS
+        axis = str(props.get('rotate_axis', 'auto')).lower()
+        if axis not in ROTATE_AXES:
+            axis = 'auto'
+        axis_combo = _make_combo(
+            list(labels), labels[ROTATE_AXES.index(axis)],
+            tooltip="The model's own axis it rotates about. Auto: its thinnest "
+                    "side -- a reel's, a fan's, a wheel's or a valve's hub.")
+        form.addRow("Axis:", axis_combo)
+
+        speed_spin = _make_spin(
+            number('rotate_speed'), -MAX_ROTATE_SPEED, MAX_ROTATE_SPEED,
+            suffix=" °/s", decimals=1, step=15.0,
+            tooltip="Degrees a second. Continuous: its full speed, negative "
+                    "turns the other way. Swing and Turn: how fast it moves.")
+        form.addRow("Speed:", speed_spin)
+
+        angle_label = QLabel("Angle:")
+        angle_spin = _make_spin(
+            number('rotate_angle'), -MAX_ROTATE_ANGLE, MAX_ROTATE_ANGLE,
+            suffix=" °", decimals=1, step=15.0,
+            tooltip="Swing: the whole arc it sweeps, centred on how it was "
+                    "placed. Turn to angle: how far it turns (negative: the "
+                    "other way).")
+        form.addRow(angle_label, angle_spin)
+
+        ease_label = QLabel("Ease in / out:")
+        ease_spin = _make_spin(
+            number('rotate_ease'), 0.0, MAX_ROTATE_EASE, suffix=" s", decimals=2,
+            step=0.1,
+            tooltip="Seconds to get up to speed when started and to come to "
+                    "rest when stopped. 0: at once. (Turn to angle always "
+                    "eases in and out.)")
+        form.addRow(ease_label, ease_spin)
+
+        autostart_cb = _make_checkbox(
+            "Rotating at start", bool(props.get('rotate_autostart', False)),
+            None, _Style.CHECKBOX)
+        autostart_cb.setToolTip(
+            "Rotating from the moment Play starts (Turn to angle: already "
+            "turned). Off, it waits for a StartRotate or ToggleRotate input.")
+        form.addRow("", autostart_cb)
+
+        note = QLabel(
+            "In Play, the I/O inputs StartRotate, StopRotate, ToggleRotate, "
+            "ReverseRotate and SetRotateSpeed control it, and the outputs "
+            "OnRotateStarted and OnRotateStopped fire as it starts and comes "
+            "to rest.")
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            "QLabel { color: #88AAFF; font-style: italic; padding: 4px; }")
+        form.addRow("", note)
+
+        preview_btn = self._preview_button("▶ Preview Rotate", self.toggle_rotate_preview)
+        preview_btn.setToolTip(
+            "Rotate the model in the 3D view, as it will in Play (Turn to "
+            "angle: there and back again). Stops when pressed again, the "
+            "selection changes, the map is saved or Play starts; the model "
+            "goes back as placed.")
+        preview = getattr(self.editor, 'rotate_preview', None)
+        if preview is not None and preview.prop is thing:
+            # Rebuilt while its preview runs: the button shows it running.
+            preview_btn.blockSignals(True)
+            preview_btn.setChecked(True)
+            preview_btn.setText("■ Stop Preview")
+            preview_btn.blockSignals(False)
+        form.addRow("", preview_btn)
+
+        self._widgets.update({
+            'rotate_enabled_cb': rotate_cb,
+            'rotate_mode_combo': mode_combo,
+            'rotate_axis_combo': axis_combo,
+            'rotate_speed_spin': speed_spin,
+            'rotate_angle_spin': angle_spin,
+            'rotate_ease_spin': ease_spin,
+            'rotate_autostart_cb': autostart_cb,
+            'rotate_preview_btn': preview_btn,
+        })
+        rows = (mode_combo, axis_combo, speed_spin, angle_label, angle_spin,
+                ease_label, ease_spin, autostart_cb, preview_btn)
+
+        def previewing():
+            preview = getattr(self.editor, 'rotate_preview', None)
+            return (preview is not None and preview.active
+                    and preview.prop is self.current_object)
+
+        def refresh():
+            on = rotate_cb.isChecked()
+            for widget in rows:
+                widget.setEnabled(on)
+            chosen = ROTATE_MODES[mode_labels.index(mode_combo.currentText())] \
+                if mode_combo.currentText() in mode_labels else CONTINUOUS
+            # Angle: Swing's arc, Turn's angle. Ease: Continuous and Swing.
+            angle_label.setText("Swing arc:" if chosen == SWING else "Turn angle:")
+            for widget in (angle_label, angle_spin):
+                widget.setVisible(chosen != CONTINUOUS)
+            for widget in (ease_label, ease_spin):
+                widget.setVisible(chosen != TURN)
+
+        def on_rotate(checked):
+            self.update_object_prop('rotate_enabled', bool(checked))
+            if not checked and previewing():
+                self.editor.stop_rotate_preview()
+            refresh()
+
+        def on_mode(label):
+            if label not in mode_labels:
+                return
+            self.update_object_prop('rotate_mode', ROTATE_MODES[mode_labels.index(label)])
+            refresh()           # the running preview restarts in the new mode
+
+        def on_axis(label):
+            if label not in labels:
+                return
+            self.update_object_prop('rotate_axis', ROTATE_AXES[labels.index(label)])
+            if previewing():
+                # The axis is chosen as a preview starts (Auto measures the
+                # model): start again about the new one.
+                self.editor.start_rotate_preview(self.current_object)
+
+        # Speed, Angle and Ease are read by the preview every tick.
+        rotate_cb.toggled.connect(on_rotate)
+        mode_combo.currentTextChanged.connect(on_mode)
+        axis_combo.currentTextChanged.connect(on_axis)
+        speed_spin.valueChanged.connect(
+            lambda v: self.update_object_prop('rotate_speed', float(v)))
+        angle_spin.valueChanged.connect(
+            lambda v: self.update_object_prop('rotate_angle', float(v)))
+        ease_spin.valueChanged.connect(
+            lambda v: self.update_object_prop('rotate_ease', float(v)))
+        autostart_cb.toggled.connect(
+            lambda checked: self.update_object_prop('rotate_autostart', bool(checked)))
+        refresh()
 
     def _build_effect_ui(self, form, thing):
         """Compact authoring UI for the one Effect primitive."""
@@ -3424,6 +3664,73 @@ class PropertyEditor(QWidget):
         cb.toggled.connect(on_toggle)
         combo.currentTextChanged.connect(on_changed)
         form.addRow(lbl, combo)
+
+    def _build_follow_path(self, form, thing):
+        """A Light travelling along a path-node chain in Play
+        (engine.light_paths): its first node, speed and whether it sets off
+        with Play. A light attached to a mover follows the mover instead."""
+        from engine.light_paths import LIGHT_PATH_DEFAULTS, MAX_PATH_SPEED
+        props = thing.properties
+        current = str(props.get('path_target') or '')
+        cb = _make_checkbox("Follow Path", bool(current), None)
+        cb.setToolTip("Travel along a chain of path nodes in Play, pausing at\n"
+                      "each node's Wait Time; a chain that loops back keeps going.\n"
+                      "I/O: StartPath, StopPath, TogglePath; OnPathNodeReached,\n"
+                      "OnPathEnd. Ignored while attached to a mover.")
+        form.addRow("", cb)
+
+        combo = ClickableComboBox()
+        combo.addItem("(none)")
+        nodes = sorted({t.properties.get('name', '') for t in self.editor.state.things
+                        if isinstance(t, PathNode) and t.properties.get('name')})
+        for name in nodes:
+            combo.addItem(name)
+        if current:
+            idx = combo.findText(current)
+            if idx < 0:
+                combo.addItem(current + " (missing)")
+                idx = combo.count() - 1
+            combo.setCurrentIndex(idx)
+        combo.setToolTip("The path node the light travels to first")
+        start_lbl = QLabel("Path Start:")
+        form.addRow(start_lbl, combo)
+
+        speed = _make_spin(props.get('path_speed', LIGHT_PATH_DEFAULTS['path_speed']),
+                           0.0, MAX_PATH_SPEED, suffix=" u/s", decimals=1, step=8.0,
+                           tooltip="World units a second, times each node's Speed")
+        speed_lbl = QLabel("Path Speed:")
+        form.addRow(speed_lbl, speed)
+
+        start_on = _make_checkbox("Start moving with Play",
+                                  bool(props.get('path_start_on', True)), None)
+        start_on.setToolTip("Off: the light waits where it is for StartPath")
+        form.addRow("", start_on)
+
+        rows = (start_lbl, combo, speed_lbl, speed, start_on)
+
+        def refresh():
+            on = cb.isChecked()
+            for w in rows:
+                w.setVisible(on)
+                w.setEnabled(not props.get('parent_mover'))
+
+        def on_toggle(checked):
+            if not checked:
+                self.update_object_prop('path_target', '')
+                combo.blockSignals(True)
+                combo.setCurrentIndex(0)
+                combo.blockSignals(False)
+            refresh()
+
+        def on_node(text):
+            clean = text.replace(" (missing)", "")
+            self.update_object_prop('path_target', '' if clean == "(none)" else clean)
+
+        cb.toggled.connect(on_toggle)
+        combo.currentTextChanged.connect(on_node)
+        speed.valueChanged.connect(lambda v: self.update_object_prop('path_speed', float(v)))
+        start_on.toggled.connect(lambda c: self.update_object_prop('path_start_on', bool(c)))
+        refresh()
 
     def _build_portal_target(self, form, thing):
         current = thing.properties.get('portal_target', '')
@@ -4512,6 +4819,9 @@ class PropertyEditor(QWidget):
                 'colour',
                 'parent_mover',
                 'parent_offset',
+                'path_target',
+                'path_speed',
+                'path_start_on',
             ):
                 continue
 
@@ -6388,6 +6698,21 @@ class PropertyEditor(QWidget):
                 if btn:
                     btn.setText("▶ Preview Door")
                 self.editor.stop_mover_preview()
+
+    def toggle_rotate_preview(self, checked):
+        """The Animation tab's Preview button: rotate the model in the 3D view."""
+        if not self.editor:
+            return
+        btn = self._widgets.get('rotate_preview_btn')
+        if checked:
+            if btn:
+                btn.setText("■ Stop Preview")
+            if not self.editor.start_rotate_preview(self.current_object):
+                self.editor.stop_rotate_preview()   # nothing to rotate: button up
+        else:
+            if btn:
+                btn.setText("▶ Preview Rotate")
+            self.editor.stop_rotate_preview()
 
     def on_respawn_toggled(self, state):
         collect_respawns = bool(state)

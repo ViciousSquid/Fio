@@ -708,7 +708,29 @@ class SpatialGrid:
                         mesh_columns.prepare(brush.get('_mesh_triangles')),)
                 if mesh[0] is None:
                     continue                # nothing usable: its box
-                b, t = mesh_columns.column(mesh[0], x[at], z[at])
+                # A model carried by its group's mover, or turning about its
+                # own axis (engine.logic_groups.CarriedModels): carried, its
+                # triangles as prepared, shifted to where its runtime
+                # transform puts them; turned, its turned triangles
+                # (brush_placement.turned_mesh_array), prepared once per
+                # transform.
+                runtime = _placement.resolved_runtime(brush)
+                prepared = mesh[0]
+                shift = (0.0, 0.0, 0.0)
+                if runtime is not None and runtime[6]:
+                    turned = brush.get('_mesh_columns_turned')
+                    if turned is None or turned[0] is not runtime:
+                        turned = brush['_mesh_columns_turned'] = (
+                            runtime, mesh_columns.prepare(
+                                _placement.turned_mesh_array(brush, runtime)))
+                    prepared = turned[1]
+                    if prepared is None:
+                        continue
+                elif runtime is not None:
+                    home = _placement.authored_box(brush)
+                    shift = (runtime[0] - home[0], runtime[1] - home[1],
+                             runtime[2] - home[2])
+                b, t = mesh_columns.column(prepared, x[at], z[at], shift)
                 bottom[at] = b
                 top[at] = t
                 continue
@@ -920,7 +942,12 @@ class SpatialGrid:
     # ------------------------------------------------------------------
 
     def get_potential_colliders(self, player_min, player_max):
-        """Returns unique brushes sharing grid cells with the player's AABB."""
+        """Returns unique brushes sharing grid cells with the player's AABB,
+        and every filed brush off its travel (brush_placement.off_range),
+        which may be anywhere -- as every other query of this grid adds them.
+        (The player's own mover broad phase finds the movers and doors among
+        those; a carried model's collision, engine.logic_groups, is found
+        only here.)"""
         min_x = int(math.floor(player_min.x / self.cell_size))
         max_x = int(math.floor(player_max.x / self.cell_size))
         min_z = int(math.floor(player_min.z / self.cell_size))
@@ -931,19 +958,27 @@ class SpatialGrid:
         # directly. Elsewhere, `cells.get(...)` replaces the `in` + `[]` pair so
         # each cell costs one dict lookup instead of two.
         cells = self.cells
+        off = _off_range_filed() if (_placement.off_range or _placement.overridden) else ()
         if min_x == max_x and min_z == max_z:
-            return list(cells.get((min_x, min_z), ()))
-
-        colliders = []
-        seen = set()
-        for x in range(min_x, max_x + 1):
-            for z in range(min_z, max_z + 1):
-                for brush in cells.get((x, z), ()):
-                    bid = id(brush)
-                    if bid not in seen:
-                        seen.add(bid)
-                        colliders.append(brush)
-
+            colliders = list(cells.get((min_x, min_z), ()))
+            if not off:
+                return colliders
+            seen = {id(brush) for brush in colliders}
+        else:
+            colliders = []
+            seen = set()
+            for x in range(min_x, max_x + 1):
+                for z in range(min_z, max_z + 1):
+                    for brush in cells.get((x, z), ()):
+                        bid = id(brush)
+                        if bid not in seen:
+                            seen.add(bid)
+                            colliders.append(brush)
+        # Last, so the cells' order is kept: what may be anywhere.
+        for brush in off:
+            if id(brush) not in seen:
+                seen.add(id(brush))
+                colliders.append(brush)
         return colliders
 
     # ------------------------------------------------------------------

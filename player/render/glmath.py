@@ -14,6 +14,8 @@ import math
 
 import numpy as np
 
+from engine.model_rotate import rotate_matrix
+
 
 def identity() -> "np.ndarray":
     return np.identity(4, dtype=np.float32)
@@ -149,7 +151,15 @@ def column_major(mat):
     return np.ascontiguousarray(np.asarray(mat, dtype=np.float32).T)
 
 
-def entity_matrix(position, properties):
+def entity_matrix(position, properties, turn=None):
+    """A model's world matrix: ``T @ Ry(yaw) @ Rx(pitch) @ Rz(roll) @ S``.
+
+    *turn* is ``(axis, angle_deg)``: a rotating model (engine.model_rotate)
+    turns about its own axis after its scale and before its placed rotation,
+    ``T @ R(rotation) @ R_rotate @ S`` -- the desktop's order
+    (engine.entity_table._model_transform_columns). None, or an angle of 0,
+    is the placed model exactly.
+    """
     rotation = properties.get('rotation', (0, 0, 0))
     pitch, yaw, roll = (math.radians(float(v)) for v in rotation)
     cp, sp, cy, sy = math.cos(pitch), math.sin(pitch), math.cos(yaw), math.sin(yaw)
@@ -160,4 +170,29 @@ def entity_matrix(position, properties):
     size = properties.get('scale', (1, 1, 1))
     if isinstance(size, (float, int)):
         size = (size, size, size)
-    return mul(translate(*position), ry, rx, rotate_z(roll), scale(*size))
+    parts = [translate(*position), ry, rx, rotate_z(roll)]
+    if turn is not None:
+        axis, angle = turn
+        try:
+            angle = float(angle or 0.0)
+        except (TypeError, ValueError):
+            angle = 0.0
+        if angle and math.isfinite(angle):
+            rotated = identity()
+            rotated[:3, :3] = rotate_matrix(axis, angle)
+            parts.append(rotated)
+    parts.append(scale(*size))
+    return mul(*parts)
+
+
+def rotation_of(item):
+    """``(axis, angle_deg)``: a model item's runtime Rotate
+    (Prop._rotate_axis and Prop._rotate_angle; none for anything without
+    them)."""
+    return (getattr(item, '_rotate_axis', 2), getattr(item, '_rotate_angle', 0.0))
+
+
+def item_matrix(item):
+    """The world matrix a placed model *item* draws with -- the same for
+    its colour pass, its culling and its shadows -- its Rotate included."""
+    return entity_matrix(item.pos, item.properties, turn=rotation_of(item))

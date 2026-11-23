@@ -355,6 +355,9 @@ class LogicThread(threading.Thread):
         self.parenting_runtime = LogicParenting(
             self, light_type=Light, portal_type=Portal
         )
+        #: Lights travelling along path-node chains (engine.light_paths).
+        from .light_paths import LightPaths
+        self.light_path_runtime = LightPaths(self, light_type=Light)
         # LogicCombat owns weapons, projectiles, bullet marks and noise.
         self.combat_runtime = LogicCombat(self)
         #: Explosive Props: damage taken, explosions due, what Stop puts back.
@@ -744,6 +747,7 @@ class LogicThread(threading.Thread):
         self.mover_runtime._update_movers(delta)
         self.mover_runtime._update_doors(delta)
         self.parenting_runtime._update_parented_lights()
+        self.light_path_runtime.update(delta)
         self.parenting_runtime._update_parented_portals()
         
         # Update I/O system (delayed events)

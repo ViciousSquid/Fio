@@ -159,7 +159,11 @@ def test_mixed_primitives_keep_vertex_and_element_offsets_separate(tmp_path, mon
     for i, (indexed, count) in enumerate(primitives):
         positions = np.arange(count * 3, dtype='<f4').reshape(count, 3) + 100 * i
         position_blocks.append(positions)
-        primitive = {'attributes': {'POSITION': append_array(positions, 'VEC3', 5126)}}
+        # With normals: a primitive without them is drawn flat-shaded, its
+        # indexed corners unshared (test_glb_flat_normals.py).
+        normals = np.tile(np.array([0, 0, 1], dtype='<f4'), (count, 1))
+        primitive = {'attributes': {'POSITION': append_array(positions, 'VEC3', 5126),
+                                    'NORMAL': append_array(normals, 'VEC3', 5126)}}
         if indexed:
             indices = np.array([count - 1, 0, 1], dtype='<u2')
             primitive['indices'] = append_array(indices, 'SCALAR', 5123)
