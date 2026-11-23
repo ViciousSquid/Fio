@@ -51,7 +51,11 @@ class LightingMixin:
     # --- Depth cube-map shadow mapping (omnidirectional point-light shadows) ---
     MAX_SHADOW_LIGHTS = shaders.MAX_SHADOW_LIGHTS  # authoritative point-light shadow budget
 
-    SHADOW_MAP_SIZE = 384         # per-face resolution of each depth cube-map
+    #: Per-face resolution of each depth cube-map ([Renderer] shadow_map_size).
+    #: A cube-map is only sized when a shadow-casting light takes its slot
+    #: (_ensure_shadow_cube_size), so this costs 6 * size^2 depth texels per
+    #: light actually casting shadows -- about 24 MB at 1024 -- not per slot.
+    SHADOW_MAP_SIZE = 1024
 
     SHADOW_TEXTURE_UNIT_BASE = 4   # shadow cube-maps bind to units 4..(4+MAX_SHADOW_LIGHTS-1)
 
@@ -364,13 +368,15 @@ class LightingMixin:
             self._shadow_cubemaps = []
             self.shadow_units_changed()
             size = self.shadow_map_size
+            # Every slot starts as a 1x1 placeholder -- complete, so each
+            # shadow sampler always has a valid cube bound -- and is given its
+            # full size only when a shadow-casting light takes it.
+            self._shadow_cube_sizes = []
             for _ in range(self.MAX_SHADOW_LIGHTS):
                 cm = int(gl.glGenTextures(1))
                 gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
-                for face in range(6):
-                    gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0,
-                                    gl.GL_DEPTH_COMPONENT24, size, size, 0,
-                                    gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+                self._specify_shadow_cube(1)
+                self._shadow_cube_sizes.append(1)
                 gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
                 gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
                 gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
@@ -399,6 +405,28 @@ class LightingMixin:
             print(f"[Shadow] initialisation failed: {e}")
             self._shadow_fbo = None
             self._shadow_cubemaps = []
+
+    @staticmethod
+    def _specify_shadow_cube(size):
+        """(Re)allocate the six depth faces of the bound cube-map at *size*."""
+        for face in range(6):
+            gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0,
+                            gl.GL_DEPTH_COMPONENT24, size, size, 0,
+                            gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+
+    def _ensure_shadow_cube_size(self, slot):
+        """Give shadow slot *slot*'s cube-map its full size before it is
+        rendered into; returns whether it was (re)allocated."""
+        size = int(self.shadow_map_size)
+        sizes = getattr(self, '_shadow_cube_sizes', None)
+        if sizes is None or slot >= len(sizes) or sizes[slot] == size:
+            return False
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, self._shadow_cubemaps[slot])
+        self._specify_shadow_cube(size)
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+        sizes[slot] = size
+        self.shadow_units_changed()
+        return True
 
     def _bind_shadow_maps(self, uniforms):
         """Bind shadow samplers to dedicated texture units.
@@ -655,6 +683,7 @@ class LightingMixin:
             near_plane = max(far_plane * 0.002, 1.0)
             proj = glm.perspective(
                 glm.radians(90.0), 1.0, near_plane, far_plane)
+            self._ensure_shadow_cube_size(slot)
             cubemap = self._shadow_cubemaps[slot]
 
             gl.glUniform3f(lightpos_loc, lx, ly, lz)

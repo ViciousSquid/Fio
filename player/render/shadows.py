@@ -40,10 +40,17 @@ def face_mask(centers, halves, projection_view):
                   halves @ np.abs(planes[:, :3]).T >= -1e-3, axis=1)
 
 
-class ShadowAtlas:
-    TILE = 384
+#: Per-face shadow resolution on the player: its own, not the desktop's
+#: [Renderer] shadow_map_size. Android GPUs keep 384 (256 at mobile quality)
+#: while the desktop editor's cube-maps default to 1024.
+PLAYER_SHADOW_TILE = 384
+MOBILE_SHADOW_TILE = 256
 
-    def __init__(self, gles=True, tile=384):
+
+class ShadowAtlas:
+    TILE = PLAYER_SHADOW_TILE
+
+    def __init__(self, gles=True, tile=PLAYER_SHADOW_TILE):
         from .renderer import _gl
         from ..gles_shaders import for_desktop
         self.gl = _gl()

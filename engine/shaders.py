@@ -363,6 +363,18 @@ highp float _sampleShadowCube(int idx, highp vec3 dir) {
     return texture(shadowMaps[7], dir).r;
 }
 
+// The cube-map's face width in texels (every face of a cube is square).
+highp float _shadowCubeTexels(int idx) {
+    if (idx == 0) return float(textureSize(shadowMaps[0], 0).x);
+    else if (idx == 1) return float(textureSize(shadowMaps[1], 0).x);
+    else if (idx == 2) return float(textureSize(shadowMaps[2], 0).x);
+    else if (idx == 3) return float(textureSize(shadowMaps[3], 0).x);
+    else if (idx == 4) return float(textureSize(shadowMaps[4], 0).x);
+    else if (idx == 5) return float(textureSize(shadowMaps[5], 0).x);
+    else if (idx == 6) return float(textureSize(shadowMaps[6], 0).x);
+    return float(textureSize(shadowMaps[7], 0).x);
+}
+
 // idx          : which cube-map (0..7), or <0 for a non-shadow-casting light
 // fragToLight  : lightPos - fragmentWorldPos (world space)
 // farPlane     : the light radius used when the cube-map was rendered
@@ -376,11 +388,21 @@ float calcPointShadow(int idx, highp vec3 fragToLight, highp float farPlane, flo
     // The cube-map was rendered from the light looking outward, so the lookup
     // direction runs light -> fragment, i.e. the negation of fragToLight.
     highp vec3 lookDir = -fragToLight;
-    highp float diskRadius = farPlane * 0.004 * (1.0 + currentDepth / farPlane);
-    // Bias covers surface slope plus the depth spread from the PCF disk, so
-    // flat lit surfaces don't self-shadow ("shadow acne").
-    highp float bias = diskRadius + clamp(farPlane * 0.03 * (1.0 - ndotl),
-                                          farPlane * 0.004, farPlane * 0.04);
+    // One cube-map texel at this distance, in world units: a face spans 90
+    // degrees -- 2 units across at unit distance -- over its width in texels.
+    // The filter and the bias are measured in texels, so a shadow is as sharp
+    // as its map resolves and keeps thin casters (railings, grating) solid.
+    // They used to be fractions of the light's radius -- the same blur for a
+    // 2048-unit light at any resolution, ~20 world units wide, which smeared
+    // a catwalk's bars into a faint grey and dropped thin ones altogether.
+    highp float texel = currentDepth * 2.0 / _shadowCubeTexels(idx);
+    highp float diskRadius = texel * 1.25;
+    // Bias covers the depth spread across one texel and the PCF disk on a
+    // surface sloped away from the light (the tangent of its angle, capped),
+    // so lit surfaces don't self-shadow ("shadow acne").
+    highp float slope = clamp(sqrt(max(1.0 - ndotl * ndotl, 0.0)) / max(ndotl, 0.1),
+                              0.0, 10.0);
+    highp float bias = diskRadius + (texel + diskRadius) * (1.0 + slope);
     vec3 sampleDirs[20] = vec3[](
         vec3( 1, 1, 1), vec3( 1,-1, 1), vec3(-1,-1, 1), vec3(-1, 1, 1),
         vec3( 1, 1,-1), vec3( 1,-1,-1), vec3(-1,-1,-1), vec3(-1, 1,-1),

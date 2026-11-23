@@ -112,8 +112,8 @@ class GLESRenderer:
         gl.glClearColor(0.06, 0.07, 0.09, 1.0)
         self._build_reference_triangle()
         self.overlay.on_gl_ready(self.programs)
-        from .shadows import ShadowAtlas
-        self.shadows = ShadowAtlas(self.gles, tile=256 if self.quality.name == "mobile" else 384)
+        from .shadows import ShadowAtlas, MOBILE_SHADOW_TILE, PLAYER_SHADOW_TILE
+        self.shadows = ShadowAtlas(self.gles, tile=MOBILE_SHADOW_TILE if self.quality.name == "mobile" else PLAYER_SHADOW_TILE)
         from .lighting import LightBuffer
         self.light_buffer = LightBuffer(gl, self.programs['world'])
         from .fog import FogVolumes

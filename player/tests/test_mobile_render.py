@@ -128,3 +128,19 @@ def test_phase_shifted_gifs_decode_sequentially_and_keep_bounded_caches():
     for index in range(20):
         frames.get_frame(index%12,index/21)
     assert len(frames.cursors) <= 8
+
+
+def test_player_shadow_resolution_stays_384_whatever_the_desktop_uses():
+    """The Android player keeps 384 per shadow face (256 at mobile quality).
+
+    The desktop editor's cube-maps went to 1024 ([Renderer] shadow_map_size);
+    the player's atlas does not read that setting or the desktop renderer's
+    default, so mobile GPUs keep the memory and fill rate they had.
+    """
+    import inspect
+    from player.render import renderer, shadows
+    assert shadows.PLAYER_SHADOW_TILE == 384 and shadows.MOBILE_SHADOW_TILE == 256
+    assert shadows.ShadowAtlas.TILE == 384
+    # The player sizes its atlas from these, not from the desktop setting.
+    source = inspect.getsource(renderer)
+    assert 'tile=MOBILE_SHADOW_TILE if' in source and 'else PLAYER_SHADOW_TILE)' in source

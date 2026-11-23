@@ -41,6 +41,7 @@ highp float _sampleShadowCube(int idx, highp vec3 delta) {
     uv=(vec2(face,float(idx))+uv)/vec2(6.0,""" + str(float(MAX_SHADOW_LIGHTS)) + """);
     return texture(shadowAtlas,uv).r;
 }
+highp float _shadowCubeTexels(int idx) { return shadowTileSize; }
 """
 _shadow = _ATLAS_SAMPLE + SHADOW_GLSL[SHADOW_GLSL.index('// idx'):]
 _fragment = DEFAULT_SHADERS['textured.frag'].replace(SHADOW_GLSL, _shadow)
@@ -90,8 +91,9 @@ def fragment(quality):
                                 f'return shadow / {quality.shadow_samples}.0;')
         # Include two shadow texels in the mobile bias: its smaller atlas must
         # still reject grazing-angle self-shadowing after depth quantisation.
-        source = source.replace('highp float bias = diskRadius + clamp(',
-                                'highp float bias = diskRadius + 2.0 * farPlane / shadowTileSize + clamp(')
+        anchor = 'highp float bias = diskRadius + '
+        assert anchor in source, "the shared shadow bias changed shape"
+        source = source.replace(anchor, anchor + '2.0 * farPlane / shadowTileSize + ')
     if quality.lights_per_batch < MAX_LIGHTS_PLAYER:
         source = source.replace('uniform int lightCount;',
             f'uniform int lightCount;\nuniform int lightIndices[{quality.lights_per_batch}];')
