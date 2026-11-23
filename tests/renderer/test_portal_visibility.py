@@ -141,17 +141,42 @@ def test_a_portal_off_to_the_side_draws_no_scene(renderer, pair):
     assert _frame(renderer, pair, eye, eye + side * 1000.0) == []
 
 
-@pytest.mark.parametrize("look", ["at", "away", "along"])
-def test_a_camera_straddling_the_aperture_still_draws_through_it(renderer, pair, look):
-    """Within PORTAL_NEAR_STRADDLE of the plane and inside the aperture the
-    mask covers the screen, wherever the aperture's corners project to."""
+@pytest.mark.parametrize("look", ["at", "along"])
+def test_a_camera_close_to_the_aperture_still_draws_through_it(renderer, pair, look):
+    """Close to the plane -- nearer than the near plane, even -- and inside
+    the aperture, a view toward or along it still draws: the aperture quads
+    are depth-clamped, so the near plane cannot clip them away."""
     pos, normal = _basis(pair)
-    for offset in (8.0, -8.0):                 # either side, before transit
+    for offset in (8.0, 0.5, -8.0):            # either side, before transit
         eye = pos + normal * offset + glm.vec3(0.0, 40.0, 0.0)
         target = {"at": pos,
-                  "away": eye + normal * 500.0,
                   "along": eye + glm.cross(normal, glm.vec3(0, 1, 0)) * 500.0}[look]
         assert 0 in _frame(renderer, pair, eye, target), (look, offset)
+
+
+def test_a_close_aperture_behind_the_camera_draws_no_scene(renderer, pair):
+    """A camera close in front of an aperture but looking away from it used
+    to draw the portal's whole view across the screen: within 24 units of
+    the plane the mask was a full-screen quad, so the world the player was
+    looking at turned into the destination before they reached the portal."""
+    pos, normal = _basis(pair)
+    for offset in (20.0, 8.0, 0.5):
+        eye = pos + normal * offset + glm.vec3(0.0, 40.0, 0.0)
+        assert _frame(renderer, pair, eye, eye + normal * 500.0) == [], offset
+
+
+def test_a_near_aperture_keeps_its_part_nearer_than_the_near_plane_in_its_rect(
+        renderer, pair):
+    """A depth-clamped aperture is drawn nearer than the near plane too, so
+    its scissor rect must keep that part rather than clip it away."""
+    pos, normal = _basis(pair)
+    eye = pos + normal * 0.5 + glm.vec3(0.0, 40.0, 0.0)
+    pv = PROJECTION * glm.lookAt(eye, pos + glm.vec3(0.0, 40.0, 0.0), glm.vec3(0, 1, 0))
+    corners = renderer._portal_slot_corners(pair, 0, renderer.PORTAL_APERTURE_INSET)
+    clipped = renderer._portal_screen_rect(corners, pv)
+    kept = renderer._portal_screen_rect(corners, pv, near_clip=False)
+    assert kept == (0, 0, WIDTH, HEIGHT), "the aperture fills the view"
+    assert clipped[2] * clipped[3] < kept[2] * kept[3]
 
 
 def test_portals_behind_the_camera_do_not_use_up_the_budget(renderer):
@@ -307,10 +332,50 @@ def test_real_gl_a_portal_behind_the_camera_renders_nothing(ctx):
 
 
 @pytest.mark.gl
-def test_real_gl_a_straddling_camera_sees_through_the_aperture(ctx):
-    drawn, pixel = _render_real(ctx, glm.vec3(0, 40, 6), glm.vec3(0, 40, -500))
+@pytest.mark.parametrize("distance", [6.0, 0.5, 0.1])
+def test_real_gl_a_straddling_camera_sees_through_the_aperture(ctx, distance):
+    """Nearer than the near plane (1 unit) too: the step before transit
+    used to show what is behind the portal where the near plane cut it."""
+    drawn, pixel = _render_real(ctx, glm.vec3(0, 40, distance), glm.vec3(0, 40, -500))
     assert drawn == [0]
     assert pixel[2] > 200 and pixel[0] < 50, pixel
+
+
+@pytest.mark.gl
+def test_real_gl_a_close_camera_looking_away_keeps_its_own_world(ctx):
+    """8 units in front, looking away: the world in view stays the world,
+    not the destination drawn over the whole screen."""
+    drawn, pixel = _render_real(ctx, glm.vec3(0, 40, 8), glm.vec3(0, 40, 500))
+    assert drawn == []
+    assert pixel[0] > 200 and pixel[2] < 50, pixel
+
+
+@pytest.mark.gl
+def test_real_gl_the_view_reaches_the_apertures_bottom_edge(ctx):
+    """A portal standing on the floor shows its view right down to its
+    bottom edge. The aperture used to be drawn 4 units inside its authored
+    size, leaving a band of whatever was behind it along every edge -- the
+    floor, along the bottom."""
+    import OpenGL.GL as gl
+    context, real = ctx
+    eye, target = glm.vec3(0, -175, 24), glm.vec3(0, -200, 0)
+    _render_real(ctx, eye, target)
+    image = context.read_pixels().astype(int)
+    pv = glm.perspective(glm.radians(90.0), 1.0, 1.0, 5000.0) * glm.lookAt(
+        eye, target, glm.vec3(0, 1, 0))
+
+    def row(y):
+        clip = pv * glm.vec4(0.0, y, 0.0, 1.0)
+        return (0.5 - clip.y / clip.w * 0.5) * (SIZE - 1)
+
+    bottom = -200.0                        # the 400-high aperture's lower edge
+    assert row(bottom + 4.0) < row(bottom) - 2, "the band must span pixels"
+    column = image[:, SIZE // 2]
+    inside = column[int(row(bottom + 4.0)) + 1:int(row(bottom))]
+    assert len(inside), "no pixel row between the old and the real edge"
+    assert all(p[2] > 200 and p[0] < 50 for p in inside), inside
+    below = column[int(row(bottom)) + 2]
+    assert below[0] > 200 and below[2] < 50, below
 
 
 # ---------------------------------------------------------------------------

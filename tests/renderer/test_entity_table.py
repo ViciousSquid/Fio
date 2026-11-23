@@ -218,8 +218,12 @@ def test_light_render_state_stays_dense_and_tracks_motion_and_io():
     assert bool(table.light_enabled[0]) is False
 
 
-def test_rendered_portal_aperture_is_inset_without_changing_physical_size():
-    """The render aperture is smaller, while authored portal dimensions stay intact."""
+def test_rendered_portal_aperture_is_the_authored_aperture():
+    """The render aperture is the authored one, and the authored size stays intact.
+
+    It used to be 4 units smaller on every side, which left a band of the
+    real world behind the portal showing along its edges (the floor, along
+    the bottom of a portal standing on it)."""
     pytest.importorskip("OpenGL")
     from engine.renderer.forward import ForwardRenderer
 
@@ -244,8 +248,8 @@ def test_rendered_portal_aperture_is_inset_without_changing_physical_size():
 
     assert np.isclose(authored_width, 128.0)
     assert np.isclose(authored_height, 256.0)
-    assert np.isclose(rendered_width, 120.0)
-    assert np.isclose(rendered_height, 248.0)
+    assert np.isclose(rendered_width, 128.0)
+    assert np.isclose(rendered_height, 256.0)
     assert np.isclose(table.portal_width_height[0, 0], 128.0)
     assert np.isclose(table.portal_width_height[0, 1], 256.0)
 

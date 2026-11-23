@@ -50,10 +50,15 @@ class PortalsMixin:
     MAX_PORTAL_RECURSION = 1
 
     # Within this many world units of a portal plane the aperture mask is drawn
-    # across the screen instead of as world geometry, so the camera's near plane
-    # can't clip the mask and reveal the wall behind the portal during the last
-    # step before transit. Set to 0.0 to disable (exact original behaviour).
-    PORTAL_NEAR_STRADDLE = 24.0
+    # across the whole screen instead of as world geometry. It was 24, to stop
+    # the camera's near plane clipping the mask in the last step before
+    # transit -- but a full-screen mask put the destination over everything,
+    # floor and walls in front of the portal included, so the world visibly
+    # jumped to the other side 24 units before the player got there. The
+    # aperture quads are now drawn with depth clamping (see
+    # _portal_aperture_quads), which the near plane cannot clip, so this is
+    # left only for an eye on the plane itself, where the quad has no area.
+    PORTAL_NEAR_STRADDLE = 0.05
 
     # --------------------------------------------------------------------------
     # Portal rendering
@@ -128,6 +133,10 @@ class PortalsMixin:
         return (getattr(self, '_portal_scene_pass', False)
                 or getattr(self, '_opaque_cull_pass', False))
 
+    #: glPolygonOffset(factor, units) of the depth the finished portal image
+    #: is flattened to: pulls it just in front of a coplanar wall.
+    PORTAL_FLATTEN_OFFSET = (-1.0, -4.0)
+
     #: Consecutive frames a portal view may fail before portals are turned
     #: off for the rest of the session, and how often (seconds) a failure is
     #: printed meanwhile.
@@ -196,6 +205,9 @@ class PortalsMixin:
         self._view_ptr = glm.value_ptr(main_view)
         gl.glDisable(gl.GL_SCISSOR_TEST)
         gl.glDisable(gl.GL_STENCIL_TEST)
+        gl.glDisable(gl.GL_DEPTH_CLAMP)
+        gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
+        gl.glPolygonOffset(0.0, 0.0)
         gl.glStencilMask(0xFF)
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
         gl.glDepthMask(gl.GL_TRUE)
@@ -250,7 +262,13 @@ class PortalsMixin:
         gl.glUniformMatrix4fv(
             self._portal_mask_view_loc, 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glBindVertexArray(self._portal_quad_vao)
+        # A hair nearer than the plane, so a wall the portal is set flush
+        # against draws behind its image rather than z-fighting it.
+        gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
+        gl.glPolygonOffset(*self.PORTAL_FLATTEN_OFFSET)
         gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
+        gl.glPolygonOffset(0.0, 0.0)
+        gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
 
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
         gl.glDepthFunc(gl.GL_LESS)
@@ -280,7 +298,11 @@ class PortalsMixin:
         # behind it in the step before transit. Anywhere else an aperture with
         # no pixel on screen -- behind the camera, off to one side -- is
         # skipped before anything is copied, culled or drawn for it.
-        rect = None if straddle else self._portal_screen_rect(corners_a, pv)
+        # The main view's aperture quads are drawn depth-clamped, so the near
+        # plane cannot clip them: their scissor keeps what lies nearer than it.
+        clamp = depth == 1 and not straddle
+        rect = None if straddle else self._portal_screen_rect(
+            corners_a, pv, near_clip=not clamp)
         if rect is not None and (rect[2] <= 0 or rect[3] <= 0):
             return False
         # A portal fading in or out shows its view at that opacity over what
@@ -300,12 +322,15 @@ class PortalsMixin:
         gl.glColorMask(gl.GL_FALSE,gl.GL_FALSE,gl.GL_FALSE,gl.GL_FALSE); gl.glDepthMask(gl.GL_FALSE)
         if straddle: gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glStencilFunc(gl.GL_EQUAL,parent_level,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_INCR)
+        if clamp: gl.glEnable(gl.GL_DEPTH_CLAMP)
         self._portal_upload_quad(mask_quad); gl.glUseProgram(self._portal_mask_shader)
         gl.glUniformMatrix4fv(self._portal_mask_proj_loc,1,gl.GL_FALSE,mask_proj_ptr); gl.glUniformMatrix4fv(self._portal_mask_view_loc,1,gl.GL_FALSE,mask_view_ptr)
         gl.glBindVertexArray(self._portal_quad_vao); gl.glDrawArrays(gl.GL_TRIANGLE_FAN,0,4)
         if straddle: gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthMask(gl.GL_TRUE); gl.glDepthFunc(gl.GL_ALWAYS); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glDepthRange(1.0,1.0)
         self._portal_upload_quad(mask_quad); gl.glDrawArrays(gl.GL_TRIANGLE_FAN,0,4)
+        # Never during the virtual scene: its oblique near plane is a clip.
+        gl.glDisable(gl.GL_DEPTH_CLAMP)
         gl.glDepthRange(0.0,1.0); gl.glDepthFunc(gl.GL_LESS); gl.glColorMask(gl.GL_TRUE,gl.GL_TRUE,gl.GL_TRUE,gl.GL_TRUE)
         virtual_view,virtual_cam=self._portal_build_virtual_view(portal_table,portal_a,portal_b,main_view,camera_pos)
         clip_proj=self._calculate_oblique_projection(projection,virtual_view,portal_table.pos[portal_b],portal_table.portal_basis[portal_b,2])
@@ -332,6 +357,7 @@ class PortalsMixin:
         if depth < self.MAX_PORTAL_RECURSION:
             self._draw_nested_portals(portal_table,portal_a,portal_b,clip_proj,virtual_view,virtual_cam,config,draw_scene_fn,portal_slots,depth+1)
 
+        if clamp: gl.glEnable(gl.GL_DEPTH_CLAMP)
         if bool(portal_table.portal_show_rim[portal_a]):
             gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00); gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE)
             r,g,b=portal_table.portal_color[portal_a]; self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader)
@@ -347,6 +373,7 @@ class PortalsMixin:
         # Replace destination-camera depth with the real source aperture depth
         # after all portal colour/rim/fade work is complete.
         self._portal_flatten_depth(corners_a, projection, main_view, depth)
+        gl.glDisable(gl.GL_DEPTH_CLAMP)
         gl.glDisable(gl.GL_STENCIL_TEST); gl.glDisable(gl.GL_SCISSOR_TEST); gl.glBindVertexArray(0)
         return True
 
@@ -417,7 +444,7 @@ class PortalsMixin:
             if portal_b<0: continue
             self._draw_one_portal(portal_table,portal_a,portal_b,projection,view,cam,config,draw_scene_fn,pv,portal_slots,depth=depth)
 
-    def _portal_screen_rect(self, corners, pv):
+    def _portal_screen_rect(self, corners, pv, near_clip=True):
         """Screen-space integer AABB (x, y, w, h) of the aperture, clamped to the
         viewport, for use as a scissor rect; zero width and height when no part
         of it is in view.
@@ -428,7 +455,11 @@ class PortalsMixin:
         virtual scene for a stencil that masked every fragment of it. Now the
         aperture is rejected when every corner is outside the same frustum
         plane, and otherwise clipped to the near plane, so the rect bounds only
-        the part of it that can be seen."""
+        the part of it that can be seen.
+
+        *near_clip* False is for an aperture drawn depth-clamped: the near
+        plane does not clip it, so the rect keeps what lies nearer than the
+        near plane too, and only what is behind the eye is cut away."""
         vp = getattr(self, '_frame_viewport', None) or gl.glGetIntegerv(gl.GL_VIEWPORT)
         vx, vy, vw, vh = int(vp[0]), int(vp[1]), int(vp[2]), int(vp[3])
         off_screen = (vx, vy, 0, 0)
@@ -438,13 +469,15 @@ class PortalsMixin:
             polygon.append((clip.x, clip.y, clip.z, clip.w))
         # Inside the frustum is -w <= x, y, z <= w.
         for axis in range(3):
-            if (all(p[axis] < -p[3] for p in polygon)
+            if ((all(p[axis] < -p[3] for p in polygon)
+                    and (near_clip or axis != 2))
                     or all(p[axis] > p[3] for p in polygon)):
                 return off_screen
         # The near plane (z >= -w), and w > 0 so every vertex left projects:
         # the oblique near plane of a portal's own view can pass behind its
         # camera.
-        for distance in (lambda p: p[2] + p[3], lambda p: p[3] - 1e-5):
+        planes = ((lambda p: p[2] + p[3]),) if near_clip else ()
+        for distance in planes + ((lambda p: p[3] - 1e-5),):
             polygon = _clip_polygon(polygon, distance)
             if not polygon:
                 return off_screen
