@@ -28,13 +28,29 @@ authored offset from the leader, turned by the leader's spin about the
 leader's centre. Its position is all that is carried (an entity's facing is
 its own). An entity parented to a mover (``parent_mover``) follows that
 mover instead. Where an entity was authored is put back when play stops.
+
+A solid model Prop carried that way takes its collision with it
+(:class:`CarriedModels`): its collision proxy -- built once at Play start,
+in the world where the model was (``LogicCollision.build_model_collision_brushes``)
+-- is entered as a mover with a runtime transform, a translation by however
+far its entity has been carried since. Every reader of a moving brush then
+finds it where it is drawn: the spatial grid (filed for the whole of its
+leader's travel), the AABB caches and broad phases, the player's mesh passes
+(:func:`engine.brush_placement.collision_shape`), the grid's height columns
+and the physics' shape poses. Only its position is carried, as the entity's
+is: a turning leader orbits it but does not turn it, so neither the drawn
+model nor its collision turns. A physics Prop is a body of its own, and a
+Prop with no collision has no proxy: neither is touched.
 """
 
 from __future__ import annotations
 
+import math
+
 import glm
 
 from . import brush_placement
+from .mover_table import CARRIED_TRAVEL_KEY, travel_range
 
 GROUP_KEY = 'brush_group'
 FOLLOWER_KEY = 'group_follower'
@@ -153,11 +169,161 @@ def detach(brushes):
                 brush[key] = value
 
 
+class CarriedModels:
+    """The runtime source (:func:`engine.brush_placement.register_runtime`)
+    for the collision proxies of carried solid models: each proxy is a mover
+    the resolver places at its built centre plus however far its entity has
+    moved since the proxy was built -- the drawn model's translation -- and
+    nothing else moves it.
+
+    A tick costs one position read and a comparison per carried model, and
+    a stamp (:func:`~engine.brush_placement.note_runtime_change`) only when
+    one moved; the readers' caches are keyed by that stamp, as they are for
+    the mover table.
+    """
+
+    #: What :meth:`carry` writes into a proxy, all taken out again by
+    #: :meth:`clear` (``is_mover`` is put back to the False it was built with).
+    _WRITTEN = (CARRIED_TRAVEL_KEY, '_travel_filed', '_aabb_sig', '_aabb_bounds',
+                '_aabb_box', '_world_bounds', '_aabb_runtime', '_collision_entry')
+
+    def __init__(self):
+        #: ``id(proxy) -> (proxy, (cx, cy, cz, 0, 1, 0, 0))`` while it is
+        #: displaced (the resolver reads this directly).
+        self.runtime_entries = {}
+        #: ``[proxy, entity, entity position when built, built centre,
+        #: centre now]`` per carried proxy.
+        self._carried = []
+        self._registered = False
+
+    def __len__(self):
+        return len(self._carried)
+
+    def carry(self, proxies, carried, leader_of):
+        """Carry the proxies (``_model_collision_brushes``) whose entity is
+        in *carried* (``{id(entity): entity}``) and which are solid scenery,
+        forgetting any carried before. *leader_of*: ``id(entity) -> leader
+        brush``. Before the spatial grid is populated with them. Whether any
+        was carried before or is now."""
+        had = bool(self._carried)
+        self.clear()
+        for proxy in proxies:
+            thing = proxy.get('_physics_entity')
+            if (thing is None or id(thing) not in carried or proxy.get('_physics_body')
+                    or not proxy.get('_model_collision')):
+                continue
+            pos = _position(thing)
+            if pos is None:
+                continue
+            for key in self._WRITTEN:
+                proxy.pop(key, None)
+            proxy['is_mover'] = True
+            proxy[CARRIED_TRAVEL_KEY] = _carried_travel(thing, pos, leader_of[id(thing)])
+            centre = tuple(float(v) for v in brush_placement.authored_box(proxy)[:3])
+            self._carried.append([proxy, thing, pos, centre, centre])
+        if self._carried and not self._registered:
+            brush_placement.register_runtime(self)
+            self._registered = True
+        return had or bool(self._carried)
+
+    def follow(self, player=None, ground=None):
+        """Place each proxy where its entity has been carried; a player
+        standing on one (*ground*) goes with it."""
+        changed = False
+        entries = self.runtime_entries
+        for item in self._carried:
+            proxy, thing, built, home, was = item
+            pos = _position(thing)
+            if pos is None:
+                continue
+            centre = (home[0] + pos[0] - built[0], home[1] + pos[1] - built[1],
+                      home[2] + pos[2] - built[2])
+            if centre == was:
+                continue
+            item[4] = centre
+            changed = True
+            if centre == home:
+                entries.pop(id(proxy), None)
+            else:
+                entries[id(proxy)] = (proxy, centre + (0.0, 1.0, 0.0, 0.0))
+                _check_range(proxy, centre)
+            if player is not None and proxy is ground:
+                player.pos += glm.vec3(centre[0] - was[0], centre[1] - was[1],
+                                       centre[2] - was[2])
+        if changed:
+            brush_placement.note_runtime_change()
+
+    def clear(self):
+        """Every proxy carried is a still one again, and this source answers
+        for none."""
+        off_range = brush_placement.off_range
+        count = len(off_range)
+        for item in self._carried:
+            proxy = item[0]
+            off_range.pop(id(proxy), None)
+            for key in self._WRITTEN:
+                proxy.pop(key, None)
+            proxy['is_mover'] = False
+        if len(off_range) != count:
+            brush_placement.note_off_range()
+        self._carried = []
+        self.runtime_entries = {}
+        if self._registered:
+            brush_placement.unregister_runtime(self)
+            self._registered = False
+
+
+def _position(thing):
+    pos = getattr(thing, 'pos', None)
+    try:
+        return (float(pos[0]), float(pos[1]), float(pos[2]))
+    except (TypeError, IndexError, ValueError):
+        return None
+
+
+def _carried_travel(thing, pos, leader):
+    """``(low, high)``: the box a carried proxy's displacement from where it
+    was built stays in while *leader* travels -- the leader's travel
+    (mover_table.travel_range), widened, for a leader that turns, by every
+    place the turn can swing the entity's offset to; less how far the entity
+    had already been carried when the proxy was built."""
+    lo, hi, turns, _reach = travel_range(leader)
+    lead = brush_placement.authored_box(leader)
+    home = thing.properties.get(ENTITY_HOME_KEY) or pos
+    low = [lo[i] - lead[i] for i in range(3)]
+    high = [hi[i] - lead[i] for i in range(3)]
+    if turns:
+        offset = [float(home[i]) - lead[i] for i in range(3)]
+        radius = math.sqrt(sum(v * v for v in offset))
+        for i in range(3):
+            low[i] += -radius - offset[i]
+            high[i] += radius - offset[i]
+    already = [pos[i] - float(home[i]) for i in range(3)]
+    return (tuple(low[i] - already[i] for i in range(3)),
+            tuple(high[i] - already[i] for i in range(3)))
+
+
+def _check_range(proxy, centre):
+    """A proxy carried outside the travel the grid filed it for (a leader
+    on a path, a restored placement) may be anywhere: off range, as a mover
+    there is (MoverTable.check_range), until play stops."""
+    filed = proxy.get('_travel_filed')
+    if filed is None or id(proxy) in brush_placement.off_range:
+        return
+    lo, hi = filed[0], filed[1]
+    if not all(lo[i] <= centre[i] <= hi[i] for i in range(3)):
+        brush_placement.off_range[id(proxy)] = proxy
+        brush_placement.note_off_range()
+
+
 class LogicGroups:
     """Places each follower where its leader has carried it, once a tick."""
 
     def __init__(self, logic):
         self.logic = logic
+        #: The collision proxies of the carried solid models.
+        self.models = CarriedModels()
+        self._leader_of = {}
         #: One entry per leader: [leader, [(follower, offset from the
         #: leader's authored centre)], where it was last seen (centre, angle),
         #: [(entity, offset from the leader's authored centre)]]
@@ -190,10 +356,23 @@ class LogicGroups:
             entry_for(leader)[3].append((thing, (
                 home[0] - lead[0], home[1] - lead[1], home[2] - lead[2])))
             self._entities.append(thing)
+        self._leader_of = {id(thing): leader for thing, leader in entities}
         self._links = list(by_leader.values())
         return bool(links or entities)
 
+    def carry_models(self, proxies):
+        """The model collision proxies were (re)built for play: carry those
+        of carried solid models (:class:`CarriedModels`). Called before the
+        spatial grid is populated with them; whether any is carried, or was
+        before (the grid must then be populated again)."""
+        carried = {id(thing): thing for thing in self._entities}
+        if not carried and not len(self.models):
+            return False
+        return self.models.carry(proxies or (), carried, self._leader_of)
+
     def detach(self):
+        self.models.clear()
+        self._leader_of = {}
         self._links = []
         for thing in self._entities:
             home = thing.properties.pop(ENTITY_HOME_KEY, None)
@@ -238,3 +417,6 @@ class LogicGroups:
                 table.restore_placement(follower, (x, y, z), angle)
             for thing, offset in entities:
                 thing.pos = [float(v) for v in carried(offset)]
+        if len(self.models):
+            # Their collision where they are now drawn.
+            self.models.follow(player, ground)

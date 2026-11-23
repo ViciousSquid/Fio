@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from engine import brush_geometry
+from engine import brush_geometry, brush_placement
 
 #: How far a face highlight sits off its surface (world units).
 HIGHLIGHT_BIAS = 0.5
@@ -142,6 +142,13 @@ def collision_wireframes(brushes):
             colour = MESH_COLOUR
         else:
             continue
+        # A model carried by its group's mover: drawn where its collision now
+        # is (moved, never turned: engine.logic_groups.CarriedModels).
+        runtime = brush_placement.runtime_of(brush)
+        if runtime is not None:
+            home = brush_placement.authored_box(brush)
+            lines = np.asarray(lines, dtype=np.float64) + np.array(
+                (runtime[0] - home[0], runtime[1] - home[1], runtime[2] - home[2]))
         lines = np.ascontiguousarray(lines, dtype=np.float32)
         chunks.append(lines)
         runs.append((first, len(lines), colour))

@@ -1245,9 +1245,40 @@ def collision_shape_at(brush, runtime):
             brush['_collision_entry'] = (runtime, placed, result)
             return result
     if brush.get('_collision_mode') == 'mesh' and 'geometry' not in brush:
+        if runtime is not None:
+            return _carried_mesh(brush, runtime, entry)
         return (brush.get('_mesh_planes') or [], brush.get('_mesh_triangles'),
                 brush.get('_mesh_bounds'), None)
     return None
+
+
+def _carried_mesh(brush, runtime, entry):
+    """A mesh proxy carried by a runtime translation (a model riding its
+    group's mover: engine.logic_groups.CarriedModels): its world-space mesh
+    moved to where the transform puts it, still in world space -- the
+    player's model passes read model triangles as they are. Built once per
+    transform (its source hands over a new tuple whenever it moves) and kept
+    with it, so a tick's several questions translate it once."""
+    triangles = brush.get('_mesh_triangles')
+    if entry is not None and entry[0] is runtime and entry[1] is triangles:
+        return entry[2]
+    home = _mesh_box(brush)
+    if home is None or not triangles:
+        return (brush.get('_mesh_planes') or [], triangles, brush.get('_mesh_bounds'), None)
+    dx = runtime[0] - home[0]
+    dy = runtime[1] - home[1]
+    dz = runtime[2] - home[2]
+    moved = [(((a[0] + dx, a[1] + dy, a[2] + dz), (b[0] + dx, b[1] + dy, b[2] + dz),
+               (c[0] + dx, c[1] + dy, c[2] + dz)), normal)
+             for (a, b, c), normal in triangles]
+    lo, hi = brush['_mesh_bounds']
+    bounds = ([lo[0] + dx, lo[1] + dy, lo[2] + dz], [hi[0] + dx, hi[1] + dy, hi[2] + dz])
+    # Planes n . p <= d moved by t: n . p <= d + n . t.
+    planes = [(p[0], p[1], p[2], p[3] + p[0] * dx + p[1] * dy + p[2] * dz)
+              for p in brush.get('_mesh_planes') or ()]
+    result = (planes, moved, bounds, None)
+    brush['_collision_entry'] = (runtime, triangles, result)
+    return result
 
 
 def collision_frame(brush):
