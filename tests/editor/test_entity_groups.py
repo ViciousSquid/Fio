@@ -396,59 +396,32 @@ def test_a_clone_or_paste_is_not_attached_to_the_originals_group(scene):
     window.unsaved_changes = False
 
 
-# -- the 2D views' right-click menu -----------------------------------------
-
-def _right_click(window, monkeypatch, choose=None, view_name='view_top'):
-    from PyQt5.QtCore import QPoint
-    from PyQt5.QtGui import QContextMenuEvent
-    offered = []
-
-    def exec_(menu, *_args):
-        offered.extend(a.text() for a in menu.actions())
-        chosen = next((a for a in menu.actions() if a.text() == choose), None)
-        if chosen is not None:
-            chosen.trigger()                    # as a real menu does
-        return chosen
-
-    monkeypatch.setattr(QMenu, 'exec_', exec_)
-    view = getattr(window, view_name)
-    view.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(4, 4)))
-    return offered
-
-
-def test_a_model_can_be_grouped_from_a_2d_view_s_right_click_menu(scene, monkeypatch):
+def test_a_model_is_grouped_through_the_scene_hierarchy(scene, monkeypatch):
     from editor.things import Prop
     window, objects = scene
     model = Prop.for_model('assets/models/Oil_Drum.obj', pos=[0, 0, 0])
+    model.properties['name'] = 'drum'
     window.state.things.append(model)
     window.update_all_ui()
-    window.set_selected_objects([model])
     monkeypatch.setattr(window, '_run_brush_group_dialog',
                         lambda dialog: dialog.name_box.setCurrentText('Door') or True)
+    hierarchy = window.scene_hierarchy
+    chosen = []
 
-    offered = _right_click(window, monkeypatch, choose="Add to Group...")
+    def exec_(menu, *_args):
+        action = next(a for a in menu.actions() if a.text() == "Add to Group...")
+        chosen.append(action)
+        action.trigger()
+        return action
 
-    assert "Add to Group..." in offered
-    assert brush_groups.group_of(model) == 'Door'
-    # Now in the door's group, it moves with it: its menu offers the rest.
-    offered = _right_click(window, monkeypatch, view_name='view_front')
-    assert "Edit Group..." in offered and "Ungroup" in offered
-    _right_click(window, monkeypatch, choose="Ungroup", view_name='view_side')
-    assert brush_groups.group_of(model) == ''
+    monkeypatch.setattr(QMenu, 'exec_', exec_)
+    window.set_selected_objects([model])
+    item = _section(window, 'Things')['drum']
+    hierarchy.open_menu(hierarchy.tree.visualItemRect(item).center())
 
-
-def test_the_2d_menu_s_group_items_act_on_the_whole_selection(scene, monkeypatch):
-    window, objects = scene
-    window.set_selected_objects([objects['wall'], objects['torch']])
-    monkeypatch.setattr(window, '_run_brush_group_dialog',
-                        lambda dialog: dialog.name_box.setCurrentText('Pair') or True)
-    _right_click(window, monkeypatch, choose="Add to Group...")
-    assert brush_groups.group_of(objects['wall']) == 'Pair'
-    assert brush_groups.group_of(objects['torch']) == 'Pair'
-
-
-def test_nothing_selected_and_nothing_clicked_offers_no_group_items(scene, monkeypatch):
-    window, _ = scene
-    window.set_selected_objects([])
-    offered = _right_click(window, monkeypatch)
-    assert not {"Add to Group...", "Edit Group...", "Ungroup"} & set(offered)
+    assert chosen
+    assert brush_groups.group_of(_thing(window, 'drum')) == 'Door'
+    # In the door's group, it is carried with the door.
+    every = brush_groups.scene_objects(window.state)
+    mates = brush_groups.with_mates(every, [_brush(window, 'door')])
+    assert any(m is _thing(window, 'drum') for m in mates)

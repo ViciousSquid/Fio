@@ -4400,38 +4400,12 @@ class View2D(QWidget):
                 self.main_window.save_state()
         self.update()
 
-    def _group_menu_targets(self, click_pos):
-        """What the right-click menu's Group items act on: the selection
-        when the click is on one of its objects or on nothing; otherwise the
-        object clicked."""
-        from editor import brush_groups
-        selected = [o for o in self.editor.state.selected_objects
-                    if brush_groups.is_groupable(o)]
-        try:
-            clicked = self.get_object_at(click_pos)
-        except Exception:
-            clicked = None
-        if clicked is None or any(clicked is o for o in selected):
-            return selected
-        return [clicked] if brush_groups.is_groupable(clicked) else []
-
     def contextMenuEvent(self, event):
         # Capture the exact position
         click_pos = event.pos()
         
         menu = QMenu(self)
         menu.setStyleSheet(CONTEXT_MENU_STYLE)
-
-        # Grouping: the selection (or the object clicked) can be put in a
-        # group, its group edited, or it taken out -- brushes, models,
-        # lights and every other entity alike, as in the Scene Hierarchy.
-        group_targets = self._group_menu_targets(click_pos)
-        hierarchy = getattr(self.main_window, 'scene_hierarchy', None)
-        group_actions = []
-        if group_targets and hierarchy is not None:
-            if hierarchy._add_group_action(menu, group_targets) is not None:
-                group_actions = list(menu.actions())    # they run themselves
-                menu.addSeparator()
 
         # Check if we clicked on a brush for brush-specific options using click_pos
         clicked_brush = self.get_brush_at(click_pos)
@@ -4511,7 +4485,7 @@ class View2D(QWidget):
         # Open the menu using the captured position
         action = menu.exec_(self.mapToGlobal(click_pos))
         
-        if action is None or any(action is a for a in group_actions):
+        if action is None:
             return
         
         # Handle Select Inside
