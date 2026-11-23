@@ -1030,6 +1030,11 @@ def register_default_io():
             IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
             IODef('Explode', 'Blow up this prop now, if it is Explosive'),
             IODef('Damage', 'Damage this prop (param: amount); an Explosive prop explodes once it has taken its Health', 'int'),
+            IODef('StartSpin', 'Spin this model up to full speed (its Animation tab: Spin)'),
+            IODef('StopSpin', 'Let this model coast down to a stop'),
+            IODef('ToggleSpin', 'Start this model spinning, or stop it'),
+            IODef('ReverseSpin', 'Spin the other way (a spinning model slows, stops and spins back up)'),
+            IODef('SetSpinSpeed', 'Set the full spin speed for this Play, degrees a second (negative: the other way)', 'float'),
         ],
         outputs=[
             IODef('OnCarried', 'Fired when the player carries this prop'),
@@ -1038,6 +1043,8 @@ def register_default_io():
             IODef('OnCollected', 'Fired when the player collects this prop'),
             IODef('OnRespawn', 'Fired when this prop respawns'),
             IODef('OnExplode', 'Fired when this Explosive prop explodes'),
+            IODef('OnSpinStarted', 'Fired when this model starts spinning up'),
+            IODef('OnSpinStopped', 'Fired when this model has coasted to a stop'),
         ]
     )
 
@@ -1158,31 +1165,6 @@ def register_default_io():
         ]
     )
     
-    # === PROP ===
-    register_io('prop',
-        inputs=[
-            IODef('Enable', 'Enable this prop'),
-            IODef('Disable', 'Disable this prop'),
-            IODef('Collect', 'Collect this prop'),
-            IODef('Respawn', 'Respawn this prop'),
-            IODef('SetValue', 'Set collection value', 'int'),
-            IODef('Drop', 'Release this prop if it is being carried'),
-            IODef('Wake', 'Resume physics simulation'),
-            IODef('Hide', 'Hide this prop'),
-            IODef('Show', 'Show this prop'),
-            IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
-            IODef('Explode', 'Blow up this prop now, if it is Explosive'),
-            IODef('Damage', 'Damage this prop (param: amount); an Explosive prop explodes once it has taken its Health', 'int'),
-        ],
-        outputs=[
-            IODef('OnCarried', 'Fired when the player carries this prop'),
-            IODef('OnDropped', 'Fired when the player drops this prop'),
-            IODef('OnRest', 'Fired when this prop comes to rest'),
-            IODef('OnCollected', 'Fired when the player collects this prop'),
-            IODef('OnRespawn', 'Fired when this prop respawns'),
-            IODef('OnExplode', 'Fired when this Explosive prop explodes'),
-        ]
-    )
 
     # === LEVEL CHANGER ===
     register_io('levelchanger',

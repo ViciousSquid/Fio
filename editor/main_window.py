@@ -302,6 +302,10 @@ class MainWindow(QMainWindow):
         # are a dialog keypress apart rather than a re-typed number.
         self.last_hollow_thickness = 16
         self.preview_timer = QTimer(self)  # OPTIMIZATION: Added parent=self for proper cleanup
+        # The Animation tab's Preview (a model's spin), stopped wherever the
+        # mover preview is (stop_mover_preview).
+        from editor.spin_preview import SpinPreview
+        self.spin_preview = SpinPreview(self)
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
         self.ui = Ui_MainWindow()
@@ -2379,7 +2383,31 @@ class MainWindow(QMainWindow):
                 return t
         return None
 
+    def start_spin_preview(self, prop):
+        """The Animation tab's Preview: spin *prop* in the 3D view."""
+        self.spin_preview.stop()            # (the button that asked stays down)
+        if self.preview_timer.isActive():
+            self.stop_mover_preview()
+        return self.spin_preview.start(prop)
+
+    def stop_spin_preview(self):
+        """Stop the spin preview, the model back as placed; the Preview
+        button is reset."""
+        stopped = self.spin_preview.stop()
+        btn = self.property_editor._widgets.get('spin_preview_btn') \
+            if getattr(self, 'property_editor', None) is not None else None
+        if btn is not None:
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.setText("▶ Preview Spin")
+            btn.blockSignals(False)
+        return stopped
+
     def stop_mover_preview(self):
+        # Every place a preview must end (selection, Play, save) ends a
+        # spin preview too.
+        if getattr(self, 'spin_preview', None) is not None and self.spin_preview.active:
+            self.stop_spin_preview()
         if self.preview_timer.isActive():
             self.preview_timer.stop()
             if self.preview_data and self.preview_data.get('obj'):

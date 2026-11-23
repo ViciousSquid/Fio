@@ -85,6 +85,7 @@ from .light_cookies import cookie_of, cookie_shadow_floor
 from .portal_transform import basis_from_rotation
 from .render_table import _can_adopt
 from .entity_models import model_path, model_rotation, model_scale
+from .model_spin import axis_vector
 
 # Defensive, as everywhere else in engine/: editor.things pulls in PyQt5, and
 # the standalone player tier does not have it.  A tier without the classes
@@ -457,6 +458,13 @@ def _model_transform_columns(thing):
         mat = glm.rotate(glm.mat4(1.0), glm.radians(float(rot[1])), glm.vec3(0, 1, 0))
         mat = glm.rotate(mat, glm.radians(float(rot[0])), glm.vec3(1, 0, 0))
         mat = glm.rotate(mat, glm.radians(float(rot[2])), glm.vec3(0, 0, 1))
+        # A spinning model (engine.model_spin): about its own axis, after
+        # its scale and before its placed rotation. Runtime state on the
+        # Prop, 0 outside Play.
+        spin = float(getattr(thing, '_spin_angle', 0.0) or 0.0)
+        if spin:
+            axis = axis_vector(getattr(thing, '_spin_axis', 2))
+            mat = glm.rotate(mat, glm.radians(spin), glm.vec3(*axis))
         mat = glm.scale(mat, glm.vec3(*scale_vec))
         normal = glm.transpose(glm.inverse(glm.mat3(mat)))
     except Exception:
