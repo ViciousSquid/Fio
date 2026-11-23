@@ -590,3 +590,51 @@ def test_a_turned_box_is_the_same_from_the_turn_memo():
         half = (rng.uniform(0, 600), rng.uniform(0, 600), rng.uniform(0, 600))
         assert bp.turned_half_now(*half, 0.0, ay, 0.0, angle) == bp.turned_half(
             *half, (0.0, ay, 0.0), angle)
+
+
+@pytest.mark.qt
+@pytest.mark.parametrize("angled", [False, True])
+def test_object_pick_looks_through_a_volume_the_camera_is_inside(main_window, monkeypatch, angled):
+    """A click on a wall selects the wall, not the volume (a trigger, fog or
+    water volume, a room-sized brush) the camera is standing in. The object
+    pick hit a box the ray starts inside at distance 0, so that volume won
+    every click in the 3D view until the camera left it."""
+    view = main_window.view_3d
+    wall = box_brush("wall", (-400, 0, 0), (32, 256, 512))
+    if angled:
+        volume = angled_brush("volume", (0, 0, 0), (300, 200, 300),
+                              clip_normal=(0.3, 1.0, 0.2), is_trigger=True)
+    else:
+        volume = box_brush("volume", (0, 0, 0), (300, 200, 300), is_trigger=True)
+    main_window.state.brushes[:] = [volume, wall]
+    main_window.state.things[:] = []
+    _aim(view, monkeypatch, (0.0, -40.0, 30.0), (-1.0, 0.0, 0.0))   # from inside
+    assert view.picking.get_object_at_3d(0, 0) is wall
+    # Drill-select still reaches the volume around the camera, after the wall.
+    walked = [view.picking.get_object_at_3d(0, 0, cycle=True)]
+    main_window.set_selected_objects([walked[0]])
+    walked.append(view.picking.get_object_at_3d(0, 0, cycle=True))
+    assert walked == [wall, volume]
+    # From outside, the volume is picked like anything else.
+    main_window.set_selected_objects([])
+    _aim(view, monkeypatch, (300.0, -40.0, 30.0), (-1.0, 0.0, 0.0))
+    assert view.picking.get_object_at_3d(0, 0) is volume
+
+
+@pytest.mark.qt
+def test_object_pick_misses_the_empty_corner_of_an_angled_brush(main_window, monkeypatch):
+    """An angled brush is picked by its faces, not its bounding box: the air
+    its sloped face cut away does not hide the brush behind it."""
+    view = main_window.view_3d
+    # A wedge: the top-east corner is cut off by a 45-degree face.
+    wedge = angled_brush("wedge", (0, 0, 0), (200, 200, 200),
+                         clip_normal=(1.0, 1.0, 0.0), clip_offset=0.0)
+    behind = box_brush("behind", (0, 0, -400), (400, 400, 32))
+    main_window.state.brushes[:] = [wedge, behind]
+    main_window.state.things[:] = []
+    # Into the cut-away corner (x = y = 80: in the box, above the slope).
+    _aim(view, monkeypatch, (80.0, 80.0, 500.0), (0.0, 0.0, -1.0))
+    assert view.picking.get_object_at_3d(0, 0) is behind
+    # Through the solid half the wedge still wins.
+    _aim(view, monkeypatch, (-80.0, -80.0, 500.0), (0.0, 0.0, -1.0))
+    assert view.picking.get_object_at_3d(0, 0) is wedge
