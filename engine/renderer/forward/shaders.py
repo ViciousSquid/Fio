@@ -736,7 +736,8 @@ layout (location = 10) in float iInstanceAlpha;
 
     def _preload_lit_uniforms(self, shader_name):
         uniforms = self.uniforms[shader_name]
-        uniforms.preload(['projection', 'view', 'model', 'object_color', 'alpha', 'active_lights'])
+        uniforms.preload(['projection', 'view', 'model', 'object_color', 'alpha',
+                          'active_lights', 'emissive_factor'])
         uniforms.preload(self.ENV_UNIFORMS)
 
     def _preload_water_uniforms(self):
