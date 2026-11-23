@@ -57,6 +57,7 @@ def test_classic_does_not_mention_hd_high():
             assert word not in text, "%s mentions %s" % (path, word)
 
 
+@pytest.mark.qt
 def test_importing_classic_imports_nothing_of_hd_high():
     code = ("import sys; import engine.renderer.forward; "
             "bad = [m for m in sys.modules if 'hd_high' in m or m == 'engine.material_maps']; "
@@ -67,6 +68,7 @@ def test_importing_classic_imports_nothing_of_hd_high():
     assert result.stdout.strip() == "", result.stdout
 
 
+@pytest.mark.qt
 def test_classic_is_the_default_renderer():
     from engine import hd_graphics
     from engine.renderer import DEFAULT_RENDERER, canonical_name, renderer_factory
