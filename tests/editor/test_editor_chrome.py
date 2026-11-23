@@ -85,7 +85,11 @@ def test_ctrl_p_opens_the_position_window_from_anywhere(main_window, qt_app):
     view = main_window.view_3d
     assert view.pos_window is None
     main_window.activateWindow()
+    # Activation is asynchronous on X11 (instant offscreen): an application
+    # shortcut fires only once the window really is active.
+    QTest.qWaitForWindowActive(main_window, 2000)
     main_window.view_top.setFocus()
+    qt_app.processEvents()
     _ctrl_p(main_window.view_top)
     qt_app.processEvents()
     assert view.pos_window is not None and view.pos_window.active
