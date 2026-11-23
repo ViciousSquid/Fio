@@ -113,13 +113,13 @@ def test_the_sky_cube_map_is_the_size_settings_ini_asks_for(setting, size):
     glh.reset_texture_cache()
 
 
-def test_the_shipped_settings_ask_for_384_sky_and_1024_shadows():
+def test_the_shipped_settings_ask_for_512_sky_and_1024_shadows():
     import configparser
     from tests.helpers.paths import repo_path
 
     config = configparser.ConfigParser()
     config.read(repo_path('settings.ini'))
-    assert config.getint('Renderer', 'sky_cubemap_size') == 384
+    assert config.getint('Renderer', 'sky_cubemap_size') == 512
     # Shadow cube-maps are sized only for lights casting shadows, so the
     # sharper 1024 costs memory per shadow light, not per slot.
     assert config.getint('Renderer', 'shadow_map_size') == 1024
