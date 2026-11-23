@@ -40,6 +40,7 @@ ENV_MAP_UNIT = 18
 NORMAL_MAP_UNIT = 19
 MATERIAL_MAP_UNIT = 20
 NOISE_UNIT = 21
+SKY_COVER_UNIT = 22
 
 #: The programs :func:`surface_source` is applied to (those built from
 #: ``lit.frag`` / ``textured.frag``).
@@ -51,7 +52,8 @@ SURFACE_PROGRAMS = ('lit', 'textured', 'lit_instanced', 'textured_instanced',
 #: unit 0 beside the diffuse sampler2D is an invalid program state).
 SURFACE_SAMPLERS = (('uSunShadow', SUN_SHADOW_UNIT), ('uEnvMap', ENV_MAP_UNIT),
                     ('uNormalMap', NORMAL_MAP_UNIT),
-                    ('uMaterialMap', MATERIAL_MAP_UNIT), ('uNoise', NOISE_UNIT))
+                    ('uMaterialMap', MATERIAL_MAP_UNIT), ('uNoise', NOISE_UNIT),
+                    ('uSkyCover', SKY_COVER_UNIT))
 
 #: Value noise and the cloud layer, shared by the sky and by the cloud
 #: shadows the surfaces receive, so a shadow on the ground is under the cloud
@@ -103,6 +105,21 @@ highp vec2 fioEnvUV(highp vec3 d) {
                 0.5 - asin(clamp(d.y, -1.0, 1.0)) / FIO_PI);
 }
 vec3 fioToLinear(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
+// A unit vector in two numbers (octahedral), 0..1 each.
+vec2 fioPackNormal(vec3 n) {
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    vec2 o = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0,
+                                                          n.y >= 0.0 ? 1.0 : -1.0);
+    return o * 0.5 + 0.5;
+}
+vec3 fioUnpackNormal(vec2 p) {
+    vec2 o = p * 2.0 - 1.0;
+    vec3 n = vec3(o, 1.0 - abs(o.x) - abs(o.y));
+    float t = max(-n.z, 0.0);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    return normalize(n);
+}
 vec3 fioEncode(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
 // Split-sum environment BRDF, Karis' mobile approximation.
 vec3 fioEnvBRDF(vec3 f0, float rough, float nov) {
@@ -133,7 +150,10 @@ uniform sampler2D uMaterialMap;
 uniform vec4 uMaterial;            // x maps bound, y parallax depth (world units), z emission of the map, w unused
 uniform vec4 uSurfaceDefault;      // x roughness, y metalness, z detail strength, w unused
 uniform vec4 uAtmosphere;          // x haze density, y haze height falloff, z cloud shadow strength, w unused
-uniform vec4 uEnvParams2;          // x the environment map is a probe's whole sphere, y haze colour from uHazeColor
+uniform vec4 uEnvParams2;          // x the environment map is a probe's whole sphere, y haze colour from uHazeColor, z gain on the environment map
+uniform highp mat4 uSkyMatrix;     // world -> the sky cover map's clip space (looking straight down)
+uniform highp sampler2DShadow uSkyCover;
+uniform vec4 uSkyCoverParams;      // x filter radius (uv), y depth bias, z on, w normal offset (world)
 uniform vec3 uHazeColor;
 uniform vec4 uHdrFog;              // the map's distance fog colour, in the frame's units; a 1 while it is on
 layout(location = 1) out vec4 FragData;
@@ -174,6 +194,32 @@ float fioSunShadow(highp vec3 pos, vec3 ng) {
               + uw1 * vw2 * fioSunTap(base, u1, v2, s.z)
               + uw2 * vw2 * fioSunTap(base, u2, v2, s.z);
     return mix(1.0, lit / 144.0, uSunShadowParams.w);
+}
+// How much of the sky a point can see, 0 under a roof .. 1 in the open: the
+// share of a wide ring of columns around it that nothing stands over. Sky
+// light is scaled by it, so a room is lit by its lamps and a doorway or a
+// window lets the sky in only as far as it really reaches.
+float fioSkyVisible(highp vec3 pos, vec3 ng) {
+    if (uSkyCoverParams.z <= 0.0) return 1.0;
+    highp vec4 clip = uSkyMatrix * vec4(pos + ng * uSkyCoverParams.w, 1.0);
+    highp vec3 s = clip.xyz * 0.5 + 0.5;
+    if (s.x <= 0.0 || s.x >= 1.0 || s.y <= 0.0 || s.y >= 1.0) return 1.0;
+    highp float z = s.z - uSkyCoverParams.y;
+    float r = uSkyCoverParams.x;
+    float open = texture(uSkyCover, vec3(s.xy, z)) * 2.0;
+    open += texture(uSkyCover, vec3(s.xy + vec2(0.35, 0.10) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(-0.10, 0.35) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(-0.35, -0.10) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(0.10, -0.35) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(0.70, -0.25) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(0.25, 0.70) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(-0.70, 0.25) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(-0.25, -0.70) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(0.80, 0.60) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(-0.60, 0.80) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(-0.80, -0.60) * r, z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(0.60, -0.80) * r, z));
+    return open / 14.0;
 }
 float fioCloudShadow(highp vec3 pos) {
     if (uAtmosphere.z <= 0.0) return 1.0;
@@ -233,8 +279,9 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
     float nov = max(dot(n, v), 1e-3);
 
     // Sky light: three colours of the hemisphere, by the normal's elevation.
-    vec3 sky = n.y >= 0.0 ? mix(uAmbientHorizon, uAmbientSky, n.y)
-                          : mix(uAmbientHorizon, uAmbientGround, -n.y);
+    float skyOpen = fioSkyVisible(FragPos, ng);
+    vec3 sky = (n.y >= 0.0 ? mix(uAmbientHorizon, uAmbientSky, n.y)
+                           : mix(uAmbientHorizon, uAmbientGround, -n.y)) * skyOpen;
     // The map's own ambient is classic Fio's: a tenth, plus what the map adds.
     vec3 result = diffuse * (sky + fioToLinear(vec3(0.1) + uAmbient)) * occlusion;
 
@@ -258,7 +305,13 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
             att = att * att;
             float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius,
                                            max(dot(ng, l), 0.0));
-            vec3 radiance = fioToLinear(lights[i].color) * (lights[i].intensity * att * uEnvParams.w);
+            // A lamp's level (intensity * falloff) is a display quantity in
+            // classic Fio -- it multiplies the texture as shown -- so it is
+            // decoded like a colour. The light then falls off across a room
+            // exactly as the map's author saw it, instead of reaching much
+            // further in linear light.
+            vec3 radiance = fioToLinear(lights[i].color)
+                          * (pow(lights[i].intensity * att, 2.2) * uEnvParams.w);
             result += (1.0 - shadow) * fioLight(n, v, l, diffuse, f0, rough, radiance);
         }
     }
@@ -266,16 +319,16 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
         // No reflection pass: the sky's reflection, hidden near the horizon
         // where walls would be in the way.
         vec3 r = reflect(-v, n);
-        vec3 env = textureLod(uEnvMap, fioEnvUV(r), rough * uEnvParams.x).rgb;
+        vec3 env = textureLod(uEnvMap, fioEnvUV(r), rough * uEnvParams.x).rgb * uEnvParams2.z;
         result += env * fioEnvBRDF(f0, rough, nov) * occlusion
-                * (uEnvParams2.x > 0.5 ? 1.0 : smoothstep(-0.1, 0.5, r.y));
+                * (uEnvParams2.x > 0.5 ? 1.0 : smoothstep(-0.1, 0.5, r.y) * skyOpen);
     }
     result += emission;
 
     // Aerial perspective, toward the sky's colour at the horizon behind.
     if (uAtmosphere.x > 0.0) {
         highp float density = uAtmosphere.x * exp(-max(FragPos.y, 0.0) * uAtmosphere.y);
-        float haze = 1.0 - exp(-eyeDist * density);
+        float haze = (1.0 - exp(-eyeDist * density)) * skyOpen;
         vec3 far = uEnvParams2.y > 0.5 ? uHazeColor
                  : textureLod(uEnvMap, fioEnvUV(normalize(vec3(-v.x, 0.04, -v.z))),
                               max(uEnvParams.x - 3.0, 0.0)).rgb;
@@ -288,7 +341,7 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
     float outAlpha = uSurfaceMode == 2 ? src
                    : (src >= 0.999 && uSurfaceMode == 1 ? marker : 1.0);
     FragColor = vec4(fioEncode(result), outAlpha);
-    FragData = vec4(n * 0.5 + 0.5, uSurfaceMode == 1 ? rough : 1.0);
+    FragData = vec4(fioPackNormal(n), skyOpen, uSurfaceMode == 1 ? rough : 1.0);
 }
 """
 

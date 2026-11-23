@@ -66,9 +66,14 @@ def _default_camera(state):
             -120.0, -25.0)
 
 
-def capture_frames(app, names=None, size=SIZE):
+def capture_frames(app, names=None, size=SIZE, graphics=None, sky=None):
     """``{"<map>/<shot>": (h, w, 3) uint8}`` for each map in *names* (default
-    all of :data:`MAPS`). Needs a display with OpenGL."""
+    all of :data:`MAPS`). Needs a display with OpenGL.
+
+    *graphics* draws with that ``[Renderer] graphics`` tier in place of the
+    shipped default (low); *sky* (a dict of ``hd_*`` properties) is put on
+    each map's primary PlayerStart first -- for looking at the HD tiers, not
+    for the stored set."""
     import glm
     import numpy as np
     from PyQt5.QtCore import Qt
@@ -98,9 +103,33 @@ def capture_frames(app, names=None, size=SIZE):
             # Before the map loads too: effects pick their phases as they are made.
             random.seed(1234)
             np.random.seed(1234)
+            settings = None
+            if graphics:
+                # The editor reads its settings when the window is built.
+                import configparser
+                import tempfile
+                from tests.helpers import settings_isolation
+                settings_isolation.install()
+                handle, settings = tempfile.mkstemp(prefix="fio-golden-", suffix=".ini")
+                os.close(handle)
+                settings_isolation.fresh_copy(settings)
+                parser = configparser.ConfigParser()
+                parser.read(settings)
+                if not parser.has_section("Renderer"):
+                    parser.add_section("Renderer")
+                parser.set("Renderer", "graphics", graphics)
+                parser.set("Renderer", "lowpower_mode", "False")
+                with open(settings, "w") as out:
+                    parser.write(out)
+                settings_isolation.use(settings)
             session = FioTestSession(app, "maps/%s.json" % name, size=size)
             try:
                 view = session.view
+                if sky:
+                    start = session.state.resolve_player_start()
+                    if start is not None:
+                        start.properties.update(sky)
+                        session.window.sync_sky_image_from_map()
                 view.sysmon.set_active(False)
                 # Occlusion results are read when the driver has them ready,
                 # which is a matter of timing: what is hidden would differ
@@ -150,6 +179,13 @@ def capture_frames(app, names=None, size=SIZE):
                     session.close()
                 except AssertionError:
                     pass    # a window still reachable: the suite reports that
+                if settings is not None:
+                    from tests.helpers import settings_isolation
+                    settings_isolation.use(None)
+                    try:
+                        os.remove(settings)
+                    except OSError:
+                        pass
     finally:
         time.perf_counter = real_clock
         (engine.terrain.Terrain.UPDATE_BUDGET_MS,

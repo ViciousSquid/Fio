@@ -34,7 +34,7 @@ LOW = "low"
 TIERS = ("low", "medium", "high", "ultra")
 DEFAULT_TIER = LOW
 TIER_LABELS = {
-    "low": "Low (classic Fio)",
+    "low": "Classic (the original Fio renderer)",
     "medium": "Medium (HD: sun shadows, AO, bloom, FXAA)",
     "high": "High (HD: + reflections, parallax, sun shafts, cloud shadows)",
     "ultra": "Ultra (HD: everything, 4096 shadows)",
@@ -58,7 +58,11 @@ PRESETS = {
 
 
 def normalise_tier(value, default=DEFAULT_TIER):
+    """A tier name from a setting's text. ``classic`` is ``low``: HD off is
+    called Classic everywhere a person reads it."""
     value = str(value or "").strip().lower()
+    if value == "classic":
+        return LOW
     return value if value in TIERS else default
 
 
@@ -393,14 +397,17 @@ TYPICAL_ALBEDO = 0.2
 #: The share of a sunlit world's surfaces the sun actually reaches, facing
 #: it obliquely on average.
 SUN_SHARE = 0.5
-#: Mean of a lamp's ``(1 - d / radius) ** 2`` falloff over the ball it
-#: lights (3 * integral of (1 - r)^2 r^2), times the share of surfaces in
-#: reach that face it.
-LAMP_MEAN_FALLOFF = 0.1
-LAMP_FACING = 0.5
+#: A lamp's light where the map's author looked at it: classic Fio shows a
+#: texture at its own brightness where ``intensity * falloff * N.L`` is 1,
+#: and maps are lit to look right there, close to their lamps. So the
+#: exposure is keyed on a surface three quarters of the way up a lamp's
+#: ``(1 - d / radius) ** 2`` falloff and mostly facing it -- not on the
+#: average of the lamp's whole ball, most of which is nearly dark.
+LAMP_KEY_FALLOFF = 0.75
+LAMP_FACING = 0.8
 #: Exposure never leaves this range, whatever the map.
-EXPOSURE_RANGE = (0.2, 12.0)
-#: With nothing to measure (no sky, no ambient, no lamps).
+EXPOSURE_RANGE = (0.15, 6.0)
+#: With nothing to measure under a sky (which cannot really happen).
 INDOOR_DEFAULT_EXPOSURE = 1.0
 #: Display-linear value a typical surface should end on.
 MID_GREY = 0.18
@@ -445,11 +452,12 @@ def lamp_light(lamps, gain=POINT_LIGHT_GAIN):
         if radius <= 0.0 or intensity <= 0.0:
             continue
         area = radius * radius
-        total += area * float(intensity) * luminance(colour)
+        # The shaders decode a lamp's level like a colour (surface.py).
+        total += area * (float(intensity) * LAMP_KEY_FALLOFF) ** 2.2 * luminance(colour)
         weight += area
     if weight <= 0.0:
         return 0.0
-    return (total / weight) * gain * LAMP_MEAN_FALLOFF * LAMP_FACING
+    return (total / weight) * gain * LAMP_FACING
 
 
 def scene_light(*, sky_irradiance=(0.0, 0.0, 0.0), sun_radiance=(0.0, 0.0, 0.0),
@@ -462,12 +470,37 @@ def scene_light(*, sky_irradiance=(0.0, 0.0, 0.0), sun_radiance=(0.0, 0.0, 0.0),
             + lamp_light(lamps))
 
 
-def base_exposure(light):
+def classic_exposure(gain=POINT_LIGHT_GAIN):
+    """The exposure at which an HD frame is as bright as classic Fio: a
+    surface a lamp lights fully (``intensity * falloff * N.L`` = 1) shows
+    its texture at the texture's own brightness, which is what the classic
+    shader's ``texture * light`` does and what every map was lit against."""
+    # The tone curve passes about this share of a mid-tone through.
+    return 1.0 / (gain * (MID_GREY / KEY_VALUE))
+
+
+#: Indoors (no sky) the exposure may leave classic brightness by this factor
+#: either way and no further: a map lit dimly on purpose stays dim.
+INDOOR_LATITUDE = 1.25
+
+
+def base_exposure(light, *, indoor=False):
     """The exposure that puts a typical surface under *light* (from
-    :func:`scene_light`) on mid grey after tone mapping, clamped; the indoor
-    default when there is no light to measure."""
+    :func:`scene_light`) on mid grey after tone mapping, clamped.
+
+    *indoor* (a map with no sky) holds it near :func:`classic_exposure`:
+    such a map's look is entirely its author's lamps, so the frame stays as
+    bright or as dark as classic Fio shows it, give or take
+    :data:`INDOOR_LATITUDE`. With no light to measure it is exactly that."""
     reflected = TYPICAL_ALBEDO * float(light)
-    if not math.isfinite(reflected) or reflected <= 1e-6:
+    measurable = math.isfinite(reflected) and reflected > 1e-6
+    if indoor:
+        classic = classic_exposure()
+        if not measurable:
+            return classic
+        return max(classic / INDOOR_LATITUDE,
+                   min(classic * INDOOR_LATITUDE, KEY_VALUE / reflected))
+    if not measurable:
         return INDOOR_DEFAULT_EXPOSURE
     low, high = EXPOSURE_RANGE
     return max(low, min(high, KEY_VALUE / reflected))

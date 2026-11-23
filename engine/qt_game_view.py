@@ -245,6 +245,12 @@ class QtGameView(QOpenGLWidget):
         self.renderer = None
         #: Panorama authored on the current map's Primary PlayerStart.
         self.sky_image_path = ""
+        #: The map's HD sky (engine.hd_graphics.sky_settings), from the
+        #: Primary PlayerStart like the panorama; None is the defaults.
+        self.hd_sky_settings = None
+        #: View > HD preview: whether the editor view draws HD in an HD
+        #: tier (Play always does).
+        self.hd_preview = True
         #: Registry name of the renderer initializeGL creates and switch_renderer replaces.
         self._renderer_mode = DEFAULT_RENDERER
 
@@ -1505,6 +1511,9 @@ class QtGameView(QOpenGLWidget):
         _pmgr = self.logic_thread.plugins if self.logic_thread is not None else None
         # The map's Primary PlayerStart owns the panorama in both editor and Play.
         self.renderer.set_background_image(self.sky_image_path)
+        if getattr(self.renderer, 'hd', False):
+            self.renderer.set_hd_sky(self.hd_sky_settings)
+            self.renderer.hd_preview = self.hd_preview
         if _pmgr is not None and _pmgr.has_listeners("render.pre_scene"):
             _pmgr.emit("render.pre_scene", viewport=self, renderer=self.renderer,
                        projection=self.projection_matrix, view=self.view_matrix,

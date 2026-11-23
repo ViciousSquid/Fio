@@ -377,6 +377,24 @@ class EnvironmentMixin:
         self._env_shadow_static_tex = 0
         self._env_shadow_static_sig = None
         self._env_shadow_dynamic_sig = None
+        # The sky cover map: the static casters seen from straight above.
+        self._env_cover_tex = 0
+        self._env_cover_fbo = 0
+        self._env_cover_size = 0
+        self._env_cover_sig = None
+        self._env_cover_ready = False
+        self._env_cover_matrix = glm.mat4(1.0)
+        self._env_cover_span = 1.0
+        self._env_cover_depth = 1.0
+        #: What a reflection finds where no sky can be seen (linear).
+        self._env_indoor_colour = (0.0, 0.0, 0.0)
+        # Exposure follows where the view is: under the sky or under a roof.
+        self._env_exposure_indoor = hd_graphics.classic_exposure()
+        self._env_exposure_outdoor = hd_graphics.INDOOR_DEFAULT_EXPOSURE
+        self._env_openness = None           # smoothed share of sky overhead
+        self._env_openness_target = 1.0
+        self._env_openness_time = None
+        self._env_openness_frame = 0
         self._env_shadow_frame = None
         #: Sun shadow map work, for the benchmark: full (static) redraws,
         #: dynamic-layer redraws, casters drawn.
@@ -608,7 +626,7 @@ class EnvironmentMixin:
             self._env_shadow_static_sig = None
         try:
             self._env_update_map(config, camera_pos)
-            self._env_update_exposure(config)
+            self._env_update_exposure(config, camera_pos)
             self._env_update_reflections(config, camera_pos)
             if not self._postfx_begin():
                 return False
@@ -670,29 +688,135 @@ class EnvironmentMixin:
                 (float(p[0]), float(p[1]), c) for p, c in zip(params, colours))
         return self._env_lamp_light
 
-    def _env_update_exposure(self, config):
-        """The frame's base exposure, from the light on a typical surface.
-        Worked out when the sky, the sun, the ambient or the set of lamps
-        changes -- never per frame, and nothing is read back from the GPU."""
+    #: The view's sky openness is measured every this many frames and eased
+    #: toward over about this many seconds.
+    OPENNESS_EVERY = 4
+    OPENNESS_SECONDS = 0.9
+
+    def _env_update_exposure(self, config, camera_pos=None):
+        """The frame's base exposure.
+
+        Two exposures are worked out when the sky, the sun, the ambient or
+        the set of lamps changes (never per frame, and nothing is read back
+        from the GPU): one for under the open sky, from the sky's and the
+        sun's light, and one for under a roof, held near classic brightness
+        (hd_graphics.base_exposure). The frame's is between them by how much
+        sky is over the view point, eased over a moment as an eye adjusts:
+        a map's courtyard is exposed for daylight and its corridors for
+        their lamps. A map with no sky only has the second."""
         env = self.environment
         lamps = self._env_lamps(config)
         ambient = tuple(float(v) for v in getattr(self.view_distance, 'ambient', (0, 0, 0)))
         key = (self._env_map_key, ambient, self._env_lamps_key, env.exposure)
-        if key == self._env_exposure_key:
-            return
-        self._env_exposure_key = key
+        if key != self._env_exposure_key:
+            self._env_exposure_key = key
+            own = hd_graphics.scene_light(ambient=tuple(a + 0.1 for a in ambient)) + lamps
+            self._env_exposure_indoor = hd_graphics.base_exposure(own, indoor=True)
+            self._env_exposure_outdoor = hd_graphics.base_exposure(
+                hd_graphics.scene_light(
+                    sky_irradiance=self._env_ambient[0], sun_radiance=self._env_sun_rgb,
+                    sun_elevation=env.sun_elevation,
+                    ambient=tuple(a + 0.1 for a in ambient)))
+            level = hd_graphics.TYPICAL_ALBEDO * own
+            self._env_indoor_colour = (level, level, level)
         if env.exposure is not None:
             base = float(env.exposure)
+        elif env.sky_mode == hd_graphics.SKY_NONE:
+            base = self._env_exposure_indoor
         else:
-            light = hd_graphics.scene_light(
-                sky_irradiance=self._env_ambient[0], sun_radiance=self._env_sun_rgb,
-                sun_elevation=env.sun_elevation,
-                ambient=tuple(a + 0.1 for a in ambient)) + lamps
-            base = hd_graphics.base_exposure(light)
-        if base != self._env_base_exposure:
+            openness = self._env_view_openness(config, camera_pos)
+            base = math.exp(math.log(self._env_exposure_indoor) * (1.0 - openness)
+                            + math.log(self._env_exposure_outdoor) * openness)
+        if os.environ.get('FIO_HD_DEBUG') and self._env_frame % 10 == 1:
+            print("[HD] sky=%s exposure=%.3f indoor=%.3f outdoor=%.3f openness=%s"
+                  % (env.sky_mode, base, self._env_exposure_indoor,
+                     self._env_exposure_outdoor, self._env_openness))
+        if abs(base - self._env_base_exposure) > 1e-4 * max(base, 1e-6):
             self._env_base_exposure = base
             self._env_surface_state.clear()
-            self._env_reflect_key = None        # drawn in exposure's units
+
+    #: Directions the view point looks for sky in: straight up and two rings.
+    _OPENNESS_RAYS = np.array(
+        [(0.0, 1.0, 0.0)]
+        + [(math.cos(a) * 0.5, 0.866, math.sin(a) * 0.5)
+           for a in np.linspace(0.0, 2.0 * math.pi, 6, endpoint=False)]
+        + [(math.cos(a) * 0.819, 0.574, math.sin(a) * 0.819)
+           for a in np.linspace(0.3, 2.0 * math.pi + 0.3, 8, endpoint=False)],
+        dtype=np.float64)
+
+    def _env_view_openness(self, config, camera_pos):
+        """How much sky is over the view point, 0..1, eased over time.
+
+        Rays from the view point toward the upper sky are tested against
+        the boxes of the map's shadow-casting brushes (the render table's
+        columns: no GL, no read-back); the share that reach the sky is the
+        target, measured every few frames."""
+        now = self._env_time
+        if camera_pos is None:
+            return 1.0 if self._env_openness is None else self._env_openness
+        self._env_openness_frame += 1
+        if self._env_openness is None or self._env_openness_frame >= self.OPENNESS_EVERY:
+            self._env_openness_frame = 0
+            self._env_openness_target = self._env_sky_share(
+                config, self._camera_xyz(camera_pos))
+            if os.environ.get('FIO_HD_DEBUG'):
+                t = config.get('render_table'); sl = config.get('all_brush_slots')
+                print("[HD] share", self._env_openness_target, self._camera_xyz(camera_pos),
+                      None if sl is None else len(sl),
+                      len(self._kept_shadow_casters(t, sl)))
+        if self._env_openness is None or self._env_openness_time is None:
+            self._env_openness = self._env_openness_target      # a new view: at once
+        else:
+            elapsed = max(0.0, min(now - self._env_openness_time, 0.25))
+            blend = 1.0 - math.exp(-elapsed / self.OPENNESS_SECONDS)
+            self._env_openness += (self._env_openness_target - self._env_openness) * blend
+            if abs(self._env_openness_target - self._env_openness) < 0.004:
+                self._env_openness = self._env_openness_target
+        self._env_openness_time = now
+        return self._env_openness
+
+    def _env_sky_share(self, config, origin):
+        """The share of :data:`_OPENNESS_RAYS` from *origin* that no
+        shadow-casting brush's box stands in the way of."""
+        table = config.get('render_table')
+        all_slots = config.get('all_brush_slots')
+        if table is None or all_slots is None:
+            return 1.0
+        casters = self._kept_shadow_casters(table, all_slots)
+        if not len(casters):
+            return 1.0
+        centre = table.center[casters].astype(np.float64)
+        half = table.half[casters].astype(np.float64)
+        origin = np.asarray(origin, dtype=np.float64)
+        # Boxes the view point is inside (a volume it walks through) do not count.
+        outside = (np.abs(centre - origin) > half).any(axis=1)
+        low = (centre - half)[outside] - origin
+        high = (centre + half)[outside] - origin
+        if not len(low):
+            return 1.0
+        rays = self._OPENNESS_RAYS
+        with np.errstate(divide='ignore', invalid='ignore'):
+            inverse = 1.0 / rays                                   # (R, 3)
+            t0 = low[None, :, :] * inverse[:, None, :]             # (R, N, 3)
+            t1 = high[None, :, :] * inverse[:, None, :]
+        # A ray parallel to a slab is inside it or not, whatever t is.
+        parallel = (rays == 0.0)[:, None, :]
+        within = (low[None, :, :] <= 0.0) & (high[None, :, :] >= 0.0)
+        near = np.where(parallel, np.where(within, -np.inf, np.inf), np.minimum(t0, t1))
+        far = np.where(parallel, np.where(within, np.inf, -np.inf), np.maximum(t0, t1))
+        enter = near.max(axis=2)
+        leave = far.min(axis=2)
+        blocked = ((leave >= np.maximum(enter, 0.0)) & (leave > 0.0)).any(axis=1)
+        return float(1.0 - blocked.mean())
+
+    def _env_reflection_gain(self):
+        """What the reflection fallback's texels are multiplied by. A probe
+        is a display picture of classic Fio's: a mid-grey of it reflects as
+        a mid-grey of the frame, at whatever the exposure now is."""
+        if not self._env_probe_reflections:
+            return 1.0
+        return (hd_graphics.KEY_VALUE / hd_graphics.MID_GREY
+                / max(self._env_base_exposure, 1e-6))
 
     def _env_light(self, config, camera_pos):
         """Bring the sun's shadow map up to date and bind what every lit
@@ -707,8 +831,15 @@ class EnvironmentMixin:
             self._hd_sky = dict(self._hd_sky, shadow_strength=0.0)
             self.environment.shadow_strength = 0.0
             self._env_shadow_ready = False
+        try:
+            self._env_sky_cover(config, camera_pos)
+        except Exception as exc:
+            print(f"[Environment] sky cover off: {exc}")
+            self._env_cover_ready = False
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.SUN_SHADOW_UNIT)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_shadow_tex)
+        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.SKY_COVER_UNIT)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_cover_tex)
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.ENV_MAP_UNIT)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_reflection_texture())
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.NOISE_UNIT)
@@ -985,7 +1116,7 @@ class EnvironmentMixin:
         if not texture:
             self._env_probe_reflections = False
             return
-        key = (texture, self._env_base_exposure)
+        key = texture
         if not self._env_probe_reflections:
             self._env_surface_state.clear()
         self._env_probe_reflections = True
@@ -1013,11 +1144,9 @@ class EnvironmentMixin:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
             program = self._env_program('sky', FULLSCREEN_VERT, SKY_FRAG)
             gl.glUseProgram(program.id)
-            # A probe is what classic Fio drew there: a display picture. A
-            # mid-grey of it should reflect as a mid-grey of the frame.
-            gain = hd_graphics.KEY_VALUE / hd_graphics.MID_GREY / max(
-                self._env_base_exposure, 1e-6)
-            self._env_image_uniforms(program, texture, gain, flip=False)
+            # Stored as the probe's own (linear) picture; brought into the
+            # frame's units where it is read (_env_reflection_gain).
+            self._env_image_uniforms(program, texture, 1.0, flip=False)
             self._env_fullscreen()
             gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_reflect_map)
             gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
@@ -1176,6 +1305,144 @@ class EnvironmentMixin:
                                               static, moving)
         return static, moving
 
+    def _env_casters(self, config):
+        """The frame's shadow-casting brushes: ``(table, static, moving,
+        low, high)`` -- those that stand still, the movers and doors, and
+        the box (world, whole units) of what the maps cover -- or None."""
+        table = config.get('render_table')
+        all_slots = config.get('all_brush_slots')
+        if table is None or all_slots is None:
+            return None
+        casters = self._kept_shadow_casters(table, all_slots)
+        if not len(casters):
+            return None
+        static, moving = self._env_split_casters(table, casters)
+        # The box the map covers: the casters that stand still (a door
+        # opening must not move it), or all of them when everything moves.
+        framing = static if len(static) else casters
+        centre = table.center[framing]
+        half = table.half[framing]
+        low = (centre - half).min(axis=0).astype(np.float64)
+        high = (centre + half).max(axis=0).astype(np.float64)
+        # Whole units, so a caster's float jitter does not redraw a map.
+        return table, static, moving, np.floor(low), np.ceil(high)
+
+    #: The sky cover map's size, and how far around a point (world units)
+    #: its filter looks for open sky: the depth a doorway's daylight reaches.
+    SKY_COVER_SIZE = 1024
+    SKY_COVER_REACH = 220.0
+
+    def _env_sky_cover(self, config, camera_pos):
+        """Keep the sky cover map: the map's standing shadow casters seen
+        from straight above, as depth. The surface programs read from it how
+        much of the sky each point can see (surface.fioSkyVisible), so sky
+        light reaches a courtyard and stops at a roof. Redrawn only when one
+        of those casters changes; a map with no sky has none."""
+        env = self.environment
+        self._env_cover_ready = False
+        if env.sky_mode == hd_graphics.SKY_NONE:
+            return
+        found = self._env_casters(config)
+        if found is None:
+            return
+        table, static, _moving, low, high = found
+        if not len(static):
+            return
+        reach = float(env.shadow_range)
+        follow = (max(high[0] - low[0], high[2] - low[2]) > 2.0 * reach
+                  and camera_pos is not None)
+        if follow:
+            step = 2.0 * reach * self.SHADOW_FOLLOW_STEP
+            cx, _cy, cz = self._camera_xyz(camera_pos)
+            cx = math.floor(cx / step + 0.5) * step
+            cz = math.floor(cz / step + 0.5) * step
+            low, high = low.copy(), high.copy()
+            low[0], high[0] = cx - reach - step, cx + reach + step
+            low[2], high[2] = cz - reach - step, cz + reach + step
+            middle = (low + high) * 0.5
+            where = (float(middle[0]), float(middle[1]), float(middle[2]),
+                     float(np.linalg.norm((high - low)[[0, 2]])) * 0.5 + 1024.0)
+        else:
+            where = (0.0, 0.0, 0.0, 1.0e9)
+        span = max(high[0] - low[0], high[2] - low[2]) * 1.02 + 2.0 * self.SKY_COVER_REACH
+        mid_x, mid_z = (low[0] + high[0]) * 0.5, (low[2] + high[2]) * 0.5
+        top, bottom = float(high[1]) + 32.0, float(low[1]) - 32.0
+        # Looking straight down: x across, z up the map, depth downward.
+        look = glm.lookAt(glm.vec3(mid_x, top, mid_z), glm.vec3(mid_x, bottom, mid_z),
+                          glm.vec3(0.0, 0.0, -1.0))
+        projection = glm.ortho(-span * 0.5, span * 0.5, -span * 0.5, span * 0.5,
+                               0.0, top - bottom)
+        self._env_cover_matrix = projection * look
+        self._env_cover_span = span
+        self._env_cover_depth = top - bottom
+        slots, keys = self._kept_casters_in_reach('sky cover', table, static, *where)
+        if not len(slots):
+            return
+        size = self.SKY_COVER_SIZE
+        if not self._env_cover_tex:
+            self._env_cover_tex = int(gl.glGenTextures(1))
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_cover_tex)
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_DEPTH_COMPONENT24, size, size, 0,
+                            gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+            for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
+                                (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
+                                (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_BORDER),
+                                (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_BORDER),
+                                (gl.GL_TEXTURE_COMPARE_MODE, gl.GL_COMPARE_REF_TO_TEXTURE),
+                                (gl.GL_TEXTURE_COMPARE_FUNC, gl.GL_LEQUAL)):
+                gl.glTexParameteri(gl.GL_TEXTURE_2D, name, value)
+            gl.glTexParameterfv(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_BORDER_COLOR,
+                                (1.0, 1.0, 1.0, 1.0))
+            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            self._env_cover_fbo = int(gl.glGenFramebuffers(1))
+            self._env_cover_size = size
+            self._env_cover_sig = None
+        self._env_cover_ready = True
+        signature = (round(mid_x, 1), round(mid_z, 1), round(span, 1), top, bottom)
+        previous = self._env_cover_sig
+        if (previous is not None and previous[0] == signature
+                and (previous[1] is keys or previous[1] == keys)):
+            return
+        self._env_cover_sig = (signature, keys)
+        plain, instanced = self._env_depth_programs()
+        previous_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
+        previous_viewport = [int(v) for v in gl.glGetIntegerv(gl.GL_VIEWPORT)]
+        scissor = bool(gl.glIsEnabled(gl.GL_SCISSOR_TEST))
+        cull = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
+        try:
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._env_cover_fbo)
+            gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
+                                      gl.GL_TEXTURE_2D, self._env_cover_tex, 0)
+            gl.glDrawBuffer(gl.GL_NONE)
+            gl.glReadBuffer(gl.GL_NONE)
+            gl.glViewport(0, 0, size, size)
+            gl.glDisable(gl.GL_SCISSOR_TEST)
+            gl.glDisable(gl.GL_BLEND)
+            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl.glDepthMask(gl.GL_TRUE)
+            gl.glDepthFunc(gl.GL_LESS)
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+            gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
+            gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
+            self._env_draw_brush_casters(table, slots, plain, instanced,
+                                         glm.value_ptr(self._env_cover_matrix),
+                                         ('shadow', 'sky cover'))
+            self.sun_shadow_stats['cover'] = self.sun_shadow_stats.get('cover', 0) + 1
+        finally:
+            gl.glBindVertexArray(0)
+            gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
+            gl.glCullFace(gl.GL_BACK)
+            if cull:
+                gl.glEnable(gl.GL_CULL_FACE)
+            else:
+                gl.glDisable(gl.GL_CULL_FACE)
+            gl.glUseProgram(0)
+            self._current_shader = None
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, previous_fbo)
+            gl.glViewport(*previous_viewport)
+            if scissor:
+                gl.glEnable(gl.GL_SCISSOR_TEST)
+
     def _env_sun_shadows(self, config, camera_pos):
         """Bring the sun's shadow map up to date.
 
@@ -1188,26 +1455,13 @@ class EnvironmentMixin:
         self._env_shadow_ready = False
         if env.shadow_strength <= 0.0 or not self.shadows_enabled or not env.sun_enabled:
             return
-        table = config.get('render_table')
-        all_slots = config.get('all_brush_slots')
         entity_table = config.get('entity_table')
-        if table is None or all_slots is None or entity_table is None:
+        found = self._env_casters(config)
+        if found is None or entity_table is None:
             return
+        table, static, moving, low, high = found
         size = int(max(512, min(8192, env.shadow_size)))
         self._env_shadow_target(size)
-        casters = self._kept_shadow_casters(table, all_slots)
-        if not len(casters):
-            return
-        static, moving = self._env_split_casters(table, casters)
-        # The box the map covers: the casters that stand still (a door
-        # opening must not move it), or all of them when everything moves.
-        framing = static if len(static) else casters
-        centre = table.center[framing]
-        half = table.half[framing]
-        low = (centre - half).min(axis=0).astype(np.float64)
-        high = (centre + half).max(axis=0).astype(np.float64)
-        # Whole units, so a caster's float jitter does not redraw the map.
-        low, high = np.floor(low), np.ceil(high)
         matrix, texel, frame_key, box = self._env_sun_frame(
             low, high, low - 64.0, high + 64.0, camera_pos)
         if box is not None:
@@ -1406,7 +1660,8 @@ class EnvironmentMixin:
         if state is None or state[0] != mode:
             gl.glUniform1i(mode_loc, mode)
         frame = (self._env_map_key, self._env_shadow_ready, self._env_reflect_key,
-                 self._env_probe_reflections, self._env_base_exposure)
+                 self._env_probe_reflections, self._env_base_exposure,
+                 self._env_cover_ready, self._env_cover_sig)
         if state is None or state[1] != frame:
             ambient = self._env_ambient
             gl.glUniform3f(uniforms['uSunDir'], *self._env_sun_dir)
@@ -1422,7 +1677,17 @@ class EnvironmentMixin:
             # With a probe on the environment unit, the haze cannot take its
             # colour from there: it gets the sky's horizon light instead.
             gl.glUniform4f(uniforms['uEnvParams2'], 1.0 if probe else 0.0,
-                           1.0 if probe else 0.0, 0.0, 0.0)
+                           1.0 if probe else 0.0, self._env_reflection_gain(), 0.0)
+            cover = self._env_cover_ready
+            gl.glUniformMatrix4fv(uniforms['uSkyMatrix'], 1, gl.GL_FALSE,
+                                  glm.value_ptr(self._env_cover_matrix))
+            gl.glUniform4f(uniforms['uSkyCoverParams'],
+                           self.SKY_COVER_REACH / max(self._env_cover_span, 1.0),
+                           # Back faces are what the map holds, so an underside
+                           # sits exactly on its stored depth: pushed a little
+                           # further down, it is under cover as it should be.
+                           -4.0 / max(self._env_cover_depth, 1.0),
+                           1.0 if cover else 0.0, 12.0)
             gl.glUniform3f(uniforms['uHazeColor'], *self._env_ambient[1])
             fog = self._env_fog
             if fog is None:
@@ -1586,14 +1851,16 @@ class EnvironmentMixin:
         self._cleanup_postfx()
         textures = [t for t in (self._env_shadow_tex, self._env_shadow_static_tex,
                                 self._env_noise_tex, self._env_map,
-                                self._env_reflect_map) if t]
+                                self._env_reflect_map, self._env_cover_tex) if t]
         for maps in self._material_maps.values():
             if maps:
                 textures += [maps[0], maps[1]]
         if textures:
             gl.glDeleteTextures(textures)
         framebuffers = [f for f in (self._env_shadow_fbo, self._env_shadow_static_fbo,
-                                    self._env_map_fbo) if f]
+                                    self._env_map_fbo, self._env_cover_fbo) if f]
+        self._env_cover_tex = self._env_cover_fbo = 0
+        self._env_cover_sig = None
         if self._hdr_ubo:
             gl.glDeleteBuffers(1, [self._hdr_ubo])
             self._hdr_ubo = 0

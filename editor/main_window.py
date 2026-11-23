@@ -36,6 +36,7 @@ from engine.constants import TILE_SIZE
 from engine.glasses import DEFAULT_GLASSES, normalize_glasses
 from engine import brush_faces, brush_geometry, brush_placement
 from engine import player_starts as start_rules
+from engine import hd_graphics
 from engine.change_journal import moved, touch
 from engine.spatial import set_live_flag
 from engine.fileio import write_json_atomic, write_text_atomic
@@ -567,6 +568,7 @@ class MainWindow(QMainWindow):
         """
         if getattr(self, "state", None) is not None:
             self.canonicalize_sky_image_ownership()
+            self.canonicalize_hd_sky_ownership()
         if not self.unsaved_changes:
             self.unsaved_changes = True
             self.update_title()
@@ -2606,6 +2608,7 @@ class MainWindow(QMainWindow):
         old_ui_scale = read_ui_scale_setting(self.config)
         old_font_size = self.config.getint('Display', 'font_size', fallback=10)
         old_show_caulk = self.config.getboolean('Display', 'show_caulk', fallback=True)
+        old_graphics = hd_graphics.tier_from(self.config)
         old_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
         
         # New: Autosave setting check
@@ -2661,6 +2664,9 @@ class MainWindow(QMainWindow):
 
             if read_ui_scale_setting(self.config) != old_ui_scale:
                 restart_required.append("UI scale")
+
+            if not self.apply_graphics_setting(old_graphics):
+                restart_required.append("Graphics quality (between Low and an HD tier)")
                 
             new_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
             if old_big_toolbar_buttons != new_big_toolbar_buttons:
@@ -2672,6 +2678,29 @@ class MainWindow(QMainWindow):
                     f"The following settings have been changed:\n\n" +
                     "\n".join(f"• {setting}" for setting in restart_required) +
                     "\n\nPlease restart the application for the changes to take effect.")
+
+    def apply_graphics_setting(self, previous=None):
+        """Bring the 3D view's renderer to ``[Renderer] graphics``.
+
+        Between HD tiers this applies to the next frame. Between Low and an
+        HD tier it cannot: the lit shaders are compiled once, with or
+        without the HD path, so that needs a restart. Returns False in that
+        case (and leaves the renderer as it is)."""
+        wanted = hd_graphics.tier_from(self.config)
+        renderer = getattr(getattr(self, 'view_3d', None), 'renderer', None)
+        if renderer is None or not hasattr(renderer, 'set_graphics'):
+            return previous is None or hd_graphics.is_hd(previous) == hd_graphics.is_hd(wanted)
+        if getattr(renderer, 'lowpower_mode', False):
+            return True         # low-power mode is Low whatever is chosen
+        live = renderer.set_graphics(wanted)
+        self.view_3d.update()
+        return bool(live)
+
+    def set_hd_preview(self, shown):
+        """View > HD preview: draw the editor's 3D view with the HD renderer
+        (an HD tier only; Play mode always follows the setting)."""
+        self.view_3d.hd_preview = bool(shown)
+        self.view_3d.update()
 
     def apply_tooltip_settings(self):
         """Settings > Editor > Tooltips: show or hide each area's tooltips.
@@ -3469,7 +3498,51 @@ class MainWindow(QMainWindow):
         view = getattr(self, "view_3d", None)
         if view is not None:
             view.sky_image_path = path
+            # The HD sky rides with it (engine/hd_graphics.py). Plain data:
+            # a renderer at graphics = low never reads it.
+            view.hd_sky_settings = hd_graphics.sky_settings(
+                self.hd_sky_properties_from_map(), path)
         return path
+
+    def _player_starts_in_recovery_order(self):
+        """``(primary, others)``: the Primary PlayerStart and the other
+        starts, earliest created first -- the order a legacy value stored
+        on a non-primary start is recovered in (as for sky_image)."""
+        starts = self.state.player_starts()
+        primary = self.state.resolve_player_start()
+        position = start_rules.earliest_created(
+            [start.properties for start in starts])
+        ordered = [starts[position]] if position is not None else []
+        ordered.extend(
+            start for start in starts
+            if position is None or start is not starts[position])
+        return primary, [start for start in ordered if start is not primary]
+
+    def hd_sky_properties_from_map(self):
+        """The map's effective ``hd_*`` sky properties, as stored, without
+        changing authored data: the Primary PlayerStart's, else recovered
+        from the other starts."""
+        primary, others = self._player_starts_in_recovery_order()
+        return hd_graphics.resolve_properties(
+            primary.properties if primary is not None else None,
+            [start.properties for start in others])
+
+    def canonicalize_hd_sky_ownership(self, resolved=None):
+        """Store the HD sky on the current Primary PlayerStart and clear
+        it from every other start. Called at explicit edit boundaries."""
+        primary, others = self._player_starts_in_recovery_order()
+        if primary is None:
+            return {}
+        if resolved is None:
+            resolved = self.hd_sky_properties_from_map()
+        changed = hd_graphics.canonicalise_properties(
+            primary.properties, [start.properties for start in others], resolved)
+        if changed:
+            touched = [start for start in [primary] + others
+                       if any(start.properties is properties for properties in changed)]
+            self.state.mark_world_changed(touched)
+        self.sync_sky_image_from_map()
+        return resolved
 
     def set_show_whole_world(self, shown):
         """Load every editor cell of a Big World map, or only those near the camera."""

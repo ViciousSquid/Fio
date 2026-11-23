@@ -135,7 +135,8 @@ uniform sampler2D uEnvMap;
 uniform mat4 uView;
 uniform mat4 uInvView;
 uniform vec4 uParams;      // occlusion strength, reflections on, env top mip, colour top mip
-uniform vec4 uParams2;     // x the environment map is a probe's whole sphere, y march steps
+uniform vec4 uParams2;     // x the environment map is a probe's whole sphere, y march steps, z gain on the environment map
+uniform vec3 uIndoor;      // what a reflection sees where the sky cannot be seen at all
 uniform vec3 uFallback;    // what a reflection sees where the frame has no answer and the sky is hidden
 """ + surface.ENV_GLSL + _VIEW_POS_GLSL + """
 // The frame's colour where the reflected ray meets it (rgb, linear) and a
@@ -201,13 +202,16 @@ void main() {
         float rough = data.a;
         highp vec3 p = fioViewPos(vUV, depth);
         vec3 toPoint = normalize(p);
-        vec3 n = normalize(mat3(uView) * (data.xyz * 2.0 - 1.0));
+        vec3 n = normalize(mat3(uView) * fioUnpackNormal(data.xy));
         vec3 r = reflect(toPoint, n);
         vec3 world = mat3(uInvView) * r;
         float nov = max(dot(n, -toPoint), 1e-3);
         vec3 brdf = fioEnvBRDF(vec3(colour.a), rough, nov);
-        vec3 seen = mix(uFallback, textureLod(uEnvMap, fioEnvUV(world), rough * uParams.z).rgb,
+        vec3 seen = mix(uFallback,
+                        textureLod(uEnvMap, fioEnvUV(world), rough * uParams.z).rgb * uParams2.z,
                         uParams2.x > 0.5 ? 1.0 : smoothstep(-0.05, 0.45, world.y));
+        // data.z: how much of the sky the surface can see at all.
+        if (uParams2.x < 0.5) seen = mix(uIndoor, seen, data.z);
         if (rough < 0.66 && max(brdf.r, max(brdf.g, brdf.b)) > 0.006) {
             vec4 hit = fioTrace(p + n * max(0.25, -p.z * 0.002), r, rough);
             seen = mix(seen, hit.rgb, hit.a * (1.0 - smoothstep(0.5, 0.66, rough)));
@@ -653,7 +657,9 @@ class PostFXMixin:
                        1.0 if reflect else 0.0,
                        math.log2(512.0) - (3.0 if probe else 2.0), min(6.0, float(levels)))
         gl.glUniform4f(program['uParams2'], 1.0 if probe else 0.0,
-                       float(max(8, min(48, int(env.ssr_steps)))), 0.0, 0.0)
+                       float(max(8, min(48, int(env.ssr_steps)))),
+                       self._env_reflection_gain(), 0.0)
+        gl.glUniform3f(program['uIndoor'], *self._env_indoor_colour)
         # Under the horizon of a sky there are walls: a dimmer version of
         # its side light. Indoors the environment map is that colour already.
         side = self._env_ambient[1]

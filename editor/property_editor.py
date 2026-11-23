@@ -2699,6 +2699,8 @@ class PropertyEditor(QWidget):
         if isinstance(thing, PlayerStart):
             self._build_player_start_primary(form, thing)
             self._build_player_start_sky_image(form, thing)
+            from editor.hd_sky_panel import build_hd_sky_section
+            build_hd_sky_section(self, form, thing, CollapsibleSection)
 
         if isinstance(thing, LevelChanger):
             self._build_destination_spawn(form, thing)
@@ -4688,9 +4690,11 @@ class PropertyEditor(QWidget):
         if self._populating or thing.primary:
             return
         sky_image = self.editor.sky_image_path_from_map()
+        hd_sky = self.editor.hd_sky_properties_from_map()
         self.editor.save_state()
         self.editor.state.set_primary_player_start(thing)
         self.editor.canonicalize_sky_image_ownership(sky_image)
+        self.editor.canonicalize_hd_sky_ownership(hd_sky)
         self.editor.mark_as_modified()
         self.editor.update_all_ui()
 

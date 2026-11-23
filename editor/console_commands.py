@@ -138,6 +138,7 @@ class ConsoleCommandHandler:
             'r_wireframe': self.cmd_render_wireframe,
             'r_shadows': self.cmd_render_shadows,
             'r_waterquality': self.cmd_water_quality,
+            'r_graphics': self.cmd_graphics,
             'r_vsync': self.cmd_render_vsync,
             'r_clearcolor': self.cmd_render_clearcolor,
             'r_info': self.cmd_render_info,
@@ -1073,6 +1074,8 @@ class ConsoleCommandHandler:
             (('r_shadows', 'shadows'), '— Toggle shadows'),
             (('r_waterquality', 'waterquality'), "[cheap|expensive] — Debug cap: cheap forces all water "
                                                  "cheap; expensive lets each brush's High quality decide"),
+            (('r_graphics',), '[medium|high|ultra] — Switch HD graphics tier for this session '
+                              '(Low and HD cannot be switched live; see Settings)'),
             (('r_vsync', 'vsync'), '— Toggle VSync (saved to settings)'),
             (('r_clearcolor',), 'r g b — Set background colour'),
         ]),
@@ -1361,6 +1364,30 @@ class ConsoleCommandHandler:
         renderer.water_quality = wanted
         debug_log("Info", "Water quality: " + (
             "per brush" if wanted == 'expensive' else "cheap (all water)"))
+
+    def cmd_graphics(self, args):
+        """Show, or switch between, the HD graphics tiers for this session.
+
+        Only between HD tiers: a renderer is built with or without the HD
+        shaders, so going to or from Low is the Settings window's Graphics
+        choice and a restart. Never saved.
+        """
+        from engine import hd_graphics
+        renderer = self._get_renderer()
+        if not renderer: return
+        current = getattr(renderer, 'graphics', 'low')
+        wanted = args.split()[0].lower() if args and args.split() else ''
+        if not wanted:
+            debug_log("Info", "Graphics: %s" % hd_graphics.TIER_LABELS.get(current, current))
+            return
+        if wanted not in hd_graphics.TIERS:
+            debug_log("Warning", "Usage: r_graphics [medium|high|ultra]")
+            return
+        if not hasattr(renderer, 'set_graphics') or not renderer.set_graphics(wanted):
+            debug_log("Warning", "Cannot switch between Low and an HD tier while running: "
+                                 "choose it in Settings > Display > Graphics and restart.")
+            return
+        debug_log("Info", "Graphics: %s" % hd_graphics.TIER_LABELS[wanted])
 
     def cmd_render_vsync(self, args):
         config = self.main_window.config
