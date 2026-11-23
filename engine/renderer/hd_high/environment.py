@@ -387,9 +387,9 @@ class EnvironmentMixin:
         self._env_cover_size = 0
         self._env_cover_sig = None
         self._env_cover_ready = False
-        self._env_cover_matrix = glm.mat4(1.0)
+        self._env_cover_matrices = []
         self._env_cover_span = 1.0
-        self._env_cover_depth = 1.0
+        self._env_cover_depths = []
         #: What a reflection finds where no sky can be seen (linear).
         self._env_indoor_colour = (0.0, 0.0, 0.0)
         # Exposure follows where the view is: under the sky or under a roof.
@@ -871,7 +871,7 @@ class EnvironmentMixin:
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.SUN_SHADOW_UNIT)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_shadow_tex)
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.SKY_COVER_UNIT)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_cover_tex)
+        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._env_cover_tex)
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.ENV_MAP_UNIT)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_reflection_texture())
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.NOISE_UNIT)
@@ -1360,22 +1360,23 @@ class EnvironmentMixin:
         # Whole units, so a caster's float jitter does not redraw a map.
         return table, static, moving, np.floor(low), np.ceil(high)
 
-    #: The sky cover map's size, and how far around a point (world units)
-    #: its filter looks for open sky. Kept under a thin wall's thickness, and
-    #: a point is first moved that far off its surface, so the filter never
-    #: reaches across a wall or under a roof: sky light lands where the sky
-    #: is overhead and nowhere else. (A wider filter, tried first, let
-    #: daylight leak into the rooms beside a courtyard.)
-    SKY_COVER_SIZE = 2048
+    #: The sky cover map: one layer per sky direction (surface.SKY_DIRECTIONS),
+    #: each this many texels square. Its filter reaches SKY_COVER_REACH world
+    #: units around a point, which is first moved SKY_COVER_OFFSET off its
+    #: surface: both under a thin wall's thickness, so the filter never
+    #: reaches across a wall and daylight does not leak into the room behind.
+    SKY_COVER_SIZE = 1024
     SKY_COVER_REACH = 12.0
     SKY_COVER_OFFSET = 14.0
 
     def _env_sky_cover(self, config, camera_pos):
         """Keep the sky cover map: the map's standing shadow casters seen
-        from straight above, as depth. The surface programs read from it how
-        much of the sky each point can see (surface.fioSkyVisible), so sky
-        light reaches a courtyard and stops at a roof. Redrawn only when one
-        of those casters changes; a map with no sky has none."""
+        from each direction the sky is asked in -- straight above, and four
+        slanted directions -- as depth. The surface programs read from it
+        how much of the sky each point can see (surface.fioSkyVisible), so
+        sky light reaches a courtyard, comes in at a window along the
+        slanted directions, and stops at a roof or a wall. Redrawn only
+        when one of those casters changes; a map with no sky has none."""
         env = self.environment
         self._env_cover_ready = False
         if env.sky_mode == hd_graphics.SKY_NONE:
@@ -1402,41 +1403,54 @@ class EnvironmentMixin:
                      float(np.linalg.norm((high - low)[[0, 2]])) * 0.5 + 1024.0)
         else:
             where = (0.0, 0.0, 0.0, 1.0e9)
-        span = max(high[0] - low[0], high[2] - low[2]) * 1.02 + 64.0
-        mid_x, mid_z = (low[0] + high[0]) * 0.5, (low[2] + high[2]) * 0.5
-        top, bottom = float(high[1]) + 32.0, float(low[1]) - 32.0
-        # Looking straight down: x across, z up the map, depth downward.
-        look = glm.lookAt(glm.vec3(mid_x, top, mid_z), glm.vec3(mid_x, bottom, mid_z),
-                          glm.vec3(0.0, 0.0, -1.0))
-        projection = glm.ortho(-span * 0.5, span * 0.5, -span * 0.5, span * 0.5,
-                               0.0, top - bottom)
-        self._env_cover_matrix = projection * look
-        self._env_cover_span = span
-        self._env_cover_depth = top - bottom
         slots, keys = self._kept_casters_in_reach('sky cover', table, static, *where)
         if not len(slots):
             return
+        # One orthographic view of the casters' box from each sky direction.
+        corners = np.array([[x, y, z, 1.0] for x in (low[0], high[0])
+                            for y in (low[1] - 32.0, high[1] + 32.0)
+                            for z in (low[2], high[2])])
+        middle = glm.vec3(*((low + high) * 0.5))
+        matrices, spans, depths = [], [], []
+        for direction in surface.SKY_DIRECTIONS:
+            towards = glm.vec3(*direction)
+            up = glm.vec3(0.0, 0.0, -1.0) if abs(towards.y) > 0.99 else glm.vec3(0.0, 1.0, 0.0)
+            look = glm.lookAt(middle + towards * 1000.0, middle, up)
+            in_view = corners @ np.array(look.to_list(), dtype=np.float64)
+            lo, hi = in_view[:, :3].min(axis=0), in_view[:, :3].max(axis=0)
+            span = max(hi[0] - lo[0], hi[1] - lo[1]) + 64.0
+            mid_x, mid_y = (lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5
+            projection = glm.ortho(mid_x - span * 0.5, mid_x + span * 0.5,
+                                   mid_y - span * 0.5, mid_y + span * 0.5,
+                                   -hi[2] - 16.0, -lo[2] + 16.0)
+            matrices.append(projection * look)
+            spans.append(float(span))
+            depths.append(float(hi[2] - lo[2] + 32.0))
+        self._env_cover_matrices = matrices
+        self._env_cover_span = max(spans)
+        self._env_cover_depths = depths
         size = self.SKY_COVER_SIZE
+        layers = len(surface.SKY_DIRECTIONS)
         if not self._env_cover_tex:
             self._env_cover_tex = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_cover_tex)
-            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_DEPTH_COMPONENT24, size, size, 0,
-                            gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._env_cover_tex)
+            gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_DEPTH_COMPONENT24, size, size,
+                            layers, 0, gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
             for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
                                 (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
                                 (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_BORDER),
                                 (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_BORDER),
                                 (gl.GL_TEXTURE_COMPARE_MODE, gl.GL_COMPARE_REF_TO_TEXTURE),
                                 (gl.GL_TEXTURE_COMPARE_FUNC, gl.GL_LEQUAL)):
-                gl.glTexParameteri(gl.GL_TEXTURE_2D, name, value)
-            gl.glTexParameterfv(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_BORDER_COLOR,
+                gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, name, value)
+            gl.glTexParameterfv(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_BORDER_COLOR,
                                 (1.0, 1.0, 1.0, 1.0))
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
             self._env_cover_fbo = int(gl.glGenFramebuffers(1))
             self._env_cover_size = size
             self._env_cover_sig = None
         self._env_cover_ready = True
-        signature = (round(mid_x, 1), round(mid_z, 1), round(span, 1), top, bottom)
+        signature = (tuple(round(float(v), 1) for v in low), tuple(round(float(v), 1) for v in high))
         previous = self._env_cover_sig
         if (previous is not None and previous[0] == signature
                 and (previous[1] is keys or previous[1] == keys)):
@@ -1449,8 +1463,6 @@ class EnvironmentMixin:
         cull = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
         try:
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._env_cover_fbo)
-            gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
-                                      gl.GL_TEXTURE_2D, self._env_cover_tex, 0)
             gl.glDrawBuffer(gl.GL_NONE)
             gl.glReadBuffer(gl.GL_NONE)
             gl.glViewport(0, 0, size, size)
@@ -1460,11 +1472,13 @@ class EnvironmentMixin:
             gl.glDepthMask(gl.GL_TRUE)
             gl.glDepthFunc(gl.GL_LESS)
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-            gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
             gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
-            self._env_draw_brush_casters(table, slots, plain, instanced,
-                                         glm.value_ptr(self._env_cover_matrix),
-                                         ('shadow', 'sky cover'))
+            for layer, matrix in enumerate(matrices):
+                gl.glFramebufferTextureLayer(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
+                                             self._env_cover_tex, 0, layer)
+                gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
+                self._env_draw_brush_casters(table, slots, plain, instanced,
+                                             glm.value_ptr(matrix), ('shadow', 'sky cover'))
             self.sun_shadow_stats['cover'] = self.sun_shadow_stats.get('cover', 0) + 1
         finally:
             gl.glBindVertexArray(0)
@@ -1717,14 +1731,20 @@ class EnvironmentMixin:
             gl.glUniform4f(uniforms['uEnvParams2'], 1.0 if probe else 0.0,
                            1.0 if probe else 0.0, self._env_reflection_gain(), 0.0)
             cover = self._env_cover_ready
-            gl.glUniformMatrix4fv(uniforms['uSkyMatrix'], 1, gl.GL_FALSE,
-                                  glm.value_ptr(self._env_cover_matrix))
+            if cover:
+                packed = np.array([m.to_list() for m in self._env_cover_matrices],
+                                  dtype=np.float32)
+                gl.glUniformMatrix4fv(uniforms['uSkyMatrix[0]'], len(self._env_cover_matrices),
+                                      gl.GL_FALSE, packed)
+                # Back faces are what each layer holds, so a face turned away
+                # from its direction sits on its stored depth: pushed a
+                # little further on, it is under cover as it should be.
+                gl.glUniform1fv(uniforms['uSkyBias[0]'], len(self._env_cover_depths),
+                                np.array([4.0 / max(d, 1.0) for d in self._env_cover_depths],
+                                         dtype=np.float32))
             gl.glUniform4f(uniforms['uSkyCoverParams'],
                            self.SKY_COVER_REACH / max(self._env_cover_span, 1.0),
-                           # Back faces are what the map holds, so an underside
-                           # sits exactly on its stored depth: pushed a little
-                           # further down, it is under cover as it should be.
-                           -4.0 / max(self._env_cover_depth, 1.0),
+                           0.0,
                            1.0 if cover else 0.0, self.SKY_COVER_OFFSET)
             gl.glUniform3f(uniforms['uHazeColor'], *self._env_ambient[1])
             fog = self._env_fog
@@ -1886,7 +1906,8 @@ class EnvironmentMixin:
                  + pixels * 4             # display
                  + half * 3) if pixels else 0
         shadow = 2 * self._env_shadow_size ** 2 * 4 if self._env_shadow_tex else 0
-        cover = self._env_cover_size ** 2 * 4 if self._env_cover_tex else 0
+        cover = (self._env_cover_size ** 2 * 4 * len(surface.SKY_DIRECTIONS)
+                 if self._env_cover_tex else 0)
         env = ENV_MAP_SIZE[0] * ENV_MAP_SIZE[1] * 8 * 4 // 3 if self._env_map else 0
         if self._env_reflect_map:
             env += env // 4

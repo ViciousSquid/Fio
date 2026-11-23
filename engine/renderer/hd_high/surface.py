@@ -53,6 +53,14 @@ SURFACE_PROGRAMS = ('lit', 'textured', 'lit_instanced', 'textured_instanced',
 TERRAIN_NORMAL_UNIT = 23       # .. 26: the terrain layers' normal maps
 LIGHT_GRID_UNIT = 27
 
+#: The directions the sky is asked in (toward the sky) and how much each
+#: counts: straight up, and four slanted ones 40 degrees above the horizon,
+#: through which daylight comes in at a window. One sky cover layer each.
+SKY_DIRECTIONS = ((0.0, 1.0, 0.0),) + tuple(
+    (0.766 * x, 0.643, 0.766 * z)
+    for x, z in ((0.7071, 0.7071), (-0.7071, 0.7071), (-0.7071, -0.7071), (0.7071, -0.7071)))
+SKY_WEIGHTS = (0.4, 0.15, 0.15, 0.15, 0.15)
+
 #: Forward+ (clustered forward shading, as Filament and Bevy do it): the
 #: frame's lamps are binned on the CPU into a grid of clusters
 #: (environment._env_light_grid) and a fragment loops over its cluster's
@@ -146,8 +154,16 @@ vec3 fioEnvBRDF(vec3 f0, float rough, float nov) {
 }
 """
 
-SURFACE_GLSL = """
+_SKY_CONSTANTS = (
+    "#define FIO_SKY_DIRECTIONS %d\n" % len(SKY_DIRECTIONS)
+    + "const vec3 FIO_SKY_DIRS[FIO_SKY_DIRECTIONS] = vec3[](%s);\n" % ", ".join(
+        "vec3(%.4f, %.4f, %.4f)" % d for d in SKY_DIRECTIONS)
+    + "const float FIO_SKY_WEIGHTS[FIO_SKY_DIRECTIONS] = float[](%s);\n" % ", ".join(
+        "%.3f" % w for w in SKY_WEIGHTS))
+
+SURFACE_GLSL_TEMPLATE = """
 // ---- physically based surfaces (engine/renderer/hd_high/surface.py) ----
+FIO_SKY_CONSTANTS
 uniform int uSurfaceMode;          // 0 legacy, 1 opaque phase, 2 blended phase, 3 opaque in a portal's view
 uniform highp vec3 uSunDir;        // toward the sun
 uniform vec3 uSunColor;
@@ -165,9 +181,10 @@ uniform vec4 uMaterial;            // x maps bound, y parallax depth (world unit
 uniform vec4 uSurfaceDefault;      // x roughness, y metalness, z detail strength, w unused
 uniform vec4 uAtmosphere;          // x haze density, y haze height falloff, z cloud shadow strength, w unused
 uniform vec4 uEnvParams2;          // x the environment map is a probe's whole sphere, y haze colour from uHazeColor, z gain on the environment map
-uniform highp mat4 uSkyMatrix;     // world -> the sky cover map's clip space (looking straight down)
-uniform highp sampler2DShadow uSkyCover;
-uniform vec4 uSkyCoverParams;      // x filter radius (uv), y depth bias, z on, w normal offset (world)
+uniform highp mat4 uSkyMatrix[FIO_SKY_DIRECTIONS];   // world -> each sky cover layer's clip space
+uniform highp sampler2DArrayShadow uSkyCover;        // the standing casters seen from each sky direction
+uniform vec4 uSkyCoverParams;      // x filter radius (uv), y unused, z on, w normal offset (world)
+uniform float uSkyBias[FIO_SKY_DIRECTIONS];          // each layer's depth bias
 uniform highp usampler2D uLightGrid;   // Forward+: row = cluster, column k = the cluster's k-th lamp (255: no more)
 uniform vec4 uLightGridParams;     // x, z of the grid's corner, 1 / cell size, 1 while the grid is in use
 uniform vec2 uLightGridHeight;     // y of the grid's bottom, 1 / layer height
@@ -218,24 +235,37 @@ float fioSunShadow(highp vec3 pos, vec3 ng) {
               + uw2 * vw2 * fioSunTap(base, u2, v2, s.z);
     return mix(1.0, lit / 144.0, uSunShadowParams.w);
 }
-// How much of the sky a point can see, 0 under a roof .. 1 in the open:
-// whether anything stands over it, softened over a few texels. Sky light is
-// scaled by it, so a room is lit by its lamps and the sky lights only what
-// lies under it. The point is first moved off its surface (uSkyCoverParams.w)
-// so that the inside face of a wall is tested inside the room.
+// How much of the sky a surface can see, 0 .. 1. The sky is asked in a
+// handful of directions -- straight up and four slanted ones, FIO_SKY_DIRS
+// -- each with a depth map of the standing casters seen from there, so
+// daylight is not only what falls from overhead: it comes in through a
+// window or a doorway along the slanted directions and lands on the floor
+// and the walls it can reach, and stops at a roof or a wall. Each direction
+// counts by how much the surface faces it; out in the open the answer is 1.
+// The point is first moved off its surface (uSkyCoverParams.w) so that a
+// wall's inside face is tested inside the room.
 float fioSkyVisible(highp vec3 pos, vec3 ng) {
     if (uSkyCoverParams.z <= 0.0) return 1.0;
-    highp vec4 clip = uSkyMatrix * vec4(pos + ng * uSkyCoverParams.w, 1.0);
-    highp vec3 s = clip.xyz * 0.5 + 0.5;
-    if (s.x <= 0.0 || s.x >= 1.0 || s.y <= 0.0 || s.y >= 1.0) return 1.0;
-    highp float z = s.z - uSkyCoverParams.y;
+    highp vec4 where = vec4(pos + ng * uSkyCoverParams.w, 1.0);
     float r = uSkyCoverParams.x;
-    float open = texture(uSkyCover, vec3(s.xy, z)) * 2.0;
-    open += texture(uSkyCover, vec3(s.xy + vec2(r, 0.0), z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(-r, 0.0), z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(0.0, r), z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(0.0, -r), z));
-    return open / 6.0;
+    float seen = 0.0;
+    float total = 0.0;
+    for (int i = 0; i < FIO_SKY_DIRECTIONS; i++) {
+        float weight = FIO_SKY_WEIGHTS[i] * max(dot(ng, FIO_SKY_DIRS[i]) + 0.35, 0.0);
+        if (weight <= 0.0) continue;
+        total += weight;
+        highp vec4 clip = uSkyMatrix[i] * where;
+        highp vec3 s = clip.xyz * 0.5 + 0.5;
+        if (s.x <= 0.0 || s.x >= 1.0 || s.y <= 0.0 || s.y >= 1.0) { seen += weight; continue; }
+        highp float z = s.z + uSkyBias[i];
+        float layer = float(i);
+        float open = texture(uSkyCover, vec4(s.xy + vec2(r, r), layer, z))
+                   + texture(uSkyCover, vec4(s.xy + vec2(-r, r), layer, z))
+                   + texture(uSkyCover, vec4(s.xy + vec2(r, -r), layer, z))
+                   + texture(uSkyCover, vec4(s.xy + vec2(-r, -r), layer, z));
+        seen += weight * open * 0.25;
+    }
+    return total > 0.0 ? seen / total : 0.0;
 }
 float fioCloudShadow(highp vec3 pos) {
     if (uAtmosphere.z <= 0.0) return 1.0;
@@ -291,6 +321,8 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
               vec3 emission, float src);
 void fioLegacyMain();
 """
+
+SURFACE_GLSL = SURFACE_GLSL_TEMPLATE.replace("FIO_SKY_CONSTANTS", _SKY_CONSTANTS)
 
 SURFACE_SHADE_GLSL = """
 // Light a surface. *src* is the surface's own opacity.

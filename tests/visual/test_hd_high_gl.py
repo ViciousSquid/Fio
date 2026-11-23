@@ -117,33 +117,51 @@ def test_an_indoor_map_is_as_bright_as_classic_shows_it():
     assert 0.6 < ratio < 1.6, means
 
 
-def test_sky_light_lands_only_where_the_sky_is_overhead():
-    """A floor half under a roof, under a sky with no lamps: the open half is
-    lit by the sky, the roofed half is not -- and no light leaks across."""
-    from engine import hd_graphics
+def _room(window):
+    """A closed room on open ground under the sky: floor, four walls, a roof.
+    With *window*, the +x wall has a gap in its middle."""
     from tests.helpers.worlds import box_brush
-    brushes = [box_brush("floor", (0, -16, 0), (4096, 32, 4096)),
-               box_brush("roof", (-1024, 400, 0), (2048, 32, 4096))]
+    brushes = [box_brush("ground", (0, -16, 0), (4096, 32, 4096)),
+               box_brush("roof", (0, 416, 0), (1088, 32, 1088)),
+               box_brush("west", (-528, 200, 0), (32, 400, 1088)),
+               box_brush("north", (0, 200, -528), (1024, 400, 32)),
+               box_brush("south", (0, 200, 528), (1024, 400, 32))]
+    if window:
+        brushes += [box_brush("east a", (528, 200, -344), (32, 400, 400)),
+                    box_brush("east b", (528, 200, 344), (32, 400, 400))]
+    else:
+        brushes.append(box_brush("east", (528, 200, 0), (32, 400, 1088)))
+    return brushes
+
+
+def test_daylight_comes_in_at_a_window_and_not_through_a_wall():
+    """Sky light is asked in several directions, not only overhead: a sealed
+    room under the sky is dark inside, the same room with a window has
+    daylight on its floor by the window, and the ground outside is lit."""
+    from engine import hd_graphics
+    seen = {}
+    for label, brushes, eye, target in (
+            ("sealed", _room(False), (-200.0, 300.0, 0.0), (350.0, 0.0, 0.0)),
+            ("window", _room(True), (-200.0, 300.0, 0.0), (350.0, 0.0, 0.0)),
+            ("outside", _room(False), (1400.0, 300.0, 0.0), (1000.0, 0.0, 0.0))):
+        glh.reset_texture_cache()
+        with glh.GLTestContext(160, 120) as context:
+            renderer = glh.make_renderer(_config(), name="HD_High")
+            try:
+                renderer.set_background_image(PANORAMA)
+                renderer.set_hd_sky(hd_graphics.sky_settings({"hd_grain": 0.0}, PANORAMA))
+                pixels = _frame(context, renderer, brushes, [], aspect=160 / 120,
+                                fov_deg=70.0, eye=eye, target=target)
+                assert renderer._env_cover_ready
+                # The floor in the middle of the view.
+                seen[label] = glh.luminance(glh.region(pixels, 0.3, 0.45, 0.7, 0.8)).mean()
+            finally:
+                renderer.cleanup()
     glh.reset_texture_cache()
-    with glh.GLTestContext(240, 120) as context:
-        renderer = glh.make_renderer(_config(), name="HD_High")
-        try:
-            renderer.set_background_image(PANORAMA)
-            renderer.set_hd_sky(hd_graphics.sky_settings({}, PANORAMA))
-            # From the open side's edge, low, looking along the roof's edge:
-            # the roofed floor is on the left, the open floor on the right.
-            pixels = _frame(context, renderer, brushes, [], aspect=2.0, fov_deg=80.0,
-                            eye=(0.0, 200.0, 1800.0), target=(0.0, 0.0, 0.0))
-            if os.environ.get("FIO_TEST_IMAGES"):
-                from PIL import Image
-                Image.fromarray(pixels).save(os.path.join(os.environ["FIO_TEST_IMAGES"], "cover.png"))
-            covered = glh.luminance(glh.region(pixels, 0.05, 0.75, 0.35, 0.95)).mean()
-            open_sky = glh.luminance(glh.region(pixels, 0.65, 0.75, 0.95, 0.95)).mean()
-            assert open_sky > 60.0, open_sky
-            assert covered < open_sky * 0.35, (covered, open_sky)
-        finally:
-            renderer.cleanup()
-    glh.reset_texture_cache()
+    assert seen["outside"] > 80.0, seen
+    assert seen["sealed"] < 25.0, seen                      # nothing leaks in
+    assert seen["window"] > seen["sealed"] * 2.0 + 10.0, seen
+    assert seen["window"] < seen["outside"], seen
 
 
 def test_exposure_follows_the_view_from_under_a_roof_to_under_the_sky():
