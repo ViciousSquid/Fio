@@ -391,3 +391,35 @@ def test_a_few_lamps_do_not_build_a_grid():
         finally:
             renderer.cleanup()
     glh.reset_texture_cache()
+
+
+@pytest.mark.slow
+def test_every_stock_map_draws_with_hd_high(tmp_path):
+    """The stock maps of the golden set, loaded by the real editor started
+    with HD_High, from the editor camera and in Play: every frame is drawn
+    (none blank), in HD (the environment never switched itself off) and no
+    Python error is raised on the way."""
+    import subprocess
+    import sys
+    from PIL import Image
+    from tests.helpers import golden
+    from tests.helpers.paths import REPO_ROOT
+    environment = dict(os.environ, PYTHONHASHSEED="0")
+    environment.pop("QT_QPA_PLATFORM", None)
+    result = subprocess.run(
+        [sys.executable, os.path.join(REPO_ROOT, "tools", "hd_golden.py"),
+         "--dump", str(tmp_path), "--renderer", "HD_High"],
+        cwd=REPO_ROOT, env=environment, capture_output=True, text=True, timeout=2400)
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output[-3000:]
+    assert "Traceback" not in output, output[output.index("Traceback"):][:3000]
+    for sign in ("[Environment] disabled", "sun shadows off", "sky cover off",
+                 "Shader Error", "failed to start"):
+        assert sign not in output, sign
+    with open(tmp_path / "manifest.json") as handle:
+        import json
+        frames = json.load(handle)["frames"]
+    assert len(frames) >= 2 * len(golden.MAPS)
+    for key in frames:
+        pixels = np.asarray(Image.open(tmp_path / (key.replace("/", "__") + ".png")).convert("RGB"))
+        assert not glh.is_blank(pixels), key
