@@ -307,6 +307,7 @@ class PassesMixin:
         gl.glUseProgram(terrain_gl.shader_program)
         self._current_shader = terrain_gl.shader_program
         self._upload_lights_once('terrain', terrain_lights)
+        self._bind_terrain_layers(terrain_gl)
         active_lights_count = len(terrain_lights[1])
         gl.glDisable(gl.GL_CULL_FACE)
         stats = self.render_stats

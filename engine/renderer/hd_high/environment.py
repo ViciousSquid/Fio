@@ -472,9 +472,15 @@ class EnvironmentMixin:
         For the programs that are compiled without the shader loader."""
         if not self.hd or not self.surface_shading:
             return source
-        physical = surface.surface_source(source)
-        if physical is not source:
-            return physical
+        if 'FioLightBlock' not in source:
+            # Not yet through engine.shaders.light_ubo_source, which must
+            # come after: it rewrites the light loops these paths add.
+            physical = surface.surface_source(source)
+            if physical is not source:
+                return physical
+            terrain = surface.terrain_source(source)
+            if terrain is not None:
+                return terrain
         if 'sampler2D behind' in source:
             return source       # redraws the frame's own pixels (portal fade)
         return hdr.classic_source(source)
@@ -528,7 +534,7 @@ class EnvironmentMixin:
         """Give each surface program's samplers their own texture units."""
         if not self.surface_shading:
             return
-        for name in surface.SURFACE_PROGRAMS:
+        for name in surface.SURFACE_PROGRAMS + ('terrain',):
             program = self.shaders.get(name)
             if not program:
                 continue
@@ -540,6 +546,11 @@ class EnvironmentMixin:
                 location = uniforms[sampler]
                 if location != -1:
                     gl.glUniform1i(location, unit)
+            if name == 'terrain':
+                for layer in range(4):
+                    location = gl.glGetUniformLocation(program, "uLayerNormal[%d]" % layer)
+                    if location != -1:
+                        gl.glUniform1i(location, surface.TERRAIN_NORMAL_UNIT + layer)
         gl.glUseProgram(0)
 
     def _env_program(self, name, vertex, fragment):
@@ -702,15 +713,22 @@ class EnvironmentMixin:
         env = self.environment
         lamps = self._env_lamps(config)
         ambient = tuple(float(v) for v in getattr(self.view_distance, 'ambient', (0, 0, 0)))
-        key = (self._env_map_key, ambient, self._env_lamps_key, env.exposure)
+        terrain = config.get('terrain', None)
+        terrain = bool(terrain is not None and getattr(terrain, 'enabled', False))
+        key = (self._env_map_key, ambient, self._env_lamps_key, env.exposure, terrain)
         if key != self._env_exposure_key:
             self._env_exposure_key = key
             own = hd_graphics.scene_light(ambient=tuple(a + 0.1 for a in ambient)) + lamps
             self._env_exposure_indoor = hd_graphics.base_exposure(own, indoor=True)
+            sun, elevation = self._env_sun_rgb, env.sun_elevation
+            if terrain and not sum(sun):
+                # The terrain's own stand-in sun (surface.py).
+                sun = hd_graphics.TERRAIN_SUN_RADIANCE
+                elevation = hd_graphics.TERRAIN_SUN_ELEVATION
             self._env_exposure_outdoor = hd_graphics.base_exposure(
                 hd_graphics.scene_light(
-                    sky_irradiance=self._env_ambient[0], sun_radiance=self._env_sun_rgb,
-                    sun_elevation=env.sun_elevation,
+                    sky_irradiance=self._env_ambient[0], sun_radiance=sun,
+                    sun_elevation=elevation,
                     ambient=tuple(a + 0.1 for a in ambient)))
             # Where no sky can be seen and the frame has no answer, a
             # reflection finds the map's ambient and nothing more: a room's
@@ -1733,6 +1751,27 @@ class EnvironmentMixin:
         if self._env_material_bound.get(shader_name) is not None:
             gl.glUniform4f(uniforms['uMaterial'], 0.0, 0.0, 0.0, 0.0)
             self._env_material_bound[shader_name] = None
+
+    def _bind_terrain_layers(self, terrain_gl):
+        """The terrain layers' normal maps (the companions of its sand,
+        grass, rock and snow textures) on their units, and each layer's
+        roughness, for the terrain program in an HD frame."""
+        if not self._env_active:
+            return
+        uniforms = self.uniforms.get('terrain')
+        if uniforms is None or uniforms['uLayerMaps'] == -1:
+            return
+        bound, rough = [], []
+        for index, name in enumerate(('sand_tex', 'grass_tex', 'rock_tex', 'snow_tex')):
+            texture = int(getattr(terrain_gl, name, 0) or 0)
+            maps = self._material_for(texture) if texture else None
+            gl.glActiveTexture(gl.GL_TEXTURE0 + surface.TERRAIN_NORMAL_UNIT + index)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, maps[0] if maps else 0)
+            bound.append(1.0 if maps else 0.0)
+            rough.append((0.92, 0.9, 0.82, 0.6)[index])    # sand, grass, rock, snow
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform4f(uniforms['uLayerMaps'], *bound)
+        gl.glUniform4f(uniforms['uLayerRough'], *rough)
 
     def _model_surface(self, shader_name, surface):
         """A model draw group's own ``(roughness, metalness)``, or None for

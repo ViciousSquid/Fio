@@ -332,7 +332,12 @@ POINT_LIGHT_GAIN = 3.0
 #: it, a clear one more so, and a night sky hardly at all. Seen from a
 #: lamp-lit room the open part of the map is bright, and the exposure comes
 #: down as the view walks out into it.
-PANORAMA_SKY_GAIN = 8.0
+PANORAMA_SKY_GAIN = 4.0
+#: Terrain under a sky that has no sun of its own is lit by the fixed sun
+#: classic Fio has always lit terrain with (surface.py); this is its light
+#: and height, for the exposure.
+TERRAIN_SUN_RADIANCE = (3.6, 3.15, 2.45)
+TERRAIN_SUN_ELEVATION = 54.0
 #: Emissive surfaces glow at this many times their colour, so that they stay
 #: brighter than the lit surfaces around them and feed the bloom.
 EMISSIVE_GAIN = 5.0

@@ -50,6 +50,7 @@ SURFACE_PROGRAMS = ('lit', 'textured', 'lit_instanced', 'textured_instanced',
 
 #: Sampler uniform -> unit, set once per program (a sampler2DShadow left on
 #: unit 0 beside the diffuse sampler2D is an invalid program state).
+TERRAIN_NORMAL_UNIT = 23       # .. 26: the terrain layers' normal maps
 SURFACE_SAMPLERS = (('uSunShadow', SUN_SHADOW_UNIT), ('uEnvMap', ENV_MAP_UNIT),
                     ('uNormalMap', NORMAL_MAP_UNIT),
                     ('uMaterialMap', MATERIAL_MAP_UNIT), ('uNoise', NOISE_UNIT),
@@ -157,6 +158,12 @@ uniform vec4 uSkyCoverParams;      // x filter radius (uv), y depth bias, z on, 
 uniform vec3 uHazeColor;
 uniform vec4 uHdrFog;              // the map's distance fog colour, in the frame's units; a 1 while it is on
 layout(location = 1) out vec4 FragData;
+// The sun a surface is lit by: the frame's (fioSunBegin), unless a program
+// sets its own before fioShade (the terrain, under a sky with no sun).
+highp vec3 fioSunDir;
+vec3 fioSunColor;
+float fioSunMapped;                // 1: the sun's shadow map applies
+void fioSunBegin() { fioSunDir = uSunDir; fioSunColor = uSunColor; fioSunMapped = 1.0; }
 """ + ENV_GLSL + CLOUD_GLSL + """
 float fioSunTap(highp vec2 base, float u, float v, highp float z) {
     return texture(uSunShadow, vec3(base + vec2(u, v) * uSunShadowParams.x, z));
@@ -295,12 +302,12 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
     vec3 result = diffuse * (sky + fioToLinear(vec3(0.1) + uAmbient)) * occlusion;
 
     // The sun, behind the geometry's own horizon as well as the shadow map's.
-    float facing = dot(ng, uSunDir);
-    if (facing > 0.0 && uSunColor.r + uSunColor.g + uSunColor.b > 0.0) {
-        float lit = fioSunShadow(FragPos, ng) * fioCloudShadow(FragPos)
-                  * smoothstep(0.0, 0.08, facing);
+    float facing = dot(ng, fioSunDir);
+    if (facing > 0.0 && fioSunColor.r + fioSunColor.g + fioSunColor.b > 0.0) {
+        float lit = smoothstep(0.0, 0.08, facing);
+        if (fioSunMapped > 0.5) lit *= fioSunShadow(FragPos, ng) * fioCloudShadow(FragPos);
         if (lit > 0.0)
-            result += fioLight(n, v, uSunDir, diffuse, f0, rough, uSunColor) * lit
+            result += fioLight(n, v, fioSunDir, diffuse, f0, rough, fioSunColor) * lit
                     * mix(1.0, occlusion, 0.5);
     }
     for (int i = 0; i < active_lights && i < FIO_MAX_LIGHTS; i++) {
@@ -357,6 +364,7 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
 _TEXTURED_MAIN = """
 void main() {
     if (uSurfaceMode == 0) { fioLegacyMain(); return; }
+    fioSunBegin();
     vec3 ng = normalize(Normal);
     // A thin, two-sided surface (a flag's cloth) seen from behind.
     if (dot(ng, uFogCamPos - FragPos) < 0.0) ng = -ng;
@@ -413,6 +421,7 @@ void main() {
 _LIT_MAIN = """
 void main() {
     if (uSurfaceMode == 0) { fioLegacyMain(); return; }
+    fioSunBegin();
     vec3 ng = normalize(Normal);
     if (dot(ng, uFogCamPos - FragPos) < 0.0) ng = -ng;
     // An overbright colour is a light source (a glow brush, a neon tube).
@@ -424,6 +433,103 @@ void main() {
     fioShade(albedo, ng, ng, uSurfaceDefault.x, uSurfaceDefault.y, 1.0, emission, FIO_SRC_ALPHA);
 }
 """
+
+#: The terrain's main in an HD frame. Under a sky it is shaded like any other
+#: surface: its layers' colour as albedo, their normal maps, the frame's sun
+#: (or, where the sky has none, the fixed sun classic Fio has always lit
+#: terrain with), sky light, shadows and haze. Without a sky, or in one of
+#: the stylised looks (stepped light, dither), it is the classic terrain,
+#: kept as it is through the tone curve.
+_TERRAIN_MAIN = """
+uniform sampler2D uLayerNormal[4];     // sand, grass, rock, snow
+uniform vec4 uLayerMaps;               // which of them are bound
+uniform vec4 uLayerRough;
+void main() {
+    bool sky = uAmbientSky.r + uAmbientSky.g + uAmbientSky.b
+             + uSunColor.r + uSunColor.g + uSunColor.b > 0.0;
+    if (uSurfaceMode == 0 || !sky || uLightSteps > 0 || uDither > 0) {
+        fioLegacyMain();
+        if (fioHdr.x > 0.5) {
+            FragColor.rgb = fioDisplayToScene(FragColor.rgb);
+            FragData = vec4(0.5, 0.5, 1.0, 1.0);
+        }
+        return;
+    }
+    fioSunBegin();
+    if (uSunColor.r + uSunColor.g + uSunColor.b <= 0.0) {
+        fioSunDir = normalize(vec3(0.4, 0.7, 0.3));
+        fioSunColor = vec3(3.6, 3.15, 2.45);
+        fioSunMapped = 0.0;
+    }
+FIO_TERRAIN_COLOUR
+    float rough = 0.9;
+    vec3 n = norm;
+    if (uColorMode == 0 && use_textures == 1) {
+        vec4 w = layerWeights(FragPos, 1.0 - max(smoothNorm.y, 0.0));
+        rough = dot(w, uLayerRough);
+        vec3 tn = vec3(0.0);
+        if (uLayerMaps.x > 0.5) tn += w.x * (texture(uLayerNormal[0], TexCoords * 1.5).xyz * 2.0 - 1.0);
+        else tn.z += w.x;
+        if (uLayerMaps.y > 0.5) tn += w.y * (texture(uLayerNormal[1], TexCoords * 1.0).xyz * 2.0 - 1.0);
+        else tn.z += w.y;
+        if (uLayerMaps.z > 0.5) tn += w.z * (texture(uLayerNormal[2], TexCoords * 0.5).xyz * 2.0 - 1.0);
+        else tn.z += w.z;
+        if (uLayerMaps.w > 0.5) tn += w.w * (texture(uLayerNormal[3], TexCoords * 0.8).xyz * 2.0 - 1.0);
+        else tn.z += w.w;
+        // The layers' own axes of u and v across the ground.
+        highp vec3 dp1 = dFdx(FragPos);
+        highp vec3 dp2 = dFdy(FragPos);
+        highp vec2 dx = dFdx(TexCoords);
+        highp vec2 dy = dFdy(TexCoords);
+        highp float det = dx.x * dy.y - dx.y * dy.x;
+        if (abs(det) > 1e-16) {
+            highp vec3 pu = (dp1 * dy.y - dp2 * dx.y) / det;
+            highp vec3 pv = (dp2 * dx.x - dp1 * dy.x) / det;
+            highp float lu = dot(pu, pu);
+            highp float lv = dot(pv, pv);
+            if (lu > 1e-10 && lv > 1e-10)
+                n = normalize(pu * (tn.x * inversesqrt(lu)) + pv * (tn.y * inversesqrt(lv))
+                              + norm * max(tn.z, 0.05));
+        }
+    }
+    // The classic terrain lifts its colours' saturation a little; so here.
+    float grey = dot(texColor, vec3(0.299, 0.587, 0.114));
+    texColor = clamp(mix(vec3(grey), texColor, 1.25), 0.0, 1.0);
+    fioShade(fioToLinear(texColor), n, faceNorm, rough, 0.0, 1.0, vec3(0.0), 1.0);
+}
+"""
+
+_TERRAIN_SPLIT = "    // ---- Lighting -----"
+
+
+def terrain_source(source):
+    """The terrain's fragment shader with the HD path added (see
+    :data:`_TERRAIN_MAIN`), or None when it does not have the shape this
+    expects. *source* has been through engine.shaders.light_ubo_source."""
+    from engine.renderer.hd_high import hdr
+    if not source or 'fioLegacyMain' in source or 'terrainPaintMap' not in source:
+        return None
+    main = _MAIN_RE.search(source)
+    lights = re.search(r"Light\s+lights\s*\[\s*(\d+)\s*\]", source)
+    split = source.find(_TERRAIN_SPLIT)
+    if (main is None or lights is None or split < main.end() or not _OUT_RE.search(source)
+            or 'calcPointShadow' not in source or 'fogFactor' not in source):
+        return None
+    colour = source[main.end():split]          # everything up to the lighting
+    head = source[:main.start()]
+    # The classic conversion's block goes after the version and precision lines.
+    at = 0
+    for pattern in (hdr._VERSION_RE, hdr._PRECISION_RE):
+        found = pattern.search(head, at)
+        if found is not None:
+            at = max(at, found.end())
+    head = head[:at] + hdr.CLASSIC_GLSL + head[at:]
+    body = (head + SURFACE_GLSL
+            + _TERRAIN_MAIN.replace('FIO_TERRAIN_COLOUR', colour)
+            + "void fioLegacyMain() {" + source[main.end():]
+            + SURFACE_SHADE_GLSL.replace('FIO_MAX_LIGHTS', lights.group(1)))
+    return _OUT_RE.sub("layout(location = 0) out vec4 FragColor;", body, count=1)
+
 
 _MAIN_RE = re.compile(r"void\s+main\s*\(\s*(?:void)?\s*\)\s*\{")
 _OUT_RE = re.compile(r"^out\s+vec4\s+FragColor\s*;", re.MULTILINE)
