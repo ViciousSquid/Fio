@@ -60,7 +60,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest "numpy==2.5.3" "PyGLM==2.8.3" "pygame-ce==2.5.8" "Pillow==11.3.0" "PyOpenGL==3.1.10"
+          python -m pip install pytest "numpy==2.5.3" "PyGLM==2.8.3" "pygame-ce==2.5.8" "Pillow==11.3.0"
       - name: Run fast core tests that do not need Qt or a GPU
         shell: bash
         env:
@@ -164,7 +164,7 @@ jobs:
         run: |
           call "%VCVARS%" arm64
           python -m pip install --upgrade pip
-          python -m pip install pytest "numpy==2.5.3" "PyGLM==2.8.3" "pygame-ce==2.5.8" "Pillow==11.3.0" "PyOpenGL==3.1.10"
+          python -m pip install pytest "numpy==2.5.3" "PyGLM==2.8.3" "pygame-ce==2.5.8" "Pillow==11.3.0"
       - name: Run fast core tests that do not need Qt or a GPU
         shell: bash
         env:
