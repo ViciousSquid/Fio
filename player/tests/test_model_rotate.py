@@ -1,15 +1,15 @@
-"""A spinning model Prop draws on the player as it does on the desktop.
+"""A rotating model Prop draws on the player as it does on the desktop.
 
 The player builds each model's matrix itself (glmath.item_matrix) rather than
-reading the entity table's; the spin must land in the same place in it:
-``T @ R(rotation) @ R_spin(axis, angle) @ S``. No GPU: the shadow pass runs
+reading the entity table's; the rotation must land in the same place in it:
+``T @ R(rotation) @ R_rotate(axis, angle) @ S``. No GPU: the shadow pass runs
 against a recording stand-in for GL.
 """
 from pathlib import Path
 
 import numpy as np
 
-from engine.model_spin import spin_matrix
+from engine.model_rotate import rotate_matrix
 from engine.prop_entity import Prop
 from player.render import glmath, uniforms
 from player.render.shadows import ShadowAtlas
@@ -20,8 +20,8 @@ PLACED = {'model_path': 'models/reel.glb', 'rotation': (20.0, 35.0, -15.0),
 
 def _prop(angle=0.0, axis=2, pos=(10.0, 4.0, -6.0), **properties):
     prop = Prop(list(pos), dict(PLACED, **properties))
-    prop._spin_angle = angle
-    prop._spin_axis = axis
+    prop._rotate_angle = angle
+    prop._rotate_axis = axis
     return prop
 
 
@@ -36,10 +36,10 @@ def _placed_rotation(rotation):
     return ry @ rx @ rz
 
 
-def test_spin_turns_the_model_in_its_own_frame_after_scale():
+def test_rotate_turns_the_model_in_its_own_frame_after_scale():
     prop = _prop(angle=90.0, axis=2)
     model = glmath.item_matrix(prop)
-    expected = (_placed_rotation(PLACED['rotation']) @ spin_matrix(2, 90.0)
+    expected = (_placed_rotation(PLACED['rotation']) @ rotate_matrix(2, 90.0)
                 @ np.diag(PLACED['scale']))
     np.testing.assert_allclose(model[:3, :3], expected, atol=1e-5)
     np.testing.assert_allclose(model[:3, 3], prop.pos, atol=1e-5)
@@ -47,13 +47,13 @@ def test_spin_turns_the_model_in_its_own_frame_after_scale():
     assert model.dtype == np.float32
 
 
-def test_each_axis_matches_the_shared_spin_matrix():
+def test_each_axis_matches_the_shared_rotate_matrix():
     rotation = _placed_rotation(PLACED['rotation'])
     for axis in (0, 1, 2):
         model = glmath.item_matrix(_prop(angle=-37.5, axis=axis))
         np.testing.assert_allclose(
             model[:3, :3],
-            rotation @ spin_matrix(axis, -37.5) @ np.diag(PLACED['scale']),
+            rotation @ rotate_matrix(axis, -37.5) @ np.diag(PLACED['scale']),
             atol=1e-5)
 
 
@@ -67,7 +67,7 @@ def test_player_matrix_equals_the_desktop_entity_tables():
         np.testing.assert_allclose(player[:3, :3], desktop[:3, :3], atol=1e-5)
 
 
-def test_no_spin_is_exactly_the_placed_matrix():
+def test_no_rotation_is_exactly_the_placed_matrix():
     for prop in (_prop(angle=0.0), _prop(angle=0.0, axis=0), Prop([1, 2, 3], dict(PLACED))):
         old = glmath.entity_matrix(prop.pos, prop.properties)
         np.testing.assert_array_equal(glmath.item_matrix(prop), old)
@@ -77,7 +77,7 @@ def test_no_spin_is_exactly_the_placed_matrix():
         properties = dict(PLACED)
     np.testing.assert_array_equal(
         glmath.item_matrix(Item()), glmath.entity_matrix(Item.pos, Item.properties))
-    assert glmath.spin_of(Item()) == (2, 0.0)
+    assert glmath.rotation_of(Item()) == (2, 0.0)
 
 
 class _RecordingGL:
@@ -125,7 +125,7 @@ def test_shadows_cast_from_the_spun_matrix():
         np.testing.assert_allclose(model, expected, atol=1e-6)
 
 
-def test_every_model_matrix_in_the_renderer_carries_the_spin():
+def test_every_model_matrix_in_the_renderer_carries_the_rotation():
     """The colour pass, its culling and the shadow casters build a model's
     matrix through item_matrix; a bare entity_matrix(item.pos,
     item.properties) would draw the model unspun."""

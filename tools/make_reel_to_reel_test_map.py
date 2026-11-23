@@ -1,12 +1,12 @@
-"""Build maps/Reel_To_Reel_Test.json: the bundled reel-to-reel pack, spinning.
+"""Build maps/Reel_To_Reel_Test.json: the bundled reel-to-reel pack, its reels rotating.
 
     python tools/make_reel_to_reel_test_map.py
 
 A small machine room with the two mainframes of
 ``assets/bundled_reel_to_reel.fiopak`` against its back wall, two tape reels
 on each. The wide machine's reels run from the start of Play; the button left
-of the tall machine starts and stops its reels (ToggleSpin), the button right
-of the wide machine reverses that machine's reels (ReverseSpin).
+of the tall machine starts and stops its reels (ToggleRotate), the button right
+of the wide machine reverses that machine's reels (ReverseRotate).
 
 The reels sit on the hubs modelled on each mainframe's front (+Z) face: a
 turntable disc, a collar and a spindle behind the smoked window. A reel's back
@@ -39,7 +39,7 @@ HUBS = {
     TALL: {'hubs': ((-22.0, 151.0), (22.0, 151.0)), 'collar_front': 33.7},
     WIDE: {'hubs': ((-27.0, 142.0), (27.0, 142.0)), 'collar_front': 32.5},
 }
-#: The reel model's back face, local z (its thin axis, the spin axis).
+#: The reel model's back face, local z (its thin axis, the rotate axis).
 REEL_BACK = -3.35
 
 #: Clockwise from the room (+Z looks back at the viewer): negative about +Z.
@@ -90,7 +90,7 @@ def mainframe(name, path, x, back_z, foot_y):
 
 
 def reels(frame, colours, names, autostart):
-    """Two reels on *frame*'s hubs, facing the room, Spin on."""
+    """Two reels on *frame*'s hubs, facing the room, Rotate on (Continuous)."""
     hubs = HUBS[frame.properties['model_path']]
     z = round(frame.pos[2] + hubs['collar_front'] - REEL_BACK, 3)
     out = []
@@ -101,11 +101,12 @@ def reels(frame, colours, names, autostart):
             properties={
                 'name': name, 'id': stable_id(name),
                 # Decoration on a solid machine, out of reach: no hull to
-                # keep in step with the spin.
+                # keep in step with the rotation.
                 'no_collision': True,
-                'spin_enabled': True, 'spin_axis': 'auto',
-                'spin_speed': speed, 'spin_ramp': 1.0,
-                'spin_autostart': autostart,
+                'rotate_enabled': True, 'rotate_mode': 'continuous',
+                'rotate_axis': 'auto',
+                'rotate_speed': speed, 'rotate_ease': 1.0,
+                'rotate_autostart': autostart,
             }))
     return out
 
@@ -128,8 +129,8 @@ state.load_from_data({'brushes': [dict(b) for b in brushes],
                       'things': [t.to_dict() for t in things]}, save_undo=False)
 
 WIRING = {
-    'Toggle_Tall_Reels': ('ToggleSpin', tall_reels),
-    'Reverse_Wide_Reels': ('ReverseSpin', wide_reels),
+    'Toggle_Tall_Reels': ('ToggleRotate', tall_reels),
+    'Reverse_Wide_Reels': ('ReverseRotate', wide_reels),
 }
 for brush in state.brushes:
     if brush.get('name') in WIRING:

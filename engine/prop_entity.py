@@ -13,7 +13,7 @@ is read from maps as one (see :data:`LEGACY_MODEL_DEFAULTS`).
 from __future__ import annotations
 
 from engine.change_journal import TrackedAttribute
-from engine.model_spin import SPIN_DEFAULTS
+from engine.model_rotate import ROTATE_DEFAULTS
 from engine.items import DEFAULT_DEFINITIONS, ITEM_IDS
 
 try:
@@ -133,8 +133,8 @@ PROP_DEFAULTS = {
     'disabled': False,
     'io_enabled': True,
 
-    # Animation: a model's spin (engine.model_spin; the Animation tab).
-    **SPIN_DEFAULTS,
+    # Animation: a model's Rotate (engine.model_rotate; the Animation tab).
+    **ROTATE_DEFAULTS,
 
     # Model representation. model_path is deliberately not a default mesh: a
     # billboard Prop must not collide as one (see __init__).
@@ -317,10 +317,11 @@ class Prop(_ThingBase):
     #: Runtime render state the projection resolves; assignment journals it.
     _respawn_fade_alpha = TrackedAttribute(1.0)
     _carry_sprite_yaw = TrackedAttribute(None)
-    #: The spin animation's angle (degrees) and model axis (0, 1, 2),
-    #: advanced during Play by PropSession; 0 / Z in the editor.
-    _spin_angle = TrackedAttribute(0.0)
-    _spin_axis = TrackedAttribute(2)
+    #: The Rotate animation's angle (degrees) and model axis (0, 1, 2),
+    #: driven during Play by PropSession and by the Animation tab's
+    #: Preview; 0 / Z otherwise.
+    _rotate_angle = TrackedAttribute(0.0)
+    _rotate_axis = TrackedAttribute(2)
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)

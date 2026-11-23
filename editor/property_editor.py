@@ -2411,7 +2411,7 @@ class PropertyEditor(QWidget):
             # widgets (a placed model is a Prop: the commonest selection).
             self._add_deferred_tab(lambda t=thing: self._create_prop_physics_tab(t),
                                    "Physics")
-            # Animation (a model's spin): on every Prop page, built on first
+            # Animation (a model's Rotate): on every Prop page, built on first
             # showing like Physics, and hidden unless the Prop shows a model.
             # Always present, so the tabs after it keep their indexes, and
             # switching Representation shows or hides it without a rebuild
@@ -3043,7 +3043,7 @@ class PropertyEditor(QWidget):
 
     def _refresh_animation_tab(self, thing):
         """Show the page's Animation tab only while *thing* shows a model;
-        hidden, a spin preview of it stops."""
+        hidden, a Rotate preview of it stops."""
         holder = self._widgets.get('animation_tab')
         tabs = self.tab_widget
         if holder is None or tabs is None:
@@ -3053,98 +3053,127 @@ class PropertyEditor(QWidget):
             return
         shown = self._shows_animation_tab(thing)
         tabs.setTabVisible(index, shown)
-        preview = getattr(self.editor, 'spin_preview', None)
+        preview = getattr(self.editor, 'rotate_preview', None)
         if not shown and preview is not None and preview.prop is thing:
-            self.editor.stop_spin_preview()
+            self.editor.stop_rotate_preview()
 
-    #: The Animation tab's Axis choices, in the order of model_spin.SPIN_AXES.
-    SPIN_AXIS_LABELS = ("Auto (thinnest side)", "X", "Y", "Z")
+    #: The Animation tab's Axis and Mode choices, in the order of
+    #: model_rotate.ROTATE_AXES and ROTATE_MODES.
+    ROTATE_AXIS_LABELS = ("Auto (thinnest side)", "X", "Y", "Z")
+    ROTATE_MODE_LABELS = ("Continuous", "Swing", "Turn to angle")
 
     def _create_prop_animation_tab(self, thing):
-        """A model Prop's Animation tab: its spin, and a Preview of it."""
+        """A model Prop's Animation tab: its Rotate, and a Preview of it."""
         w = QWidget(self.tab_widget)
         layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(4)
         form = QFormLayout()
         form.setSpacing(4)
-        self._build_spin_ui(form, thing)
-        section = CollapsibleSection("Spin", expanded=True, count=form.rowCount())
+        self._build_rotate_ui(form, thing)
+        section = CollapsibleSection("Rotate", expanded=True, count=form.rowCount())
         section.addLayout(form)
         layout.addWidget(section)
         layout.addStretch()
         return w
 
-    def _build_spin_ui(self, form, thing):
-        """The Spin rows (engine.model_spin): off by default; on, the model
-        turns about its own axis in Play -- at the start, or when an I/O
-        input starts it -- spinning up and down over the ramp."""
-        from engine.model_spin import (SPIN_DEFAULTS, SPIN_AXES,
-                                       MAX_SPIN_SPEED, MAX_SPIN_RAMP)
+    def _build_rotate_ui(self, form, thing):
+        """The Rotate rows (engine.model_rotate): off by default; on, the
+        model turns about its own axis in Play -- continuously, swinging or
+        turning to an angle -- from the start, or when an I/O input starts
+        it."""
+        from engine.model_rotate import (ROTATE_DEFAULTS, ROTATE_AXES, ROTATE_MODES,
+                                         MAX_ROTATE_SPEED, MAX_ROTATE_ANGLE,
+                                         MAX_ROTATE_EASE, CONTINUOUS, SWING, TURN,
+                                         rotate_mode)
         props = thing.properties
 
         def number(key):
             try:
-                value = float(props.get(key, SPIN_DEFAULTS[key]))
+                value = float(props.get(key, ROTATE_DEFAULTS[key]))
             except (TypeError, ValueError):
-                return SPIN_DEFAULTS[key]
-            return value if math.isfinite(value) else SPIN_DEFAULTS[key]
+                return ROTATE_DEFAULTS[key]
+            return value if math.isfinite(value) else ROTATE_DEFAULTS[key]
 
-        spin_cb = _make_checkbox("Spin", bool(props.get('spin_enabled', False)),
-                                 None, _Style.CHECKBOX)
-        spin_cb.setToolTip(
-            "The model can spin about one of its own axes -- a reel on its "
-            "hub, a fan, a wheel. It spins in Play when Spinning at start is "
-            "on, or when an I/O input starts it.")
-        form.addRow("", spin_cb)
+        rotate_cb = _make_checkbox("Rotate", bool(props.get('rotate_enabled', False)),
+                                   None, _Style.CHECKBOX)
+        rotate_cb.setToolTip(
+            "The model rotates about one of its own axes in Play -- round and "
+            "round, swinging back and forth, or turning to an angle -- from the "
+            "start, or when an I/O input starts it.")
+        form.addRow("", rotate_cb)
 
-        labels = self.SPIN_AXIS_LABELS
-        axis = str(props.get('spin_axis', 'auto')).lower()
-        if axis not in SPIN_AXES:
+        mode_labels = self.ROTATE_MODE_LABELS
+        mode = rotate_mode(props)
+        mode_combo = _make_combo(
+            list(mode_labels), mode_labels[ROTATE_MODES.index(mode)],
+            tooltip="Continuous: round and round (a fan, a wheel, a reel).\n"
+                    "Swing: back and forth across Angle, centred on how it was "
+                    "placed (a CCTV camera, a sign, a pendulum).\n"
+                    "Turn to angle: turns by Angle and stops; again, it turns "
+                    "back (a valve, a lever, a hatch).")
+        form.addRow("Mode:", mode_combo)
+
+        labels = self.ROTATE_AXIS_LABELS
+        axis = str(props.get('rotate_axis', 'auto')).lower()
+        if axis not in ROTATE_AXES:
             axis = 'auto'
         axis_combo = _make_combo(
-            list(labels), labels[SPIN_AXES.index(axis)],
-            tooltip="The model's own axis it spins about. Auto: its thinnest "
-                    "side -- a reel's, a fan's or a wheel's hub.")
+            list(labels), labels[ROTATE_AXES.index(axis)],
+            tooltip="The model's own axis it rotates about. Auto: its thinnest "
+                    "side -- a reel's, a fan's, a wheel's or a valve's hub.")
         form.addRow("Axis:", axis_combo)
 
         speed_spin = _make_spin(
-            number('spin_speed'), -MAX_SPIN_SPEED, MAX_SPIN_SPEED,
+            number('rotate_speed'), -MAX_ROTATE_SPEED, MAX_ROTATE_SPEED,
             suffix=" °/s", decimals=1, step=15.0,
-            tooltip="Degrees a second at full speed. Negative spins the "
-                    "other way.")
+            tooltip="Degrees a second. Continuous: its full speed, negative "
+                    "turns the other way. Swing and Turn: how fast it moves.")
         form.addRow("Speed:", speed_spin)
 
-        ramp_spin = _make_spin(
-            number('spin_ramp'), 0.0, MAX_SPIN_RAMP, suffix=" s", decimals=2,
+        angle_label = QLabel("Angle:")
+        angle_spin = _make_spin(
+            number('rotate_angle'), -MAX_ROTATE_ANGLE, MAX_ROTATE_ANGLE,
+            suffix=" °", decimals=1, step=15.0,
+            tooltip="Swing: the whole arc it sweeps, centred on how it was "
+                    "placed. Turn to angle: how far it turns (negative: the "
+                    "other way).")
+        form.addRow(angle_label, angle_spin)
+
+        ease_label = QLabel("Ease in / out:")
+        ease_spin = _make_spin(
+            number('rotate_ease'), 0.0, MAX_ROTATE_EASE, suffix=" s", decimals=2,
             step=0.1,
-            tooltip="Seconds to spin up to full speed, and to coast down to a "
-                    "stop. 0: starts and stops at once.")
-        form.addRow("Spin-up / down:", ramp_spin)
+            tooltip="Seconds to get up to speed when started and to come to "
+                    "rest when stopped. 0: at once. (Turn to angle always "
+                    "eases in and out.)")
+        form.addRow(ease_label, ease_spin)
 
         autostart_cb = _make_checkbox(
-            "Spinning at start", bool(props.get('spin_autostart', False)),
+            "Rotating at start", bool(props.get('rotate_autostart', False)),
             None, _Style.CHECKBOX)
         autostart_cb.setToolTip(
-            "Spinning at full speed from the moment Play starts. Off, it "
-            "waits for a StartSpin or ToggleSpin input.")
+            "Rotating from the moment Play starts (Turn to angle: already "
+            "turned). Off, it waits for a StartRotate or ToggleRotate input.")
         form.addRow("", autostart_cb)
 
         note = QLabel(
-            "In Play, the I/O inputs StartSpin, StopSpin, ToggleSpin, "
-            "ReverseSpin and SetSpinSpeed control it, and the outputs "
-            "OnSpinStarted and OnSpinStopped fire as it starts and stops.")
+            "In Play, the I/O inputs StartRotate, StopRotate, ToggleRotate, "
+            "ReverseRotate and SetRotateSpeed control it, and the outputs "
+            "OnRotateStarted and OnRotateStopped fire as it starts and comes "
+            "to rest.")
         note.setWordWrap(True)
         note.setStyleSheet(
             "QLabel { color: #88AAFF; font-style: italic; padding: 4px; }")
         form.addRow("", note)
 
-        preview_btn = self._preview_button("▶ Preview Spin", self.toggle_spin_preview)
+        preview_btn = self._preview_button("▶ Preview Rotate", self.toggle_rotate_preview)
         preview_btn.setToolTip(
-            "Spin the model in the 3D view, as it will in Play. Stops when "
-            "pressed again, the selection changes, the map is saved or Play "
-            "starts; the model goes back as placed.")
-        preview = getattr(self.editor, 'spin_preview', None)
+            "Rotate the model in the 3D view, as it will in Play (Turn to "
+            "angle: there and back again). Stops when pressed again, the "
+            "selection changes, the map is saved or Play starts; the model "
+            "goes back as placed.")
+        preview = getattr(self.editor, 'rotate_preview', None)
         if preview is not None and preview.prop is thing:
             # Rebuilt while its preview runs: the button shows it running.
             preview_btn.blockSignals(True)
@@ -3154,49 +3183,69 @@ class PropertyEditor(QWidget):
         form.addRow("", preview_btn)
 
         self._widgets.update({
-            'spin_enabled_cb': spin_cb,
-            'spin_axis_combo': axis_combo,
-            'spin_speed_spin': speed_spin,
-            'spin_ramp_spin': ramp_spin,
-            'spin_autostart_cb': autostart_cb,
-            'spin_preview_btn': preview_btn,
+            'rotate_enabled_cb': rotate_cb,
+            'rotate_mode_combo': mode_combo,
+            'rotate_axis_combo': axis_combo,
+            'rotate_speed_spin': speed_spin,
+            'rotate_angle_spin': angle_spin,
+            'rotate_ease_spin': ease_spin,
+            'rotate_autostart_cb': autostart_cb,
+            'rotate_preview_btn': preview_btn,
         })
-        rows = (axis_combo, speed_spin, ramp_spin, autostart_cb, preview_btn)
+        rows = (mode_combo, axis_combo, speed_spin, angle_label, angle_spin,
+                ease_label, ease_spin, autostart_cb, preview_btn)
 
         def previewing():
-            preview = getattr(self.editor, 'spin_preview', None)
+            preview = getattr(self.editor, 'rotate_preview', None)
             return (preview is not None and preview.active
                     and preview.prop is self.current_object)
 
         def refresh():
-            on = spin_cb.isChecked()
+            on = rotate_cb.isChecked()
             for widget in rows:
                 widget.setEnabled(on)
+            chosen = ROTATE_MODES[mode_labels.index(mode_combo.currentText())] \
+                if mode_combo.currentText() in mode_labels else CONTINUOUS
+            # Angle: Swing's arc, Turn's angle. Ease: Continuous and Swing.
+            angle_label.setText("Swing arc:" if chosen == SWING else "Turn angle:")
+            for widget in (angle_label, angle_spin):
+                widget.setVisible(chosen != CONTINUOUS)
+            for widget in (ease_label, ease_spin):
+                widget.setVisible(chosen != TURN)
 
-        def on_spin(checked):
-            self.update_object_prop('spin_enabled', bool(checked))
+        def on_rotate(checked):
+            self.update_object_prop('rotate_enabled', bool(checked))
             if not checked and previewing():
-                self.editor.stop_spin_preview()
+                self.editor.stop_rotate_preview()
             refresh()
+
+        def on_mode(label):
+            if label not in mode_labels:
+                return
+            self.update_object_prop('rotate_mode', ROTATE_MODES[mode_labels.index(label)])
+            refresh()           # the running preview restarts in the new mode
 
         def on_axis(label):
             if label not in labels:
                 return
-            self.update_object_prop('spin_axis', SPIN_AXES[labels.index(label)])
+            self.update_object_prop('rotate_axis', ROTATE_AXES[labels.index(label)])
             if previewing():
                 # The axis is chosen as a preview starts (Auto measures the
                 # model): start again about the new one.
-                self.editor.start_spin_preview(self.current_object)
+                self.editor.start_rotate_preview(self.current_object)
 
-        # Speed and Ramp are read by the preview every tick.
-        spin_cb.toggled.connect(on_spin)
+        # Speed, Angle and Ease are read by the preview every tick.
+        rotate_cb.toggled.connect(on_rotate)
+        mode_combo.currentTextChanged.connect(on_mode)
         axis_combo.currentTextChanged.connect(on_axis)
         speed_spin.valueChanged.connect(
-            lambda v: self.update_object_prop('spin_speed', float(v)))
-        ramp_spin.valueChanged.connect(
-            lambda v: self.update_object_prop('spin_ramp', float(v)))
+            lambda v: self.update_object_prop('rotate_speed', float(v)))
+        angle_spin.valueChanged.connect(
+            lambda v: self.update_object_prop('rotate_angle', float(v)))
+        ease_spin.valueChanged.connect(
+            lambda v: self.update_object_prop('rotate_ease', float(v)))
         autostart_cb.toggled.connect(
-            lambda checked: self.update_object_prop('spin_autostart', bool(checked)))
+            lambda checked: self.update_object_prop('rotate_autostart', bool(checked)))
         refresh()
 
     def _build_effect_ui(self, form, thing):
@@ -6642,20 +6691,20 @@ class PropertyEditor(QWidget):
                     btn.setText("▶ Preview Door")
                 self.editor.stop_mover_preview()
 
-    def toggle_spin_preview(self, checked):
-        """The Animation tab's Preview button: spin the model in the 3D view."""
+    def toggle_rotate_preview(self, checked):
+        """The Animation tab's Preview button: rotate the model in the 3D view."""
         if not self.editor:
             return
-        btn = self._widgets.get('spin_preview_btn')
+        btn = self._widgets.get('rotate_preview_btn')
         if checked:
             if btn:
                 btn.setText("■ Stop Preview")
-            if not self.editor.start_spin_preview(self.current_object):
-                self.editor.stop_spin_preview()     # nothing to spin: button up
+            if not self.editor.start_rotate_preview(self.current_object):
+                self.editor.stop_rotate_preview()   # nothing to rotate: button up
         else:
             if btn:
-                btn.setText("▶ Preview Spin")
-            self.editor.stop_spin_preview()
+                btn.setText("▶ Preview Rotate")
+            self.editor.stop_rotate_preview()
 
     def on_respawn_toggled(self, state):
         collect_respawns = bool(state)

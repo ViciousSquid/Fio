@@ -739,32 +739,32 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('prop', 'wake', prop_wake)
     io_manager.register_input_handler('prop', 'drop', prop_drop)
 
-    # Spin animation (engine.model_spin; the Prop's Animation tab). The
-    # Prop runtime owns the spin state; a model without Spin ignores these.
-    def prop_start_spin(entity, param, logic):
-        logic.prop_runtime.start_spin(entity)
+    # Rotate animation (engine.model_rotate; the Prop's Animation tab). The
+    # Prop runtime owns the motion; a model without Rotate ignores these.
+    def prop_start_rotate(entity, param, logic):
+        logic.prop_runtime.start_rotate(entity)
 
-    def prop_stop_spin(entity, param, logic):
-        logic.prop_runtime.stop_spin(entity)
+    def prop_stop_rotate(entity, param, logic):
+        logic.prop_runtime.stop_rotate(entity)
 
-    def prop_toggle_spin(entity, param, logic):
-        logic.prop_runtime.toggle_spin(entity)
+    def prop_toggle_rotate(entity, param, logic):
+        logic.prop_runtime.toggle_rotate(entity)
 
-    def prop_reverse_spin(entity, param, logic):
-        logic.prop_runtime.reverse_spin(entity)
+    def prop_reverse_rotate(entity, param, logic):
+        logic.prop_runtime.reverse_rotate(entity)
 
-    def prop_set_spin_speed(entity, param, logic):
+    def prop_set_rotate_speed(entity, param, logic):
         try:
             speed = float(param)
         except (TypeError, ValueError):
             return
-        logic.prop_runtime.set_spin_speed(entity, speed)
+        logic.prop_runtime.set_rotate_speed(entity, speed)
 
-    io_manager.register_input_handler('prop', 'startspin', prop_start_spin)
-    io_manager.register_input_handler('prop', 'stopspin', prop_stop_spin)
-    io_manager.register_input_handler('prop', 'togglespin', prop_toggle_spin)
-    io_manager.register_input_handler('prop', 'reversespin', prop_reverse_spin)
-    io_manager.register_input_handler('prop', 'setspinspeed', prop_set_spin_speed)
+    io_manager.register_input_handler('prop', 'startrotate', prop_start_rotate)
+    io_manager.register_input_handler('prop', 'stoprotate', prop_stop_rotate)
+    io_manager.register_input_handler('prop', 'togglerotate', prop_toggle_rotate)
+    io_manager.register_input_handler('prop', 'reverserotate', prop_reverse_rotate)
+    io_manager.register_input_handler('prop', 'setrotatespeed', prop_set_rotate_speed)
 
     # ==========================================================================
     # LOGIC_RELAY INPUTS

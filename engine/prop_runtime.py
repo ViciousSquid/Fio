@@ -58,8 +58,8 @@ class PropSession:
         #: Props already reported as giving an item that does not resolve.
         self._reported_items = set()
         self.respawn_fades = {}
-        #: Spinning models: id(prop) -> spin state (see _start_spins).
-        self.spins = {}
+        #: Rotating models: id(prop) -> (prop, RotateMotion).
+        self.rotations = {}
         self._by_id = {}
         self._cells = CellIndex()
         self._filed = {}
@@ -213,13 +213,13 @@ class PropSession:
         self.rebuild()
         for prop in self.props:
             prop._respawn_fade_alpha = 1.0
-        self._start_spins()
+        self._start_rotations()
 
     def stop(self):
         for prop in self.props:
             self._release(prop)
             prop._respawn_fade_alpha = 1.0
-        self._stop_spins()
+        self._stop_rotations()
         self.held = None
         self.props = []
         self._by_id = {}
@@ -231,114 +231,99 @@ class PropSession:
         self._filed.clear()
         self._max_reach = self.DEFAULT_CARRY_REACH
 
-    # -- spin animation (engine.model_spin) --------------------------------
+    # -- Rotate animation (engine.model_rotate) ------------------------------
     #
-    # A model Prop with Spin on turns about its own axis during Play. Each
-    # one's state: its current speed (degrees a second, signed), whether it
-    # is running, which way (1 / -1, flipped by ReverseSpin) and its full
-    # speed (the authored one until SetSpinSpeed). It speeds up to full and
-    # coasts down to a stop over its Ramp. Only the angle reaches the
-    # Prop (``_spin_angle``, runtime state the renderer draws); nothing is
-    # written into its properties, so Stop leaves the map as it was.
+    # A model Prop with Rotate on turns about its own axis during Play --
+    # continuously, swinging, or turning to an angle -- driven by one
+    # RotateMotion each (the same one the Animation tab's Preview runs). Only
+    # the angle reaches the Prop (``_rotate_angle``, runtime state the
+    # renderer draws); nothing is written into its properties, so Stop
+    # leaves the map as it was.
 
-    def _spin_state(self, prop):
-        """The spin state of *prop*, or None when it has no spin."""
-        return self.spins.get(id(prop))
-
-    def _start_spins(self):
-        from .model_spin import axis_index, spin_speed
-        self.spins = {}
+    def _start_rotations(self):
+        from .model_rotate import RotateMotion, axis_index
+        self.rotations = {}
         for prop in self.props:
-            prop._spin_angle = 0.0
+            prop._rotate_angle = 0.0
             props = prop.properties
-            if not props.get('spin_enabled') or not props.get('model_path'):
+            if not props.get('rotate_enabled') or not props.get('model_path'):
                 continue
             bounds = None
-            if str(props.get('spin_axis', 'auto')).lower() not in ('x', 'y', 'z'):
+            if str(props.get('rotate_axis', 'auto')).lower() not in ('x', 'y', 'z'):
                 runtime = getattr(self.logic, 'collision_runtime', None)
                 try:
                     bounds = runtime.compute_model_bounds(props['model_path']) if runtime else None
                 except Exception:
                     bounds = None
-            prop._spin_axis = axis_index(props.get('spin_axis'), bounds)
-            full = spin_speed(props)
-            running = bool(props.get('spin_autostart'))
-            self.spins[id(prop)] = {
-                'entity': prop, 'running': running, 'direction': 1.0,
-                'full': full, 'speed': full if running else 0.0,
-            }
+            prop._rotate_axis = axis_index(props.get('rotate_axis'), bounds)
+            motion = RotateMotion(props)
+            self.rotations[id(prop)] = (prop, motion)
+            prop._rotate_angle = motion.angle
 
-    def _stop_spins(self):
-        for state in self.spins.values():
-            state['entity']._spin_angle = 0.0
+    def _stop_rotations(self):
+        for prop, _motion in self.rotations.values():
+            prop._rotate_angle = 0.0
         for prop in self.props:
-            prop._spin_angle = 0.0
-        self.spins = {}
+            prop._rotate_angle = 0.0
+        self.rotations = {}
 
-    def _update_spins(self, delta):
-        from .model_spin import approach, ramp_rate, spin_ramp
-        if not self.spins:
+    def _update_rotations(self, delta):
+        if not self.rotations:
             return
-        for state in list(self.spins.values()):
-            prop = state['entity']
-            target = state['full'] * state['direction'] if state['running'] else 0.0
-            was = state['speed']
-            if was != target:
-                rate = ramp_rate(state['full'], spin_ramp(prop.properties))
-                state['speed'] = approach(was, target, rate, delta)
-                if was != 0.0 and state['speed'] == 0.0 and not state['running']:
-                    self._fire(prop, "OnSpinStopped")
-            if state['speed']:
-                prop._spin_angle = (prop._spin_angle + state['speed'] * delta) % 360.0
+        for prop, motion in list(self.rotations.values()):
+            before = motion.angle
+            for event in motion.step(delta):
+                if event == 'stopped':
+                    self._fire(prop, "OnRotateStopped")
+            if motion.angle != before:
+                prop._rotate_angle = motion.angle
 
-    def start_spin(self, prop):
-        """StartSpin: spin up to full speed (OnSpinStarted)."""
-        state = self._spin_state(prop)
-        if state is None or state['running']:
+    def _motion(self, prop):
+        entry = self.rotations.get(id(prop))
+        return None if entry is None else entry[1]
+
+    def start_rotate(self, prop):
+        """StartRotate (Turn: turn to its Angle); fires OnRotateStarted."""
+        motion = self._motion(prop)
+        if motion is None or not motion.start():
             return False
-        state['running'] = True
-        self._fire(prop, "OnSpinStarted")
+        self._fire(prop, "OnRotateStarted")
         return True
 
-    def stop_spin(self, prop):
-        """StopSpin: coast down to a stop (OnSpinStopped once it has)."""
-        state = self._spin_state(prop)
-        if state is None or not state['running']:
+    def stop_rotate(self, prop):
+        """StopRotate: Continuous coasts down, Swing eases to rest where it
+        is, Turn turns back; OnRotateStopped once it has come to rest."""
+        motion = self._motion(prop)
+        if motion is None or not motion.stop():
             return False
-        state['running'] = False
-        if state['speed'] == 0.0:
-            self._fire(prop, "OnSpinStopped")
+        if not motion.moving:
+            self._fire(prop, "OnRotateStopped")
         return True
 
-    def toggle_spin(self, prop):
-        state = self._spin_state(prop)
-        if state is None:
+    def toggle_rotate(self, prop):
+        motion = self._motion(prop)
+        if motion is None:
             return False
-        return self.stop_spin(prop) if state['running'] else self.start_spin(prop)
+        return self.stop_rotate(prop) if motion.running else self.start_rotate(prop)
 
-    def reverse_spin(self, prop):
-        """ReverseSpin: the other way; a running reel slows, stops and
-        spins back up (over its Ramp), as a tape deck does."""
-        state = self._spin_state(prop)
-        if state is None:
+    def reverse_rotate(self, prop):
+        """ReverseRotate: the other way (Turn: back, or on again)."""
+        motion = self._motion(prop)
+        if motion is None:
             return False
-        state['direction'] = -state['direction']
-        return True
+        if motion.mode == 'turn':
+            return self.toggle_rotate(prop)
+        return motion.reverse()
 
-    def set_spin_speed(self, prop, speed):
-        """SetSpinSpeed: a new full speed, degrees a second (negative: the
-        other way) -- fast-forward, rewind. For this Play session only."""
-        from .model_spin import spin_speed
-        state = self._spin_state(prop)
-        if state is None:
-            return False
-        state['full'] = spin_speed({'spin_speed': speed})
-        return True
+    def set_rotate_speed(self, prop, speed):
+        """SetRotateSpeed: degrees a second, for this Play only."""
+        motion = self._motion(prop)
+        return False if motion is None else motion.set_speed(speed)
 
-    def spin_speed_of(self, prop):
-        """The current speed of *prop*'s spin, degrees a second (0: none)."""
-        state = self._spin_state(prop)
-        return 0.0 if state is None else state['speed']
+    def rotate_velocity_of(self, prop):
+        """A Continuous rotation's speed now, degrees a second (0: none)."""
+        motion = self._motion(prop)
+        return 0.0 if motion is None else motion.velocity
 
     # -- I/O --------------------------------------------------------------
 
@@ -357,7 +342,7 @@ class PropSession:
 
     def tick(self, delta, use_pressed):
         # Machinery turns whether or not there is a player to look at it.
-        self._update_spins(delta)
+        self._update_rotations(delta)
         player = self.logic.player_runtime.player
         if player is None:
             return

@@ -67,7 +67,7 @@ def test_a_reel_spins_about_its_hub():
     """A reel is 40 x 40 x 9.35, its hub on local Z: Axis 'auto' is Z."""
     from engine import asset_archives
     from engine.glb_loader import GLBLoader
-    from engine.model_spin import axis_index
+    from engine.model_rotate import axis_index
     import numpy as np
 
     asset_archives.prepare_asset_archives(REPO_ROOT)
@@ -93,12 +93,12 @@ def test_the_map_has_a_room_a_start_a_light_and_both_mainframes(state):
 def test_every_reel_spins_and_one_machine_starts_running(state):
     for name in TALL_REELS + WIDE_REELS:
         props = _named(state, name).properties
-        assert props["spin_enabled"] is True, name
-        assert props["spin_axis"] == "auto", name
-        assert props["spin_autostart"] is (name in WIDE_REELS), name
+        assert props["rotate_enabled"] is True, name
+        assert props["rotate_axis"] == "auto", name
+        assert props["rotate_autostart"] is (name in WIDE_REELS), name
     for supply, takeup in zip(SUPPLY, TAKEUP):
-        a = _named(state, supply).properties["spin_speed"]
-        b = _named(state, takeup).properties["spin_speed"]
+        a = _named(state, supply).properties["rotate_speed"]
+        b = _named(state, takeup).properties["rotate_speed"]
         # The same way round, the take-up reel a little faster.
         assert a * b > 0 and abs(b) > abs(a)
 
@@ -120,8 +120,8 @@ def test_the_reels_sit_on_their_mainframes_hubs(state):
 
 def test_the_buttons_toggle_one_machine_and_reverse_the_other(state):
     from editor.io_system import get_connections
-    wiring = {"Toggle_Tall_Reels": ("ToggleSpin", TALL_REELS),
-              "Reverse_Wide_Reels": ("ReverseSpin", WIDE_REELS)}
+    wiring = {"Toggle_Tall_Reels": ("ToggleRotate", TALL_REELS),
+              "Reverse_Wide_Reels": ("ReverseRotate", WIDE_REELS)}
     for button, (input_name, reels) in wiring.items():
         brush = next(b for b in state.brushes if b.get("name") == button)
         assert brush.get("is_trigger") and brush.get("trigger_activation") == "use"
@@ -157,13 +157,13 @@ def test_in_play_one_machine_runs_and_the_buttons_drive_the_reels(fio_session):
     seconds = 30 * logic.TICK_DURATION
 
     for name, reel in reels.items():
-        assert reel._spin_axis == 2, name
+        assert reel._rotate_axis == 2, name
     # Autostarted at full speed, clockwise (a negative angle, wrapped).
     for name in WIDE_REELS:
-        speed = reels[name].properties["spin_speed"]
-        assert reels[name]._spin_angle == pytest.approx((speed * seconds) % 360.0, abs=0.5)
+        speed = reels[name].properties["rotate_speed"]
+        assert reels[name]._rotate_angle == pytest.approx((speed * seconds) % 360.0, abs=0.5)
     for name in TALL_REELS:
-        assert reels[name]._spin_angle == 0.0
+        assert reels[name]._rotate_angle == 0.0
 
     def press(button):
         brush = next(b for b in state.brushes if b.get("name") == button)
@@ -172,18 +172,18 @@ def test_in_play_one_machine_runs_and_the_buttons_drive_the_reels(fio_session):
     press("Toggle_Tall_Reels")
     session.step(120)
     for name in TALL_REELS:
-        assert logic.prop_runtime.spin_speed_of(reels[name]) == pytest.approx(
-            reels[name].properties["spin_speed"]), name
+        assert logic.prop_runtime.rotate_speed_of(reels[name]) == pytest.approx(
+            reels[name].properties["rotate_speed"]), name
 
     press("Reverse_Wide_Reels")
     session.step(180)
     for name in WIDE_REELS:
-        assert logic.prop_runtime.spin_speed_of(reels[name]) == pytest.approx(
-            -reels[name].properties["spin_speed"]), name
+        assert logic.prop_runtime.rotate_speed_of(reels[name]) == pytest.approx(
+            -reels[name].properties["rotate_speed"]), name
 
     press("Toggle_Tall_Reels")
     session.step(120)
     for name in TALL_REELS:
-        assert logic.prop_runtime.spin_speed_of(reels[name]) == 0.0, name
+        assert logic.prop_runtime.rotate_speed_of(reels[name]) == 0.0, name
     session.stop_play()
-    assert all(reel._spin_angle == 0.0 for reel in reels.values())
+    assert all(reel._rotate_angle == 0.0 for reel in reels.values())

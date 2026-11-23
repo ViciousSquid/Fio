@@ -1035,11 +1035,11 @@ def register_default_io():
             IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
             IODef('Explode', 'Blow up this prop now, if it is Explosive'),
             IODef('Damage', 'Damage this prop (param: amount); an Explosive prop explodes once it has taken its Health', 'int'),
-            IODef('StartSpin', 'Spin this model up to full speed (its Animation tab: Spin)'),
-            IODef('StopSpin', 'Let this model coast down to a stop'),
-            IODef('ToggleSpin', 'Start this model spinning, or stop it'),
-            IODef('ReverseSpin', 'Spin the other way (a spinning model slows, stops and spins back up)'),
-            IODef('SetSpinSpeed', 'Set the full spin speed for this Play, degrees a second (negative: the other way)', 'float'),
+            IODef('StartRotate', 'Start this model rotating (its Animation tab: Rotate); a Turn model turns to its Angle'),
+            IODef('StopRotate', 'Stop rotating: Continuous coasts down, Swing eases to rest, Turn turns back'),
+            IODef('ToggleRotate', 'Start this model rotating, or stop it'),
+            IODef('ReverseRotate', 'Rotate the other way (a Turn model turns back, or on again)'),
+            IODef('SetRotateSpeed', 'Set the rotate speed for this Play, degrees a second (Continuous: negative is the other way)', 'float'),
         ],
         outputs=[
             IODef('OnCarried', 'Fired when the player carries this prop'),
@@ -1048,8 +1048,8 @@ def register_default_io():
             IODef('OnCollected', 'Fired when the player collects this prop'),
             IODef('OnRespawn', 'Fired when this prop respawns'),
             IODef('OnExplode', 'Fired when this Explosive prop explodes'),
-            IODef('OnSpinStarted', 'Fired when this model starts spinning up'),
-            IODef('OnSpinStopped', 'Fired when this model has coasted to a stop'),
+            IODef('OnRotateStarted', 'Fired when this model starts rotating'),
+            IODef('OnRotateStopped', 'Fired when this model comes to rest (a Turn model: at either end)'),
         ]
     )
 

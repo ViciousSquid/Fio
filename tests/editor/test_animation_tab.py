@@ -1,5 +1,5 @@
-"""A model Prop's Animation tab: its Spin rows write the spin_* properties,
-and its Preview spins the model in the editor (editor.spin_preview) until it
+"""A model Prop's Animation tab: its Rotate rows write the rotate_* properties,
+and its Preview rotates the model in the editor (editor.rotate_preview) until it
 is pressed again or the selection changes."""
 
 import pytest
@@ -82,134 +82,181 @@ def test_each_control_writes_its_property(main_window):
     prop = _model_prop()
     panel = _open_animation(main_window, prop)
     w = panel._widgets
-    assert prop.properties['spin_enabled'] is False
+    assert prop.properties['rotate_enabled'] is False
 
-    w['spin_enabled_cb'].setChecked(True)
-    assert prop.properties['spin_enabled'] is True
+    w['rotate_enabled_cb'].setChecked(True)
+    assert prop.properties['rotate_enabled'] is True
 
     for label, value in (("X", 'x'), ("Y", 'y'), ("Z", 'z'),
                          ("Auto (thinnest side)", 'auto')):
-        w['spin_axis_combo'].setCurrentText(label)
-        assert prop.properties['spin_axis'] == value
+        w['rotate_axis_combo'].setCurrentText(label)
+        assert prop.properties['rotate_axis'] == value
 
-    w['spin_speed_spin'].setValue(-90.0)
-    assert prop.properties['spin_speed'] == pytest.approx(-90.0)
-    assert w['spin_speed_spin'].suffix() == " °/s"
-    assert w['spin_speed_spin'].minimum() == pytest.approx(-36000.0)
+    w['rotate_speed_spin'].setValue(-90.0)
+    assert prop.properties['rotate_speed'] == pytest.approx(-90.0)
+    assert w['rotate_speed_spin'].suffix() == " °/s"
+    assert w['rotate_speed_spin'].minimum() == pytest.approx(-36000.0)
 
-    w['spin_ramp_spin'].setValue(1.5)
-    assert prop.properties['spin_ramp'] == pytest.approx(1.5)
-    assert w['spin_ramp_spin'].maximum() == pytest.approx(60.0)
+    w['rotate_ease_spin'].setValue(1.5)
+    assert prop.properties['rotate_ease'] == pytest.approx(1.5)
+    assert w['rotate_ease_spin'].maximum() == pytest.approx(60.0)
 
-    w['spin_autostart_cb'].setChecked(True)
-    assert prop.properties['spin_autostart'] is True
+    w['rotate_autostart_cb'].setChecked(True)
+    assert prop.properties['rotate_autostart'] is True
     main_window.unsaved_changes = False
 
 
 def test_the_tab_is_built_from_the_props_values(main_window):
     prop = _model_prop()
-    prop.properties.update(spin_enabled=True, spin_axis='y', spin_speed=45.0,
-                           spin_ramp=2.0, spin_autostart=True)
+    prop.properties.update(rotate_enabled=True, rotate_axis='y', rotate_speed=45.0,
+                           rotate_ease=2.0, rotate_autostart=True)
     w = _open_animation(main_window, prop)._widgets
-    assert w['spin_enabled_cb'].isChecked()
-    assert w['spin_axis_combo'].currentText() == "Y"
-    assert w['spin_speed_spin'].value() == pytest.approx(45.0)
-    assert w['spin_ramp_spin'].value() == pytest.approx(2.0)
-    assert w['spin_autostart_cb'].isChecked()
+    assert w['rotate_enabled_cb'].isChecked()
+    assert w['rotate_axis_combo'].currentText() == "Y"
+    assert w['rotate_speed_spin'].value() == pytest.approx(45.0)
+    assert w['rotate_ease_spin'].value() == pytest.approx(2.0)
+    assert w['rotate_autostart_cb'].isChecked()
     main_window.unsaved_changes = False
 
 
-def test_rows_are_disabled_while_spin_is_off(main_window):
+def test_rows_are_disabled_while_rotate_is_off(main_window):
     prop = _model_prop()
     w = _open_animation(main_window, prop)._widgets
-    rows = ('spin_axis_combo', 'spin_speed_spin', 'spin_ramp_spin',
-            'spin_autostart_cb', 'spin_preview_btn')
+    rows = ('rotate_mode_combo', 'rotate_axis_combo', 'rotate_speed_spin',
+            'rotate_angle_spin', 'rotate_ease_spin',
+            'rotate_autostart_cb', 'rotate_preview_btn')
     assert all(not w[name].isEnabled() for name in rows)
-    w['spin_enabled_cb'].setChecked(True)
+    w['rotate_enabled_cb'].setChecked(True)
     assert all(w[name].isEnabled() for name in rows)
-    w['spin_enabled_cb'].setChecked(False)
+    w['rotate_enabled_cb'].setChecked(False)
     assert all(not w[name].isEnabled() for name in rows)
     main_window.unsaved_changes = False
 
 
 @pytest.fixture
 def clock(monkeypatch):
-    """The spin preview's clock, moved by hand."""
-    import editor.spin_preview as spin_preview
+    """The rotate preview's clock, moved by hand."""
+    import editor.rotate_preview as rotate_preview
     now = [1000.0]
-    monkeypatch.setattr(spin_preview.time, 'perf_counter', lambda: now[0])
+    monkeypatch.setattr(rotate_preview.time, 'perf_counter', lambda: now[0])
     return now
 
 
 def _run(main_window, clock, seconds, step=0.05):
     for _ in range(int(round(seconds / step))):
         clock[0] += step
-        main_window.spin_preview._tick()
+        main_window.rotate_preview._tick()
 
 
-def test_preview_spins_the_model_and_stopping_puts_it_back(main_window, clock):
+def test_preview_rotates_the_model_and_stopping_puts_it_back(main_window, clock):
     prop = _model_prop()
-    prop.properties.update(spin_enabled=True, spin_speed=90.0, spin_ramp=0.0)
+    prop.properties.update(rotate_enabled=True, rotate_speed=90.0, rotate_ease=0.0)
     w = _open_animation(main_window, prop)._widgets
-    btn = w['spin_preview_btn']
-    assert btn.text() == "▶ Preview Spin"
+    btn = w['rotate_preview_btn']
+    assert btn.text() == "▶ Preview Rotate"
 
     btn.setChecked(True)
     assert btn.text() == "■ Stop Preview"
-    assert main_window.spin_preview.active
-    assert main_window.spin_preview.prop is prop
+    assert main_window.rotate_preview.active
+    assert main_window.rotate_preview.prop is prop
     _run(main_window, clock, 0.5)
-    assert prop._spin_angle == pytest.approx(45.0, abs=1e-6)
+    assert prop._rotate_angle == pytest.approx(45.0, abs=1e-6)
 
     # Speed changes take effect while it runs.
-    w['spin_speed_spin'].setValue(180.0)
-    before = prop._spin_angle
+    w['rotate_speed_spin'].setValue(180.0)
+    before = prop._rotate_angle
     _run(main_window, clock, 0.5)
-    assert prop._spin_angle == pytest.approx(before + 90.0, abs=1e-6)
+    assert prop._rotate_angle == pytest.approx(before + 90.0, abs=1e-6)
 
     # Axis changes restart it about the new axis.
-    w['spin_axis_combo'].setCurrentText("X")
-    assert main_window.spin_preview.active
-    assert prop._spin_axis == 0
+    w['rotate_axis_combo'].setCurrentText("X")
+    assert main_window.rotate_preview.active
+    assert prop._rotate_axis == 0
     assert btn.isChecked()
 
     btn.setChecked(False)
-    assert btn.text() == "▶ Preview Spin"
-    assert not main_window.spin_preview.active
-    assert prop._spin_angle == 0.0
+    assert btn.text() == "▶ Preview Rotate"
+    assert not main_window.rotate_preview.active
+    assert prop._rotate_angle == 0.0
     main_window.unsaved_changes = False
 
 
-def test_turning_spin_off_stops_the_preview(main_window, clock):
+def test_turning_rotate_off_stops_the_preview(main_window, clock):
     prop = _model_prop()
-    prop.properties['spin_enabled'] = True
+    prop.properties['rotate_enabled'] = True
     w = _open_animation(main_window, prop)._widgets
-    w['spin_preview_btn'].setChecked(True)
+    w['rotate_preview_btn'].setChecked(True)
     _run(main_window, clock, 0.5)
-    w['spin_enabled_cb'].setChecked(False)
-    assert not main_window.spin_preview.active
-    assert not w['spin_preview_btn'].isChecked()
-    assert prop._spin_angle == 0.0
+    w['rotate_enabled_cb'].setChecked(False)
+    assert not main_window.rotate_preview.active
+    assert not w['rotate_preview_btn'].isChecked()
+    assert prop._rotate_angle == 0.0
     main_window.unsaved_changes = False
 
 
 def test_selecting_another_object_stops_the_preview(main_window, clock):
     from editor.things import Light
     prop = _model_prop()
-    prop.properties.update(spin_enabled=True, spin_ramp=0.0)
+    prop.properties.update(rotate_enabled=True, rotate_ease=0.0)
     w = _open_animation(main_window, prop)._widgets
-    btn = w['spin_preview_btn']
+    btn = w['rotate_preview_btn']
     btn.setChecked(True)
     _run(main_window, clock, 0.5)
-    assert prop._spin_angle != 0.0
+    assert prop._rotate_angle != 0.0
 
     _select(main_window, Light(pos=[0, 64, 0]))
-    assert not main_window.spin_preview.active
-    assert prop._spin_angle == 0.0
+    assert not main_window.rotate_preview.active
+    assert prop._rotate_angle == 0.0
     # The button on the parked page was put back up too.
     assert not btn.isChecked()
-    assert btn.text() == "▶ Preview Spin"
+    assert btn.text() == "▶ Preview Rotate"
 
     panel = _select(main_window, prop)
-    assert not panel._widgets['spin_preview_btn'].isChecked()
+    assert not panel._widgets['rotate_preview_btn'].isChecked()
+    main_window.unsaved_changes = False
+
+
+def test_the_mode_chooses_which_rows_show(main_window):
+    prop = _model_prop()
+    w = _open_animation(main_window, prop)._widgets
+    w['rotate_enabled_cb'].setChecked(True)
+    for label, mode, angle, ease in (("Continuous", 'continuous', False, True),
+                                     ("Swing", 'swing', True, True),
+                                     ("Turn to angle", 'turn', True, False)):
+        w['rotate_mode_combo'].setCurrentText(label)
+        assert prop.properties['rotate_mode'] == mode
+        assert w['rotate_angle_spin'].isVisibleTo(w['rotate_mode_combo'].parentWidget()) == angle
+        assert w['rotate_ease_spin'].isVisibleTo(w['rotate_mode_combo'].parentWidget()) == ease
+    w['rotate_angle_spin'].setValue(-45.0)
+    assert prop.properties['rotate_angle'] == pytest.approx(-45.0)
+    main_window.unsaved_changes = False
+
+
+def test_a_turn_preview_goes_there_and_back(main_window, clock):
+    from editor.rotate_preview import RotatePreview
+    prop = _model_prop()
+    prop.properties.update(rotate_enabled=True, rotate_mode='turn',
+                           rotate_angle=90.0, rotate_speed=180.0)
+    w = _open_animation(main_window, prop)._widgets
+    w['rotate_preview_btn'].setChecked(True)
+    _run(main_window, clock, 0.6)                # 0.5 s to turn 90 at 180/s
+    assert prop._rotate_angle == pytest.approx(90.0)
+    _run(main_window, clock, RotatePreview.TURN_HOLD + 0.6)   # holds, then back
+    assert prop._rotate_angle == pytest.approx(0.0, abs=1e-6)
+    w['rotate_preview_btn'].setChecked(False)
+    assert prop._rotate_angle == 0.0
+    main_window.unsaved_changes = False
+
+
+def test_changing_the_mode_restarts_a_running_preview(main_window, clock):
+    prop = _model_prop()
+    prop.properties.update(rotate_enabled=True, rotate_ease=0.0)
+    w = _open_animation(main_window, prop)._widgets
+    w['rotate_preview_btn'].setChecked(True)
+    _run(main_window, clock, 0.5)
+    w['rotate_mode_combo'].setCurrentText("Swing")
+    _run(main_window, clock, 0.05)
+    assert main_window.rotate_preview.active
+    assert main_window.rotate_preview.motion.mode == 'swing'
+    w['rotate_preview_btn'].setChecked(False)
     main_window.unsaved_changes = False

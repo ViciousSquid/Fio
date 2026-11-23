@@ -14,7 +14,7 @@ import math
 
 import numpy as np
 
-from engine.model_spin import spin_matrix
+from engine.model_rotate import rotate_matrix
 
 
 def identity() -> "np.ndarray":
@@ -151,12 +151,12 @@ def column_major(mat):
     return np.ascontiguousarray(np.asarray(mat, dtype=np.float32).T)
 
 
-def entity_matrix(position, properties, spin=None):
+def entity_matrix(position, properties, turn=None):
     """A model's world matrix: ``T @ Ry(yaw) @ Rx(pitch) @ Rz(roll) @ S``.
 
-    *spin* is ``(axis, angle_deg)``: a spinning model (engine.model_spin)
+    *turn* is ``(axis, angle_deg)``: a rotating model (engine.model_rotate)
     turns about its own axis after its scale and before its placed rotation,
-    ``T @ R(rotation) @ R_spin @ S`` -- the desktop's order
+    ``T @ R(rotation) @ R_rotate @ S`` -- the desktop's order
     (engine.entity_table._model_transform_columns). None, or an angle of 0,
     is the placed model exactly.
     """
@@ -171,27 +171,28 @@ def entity_matrix(position, properties, spin=None):
     if isinstance(size, (float, int)):
         size = (size, size, size)
     parts = [translate(*position), ry, rx, rotate_z(roll)]
-    if spin is not None:
-        axis, angle = spin
+    if turn is not None:
+        axis, angle = turn
         try:
             angle = float(angle or 0.0)
         except (TypeError, ValueError):
             angle = 0.0
         if angle and math.isfinite(angle):
-            turn = identity()
-            turn[:3, :3] = spin_matrix(axis, angle)
-            parts.append(turn)
+            rotated = identity()
+            rotated[:3, :3] = rotate_matrix(axis, angle)
+            parts.append(rotated)
     parts.append(scale(*size))
     return mul(*parts)
 
 
-def spin_of(item):
-    """``(axis, angle_deg)``: a model item's runtime spin (Prop._spin_axis
-    and Prop._spin_angle; no spin for anything without them)."""
-    return (getattr(item, '_spin_axis', 2), getattr(item, '_spin_angle', 0.0))
+def rotation_of(item):
+    """``(axis, angle_deg)``: a model item's runtime Rotate
+    (Prop._rotate_axis and Prop._rotate_angle; none for anything without
+    them)."""
+    return (getattr(item, '_rotate_axis', 2), getattr(item, '_rotate_angle', 0.0))
 
 
 def item_matrix(item):
     """The world matrix a placed model *item* draws with -- the same for
-    its colour pass, its culling and its shadows -- spin included."""
-    return entity_matrix(item.pos, item.properties, spin=spin_of(item))
+    its colour pass, its culling and its shadows -- its Rotate included."""
+    return entity_matrix(item.pos, item.properties, turn=rotation_of(item))
