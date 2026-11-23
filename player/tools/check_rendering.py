@@ -103,14 +103,15 @@ def run(renderer, evidence=None):
         save('desktop-ambient.png',pixels())
     finally:
         world.close()
-    from engine.shaders import MAX_LIGHTS
-    things = [{'type':'Light','pos':[0,0,0], 'properties':{'radius':1}} for _ in range(MAX_LIGHTS-1)]
+    # The player's light budget, not the desktop editor's (engine.shaders).
+    from engine.shaders import MAX_LIGHTS_PLAYER
+    things = [{'type':'Light','pos':[0,0,0], 'properties':{'radius':1}} for _ in range(MAX_LIGHTS_PLAYER-1)]
     things += [{'type':'Light','pos':[0,0,-100], 'properties':{'radius':500}}]
     world = PlayerWorld({'brushes':[wall], 'things':things})
     try:
         renderer.load_scene(world.data,world=world)
         renderer.render(state)
-        assert renderer.frame_stats['lights'] == MAX_LIGHTS
+        assert renderer.frame_stats['lights'] == MAX_LIGHTS_PLAYER
         np.testing.assert_allclose(pixels()[64,64,:3],(.1+(1-95/500)**2)*255,atol=2)
         save('desktop-light-budget.png',pixels())
     finally:

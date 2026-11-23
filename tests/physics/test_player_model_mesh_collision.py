@@ -689,3 +689,36 @@ def test_model_headroom_uses_triangles_not_the_enclosing_bounds():
     blocked_min = glm.vec3(55.0, 0.0, -25.0)
     blocked_max = glm.vec3(105.0, 100.0, 25.0)
     assert not player._has_headroom(brush, blocked_min, blocked_max)
+
+
+@pytest.mark.parametrize("ceiling_bottom, lifted", [(111.8, False), (113.0, True)],
+                         ids=["no-room", "room"])
+def test_tread_lift_needs_headroom(ceiling_bottom, lifted):
+    """The footprint lift onto a tread is checked against what is above it.
+
+    At 30 Hz a player standing with its centre 20 units before the first
+    tread sinks 0.89 units under gravity, and the footprint support lifts it
+    back onto the tread. With a ceiling 111.8 high that lift would put the
+    head (feet + 100) 0.2 units into it: the lift is refused and the tread
+    gives no support. With room above, the lift stands.
+    """
+    from tests.helpers.worlds import box_brush
+    brush = _model_collision_brushes(_staircase(), solid=True)[0]
+    ceiling = box_brush("ceiling", (-20.0, ceiling_bottom + 8.0, 0.0),
+                        (300.0, 16.0, 300.0))
+    player = _player_at(x=-20.0, y=62.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    player.on_ground = True
+    player.ground_object = brush
+
+    player.update(1.0 / 30.0, glm.vec3(0.0, 0.0, 0.0), False, False,
+                  [brush, ceiling], gravity=-800.0)
+
+    head = player.pos.y + player._half.y
+    assert head <= ceiling_bottom + 1e-3, "the hull must not end inside the ceiling"
+    if lifted:
+        assert player.pos.y == pytest.approx(62.0, abs=1e-3)
+        assert player.on_ground and player.ground_object is brush
+    else:
+        assert player.pos.y < 62.0 - 0.5, "the refused lift leaves the player sinking"
+        assert not player.on_ground

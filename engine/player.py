@@ -1991,8 +1991,15 @@ class Player:
         self.pos = glm.vec3(*position)
         return hit_any
 
-    def _find_model_mesh_support(self, model_meshes, offsets, radius):
-        """Return (supporting model, outward contact normal), if supported."""
+    def _find_model_mesh_support(self, model_meshes, offsets, radius,
+                                 clearance=None):
+        """Return (supporting model, outward contact normal), if supported.
+
+        A tread found under the hull's footprint lifts the player onto it
+        (the snap below). *clearance*, if given, is asked whether the hull is
+        clear of everything once lifted; when it is not, the lift is undone
+        and that tread does not count as support this tick.
+        """
         if not model_meshes or not offsets:
             return None
         ox, oy, oz = min(offsets, key=lambda offset: offset[1])
@@ -2011,6 +2018,9 @@ class Player:
         # Treads that reach under the hull's edge but not under its centre:
         # (normal_y, brush, normal, top), decided once the loop is done.
         edge_treads = []
+        # The best support by capsule contact alone, which needs no lift:
+        # what remains if a footprint tread's lift is refused.
+        contact_best = None
         support_snap_distance = max(
             0.25, float(self._mesh_support_snap_distance)
         )
@@ -2047,6 +2057,11 @@ class Player:
                         best_normal_y = contact_normal[1]
                         best_brush = brush
                         best_normal = contact_normal
+                        best_footprint_top = None
+                    if (contact_normal[1] > PM_GROUND_NORMAL
+                            and (contact_best is None
+                                 or contact_normal[1] > contact_best[0])):
+                        contact_best = (contact_normal[1], brush, contact_normal)
 
                 # The player hull has a flat supporting footprint. At the
                 # leading edge of a stepped tread, the lower capsule sphere
@@ -2091,7 +2106,15 @@ class Player:
         # Positive separating velocity is left untouched so jumping still detaches.
         if (best_footprint_top is not None and velocity[1] <= 1e-3
                 and feet_y < best_footprint_top):
+            lowered = self.pos.y
             self.pos.y = best_footprint_top + float(self._half.y)
+            if clearance is not None and not clearance():
+                # Lifted into a ceiling, a railing or a wall: stay put, and
+                # stand only on what the capsule itself touches.
+                self.pos.y = lowered
+                if contact_best is None:
+                    return None
+                return (contact_best[1], contact_best[2])
         return (best_brush, best_normal) if best_brush is not None else None
 
     def _model_mesh_ground_beneath(self, model_meshes, x, z, feet_y):
@@ -2282,7 +2305,16 @@ class Player:
         support = None
         support_normal = None
 
-        model_support = self._find_model_mesh_support(model_meshes, offsets, radius)
+        def hull_is_clear():
+            half = self._half
+            lo = glm.vec3(self.pos.x - half.x, self.pos.y - half.y, self.pos.z - half.z)
+            hi = glm.vec3(self.pos.x + half.x, self.pos.y + half.y, self.pos.z + half.z)
+            return (self._model_mesh_max_penetration(model_meshes, offsets, radius) <= 1e-4
+                    and self._convex_max_penetration(shapes, offsets, radius) <= 1e-4
+                    and all(self._has_headroom(b, lo, hi) for b in aabb_brushes or ()))
+
+        model_support = self._find_model_mesh_support(
+            model_meshes, offsets, radius, clearance=hull_is_clear)
         if model_support is not None:
             support, support_normal = model_support
 
