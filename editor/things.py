@@ -615,6 +615,111 @@ class Light(Thing):
     show_radius = property(get_show_radius, set_show_radius)
 
 
+class LightVolume(Thing):
+    """An idTech 4-style bounded light: a box that is lit, and a light source.
+
+    Unlike :class:`Light` -- a point whose light reaches a sphere and fades
+    with distance -- a light volume lights exactly the box it is given and
+    nothing outside it. The light (and its shadows) come from its *light
+    source*, a point that may be anywhere, inside the box or not: a long box
+    lit from one end, a shaft lit from above. It sits beside the point Light;
+    the two are separate entities and a map's point lights are untouched.
+
+    Created in a 2D view by right-clicking a brush and choosing Light Volume:
+    the box takes the brush's bounds and the brush is removed (one undo puts
+    it back). The box is resized with its handles and the source dragged by
+    its marker, in the 2D views.
+
+    Properties
+    ----------
+    volume_size     The box: width, height and depth (x, y, z), world units,
+                    centred on the entity's position.
+    source_offset   The light source, relative to the box's centre.
+    colour, intensity, state
+                    As a Light's.
+    casts_shadows, shadow_map_size, shadow_softness, shadow_bias
+                    As a Light's, cast from the light source.
+    """
+    pixmap_path = "assets/sprites/light.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+        'volume_size',
+        'source_offset',
+        'intensity',
+        'state',
+        'casts_shadows',
+        'shadow_map_size',
+        'shadow_softness',
+        'shadow_bias',
+    )
+    #: The smallest box edge, world units: a volume never collapses to a
+    #: plane (its handles and its light both need a thickness).
+    MIN_SIZE = 8.0
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'light_volume'
+        self.properties.setdefault('colour', [255, 255, 255])
+        self.properties.setdefault('intensity', 1.0)
+        self.properties.setdefault('state', 'on')
+        self.properties.setdefault('volume_size', [256.0, 256.0, 256.0])
+        self.properties.setdefault('source_offset', [0.0, 0.0, 0.0])
+        self.properties.setdefault('casts_shadows', False)
+        self.properties.setdefault('shadow_map_size', 0)
+        self.properties.setdefault('shadow_softness', SHADOW_SOFTNESS_DEFAULT)
+        self.properties.setdefault('shadow_bias', SHADOW_BIAS_DEFAULT)
+
+    @staticmethod
+    def _vec3(value, default):
+        try:
+            out = [float(v) for v in value][:3]
+        except (TypeError, ValueError):
+            return list(default)
+        if len(out) != 3 or not all(math.isfinite(v) for v in out):
+            return list(default)
+        return out
+
+    def get_volume_size(self):
+        """The box's (x, y, z) extents, each at least MIN_SIZE."""
+        size = self._vec3(self.properties.get('volume_size'), (256.0, 256.0, 256.0))
+        return [max(self.MIN_SIZE, abs(v)) for v in size]
+
+    def get_bounds(self):
+        """``(lo, hi)``: the box's world corners."""
+        half = [v / 2.0 for v in self.get_volume_size()]
+        centre = [float(v) for v in self.pos]
+        return ([c - h for c, h in zip(centre, half)],
+                [c + h for c, h in zip(centre, half)])
+
+    def get_source_offset(self):
+        return self._vec3(self.properties.get('source_offset'), (0.0, 0.0, 0.0))
+
+    def get_source_position(self):
+        """Where the light and its shadows come from, in the world."""
+        return [float(c) + o for c, o in zip(self.pos, self.get_source_offset())]
+
+    def get_color(self):
+        color = self.properties.get('colour', [255, 255, 255])
+        return [c / 255.0 for c in color]
+
+    def get_intensity(self):
+        try:
+            return float(self.properties.get('intensity', 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+
+    @classmethod
+    def from_bounds(cls, lo, hi, **properties):
+        """A light volume filling the box *lo*..*hi*, its source at the centre."""
+        lo = [float(v) for v in lo]
+        hi = [float(v) for v in hi]
+        centre = [(a + b) / 2.0 for a, b in zip(lo, hi)]
+        size = [max(cls.MIN_SIZE, abs(b - a)) for a, b in zip(lo, hi)]
+        props = dict(properties)
+        props['volume_size'] = size
+        props.setdefault('source_offset', [0.0, 0.0, 0.0])
+        return cls(pos=centre, properties=props)
+
+
 class Speaker(Thing):
     """Sound emitter entity."""
     pixmap_path = "assets/sprites/speaker.png"
@@ -2334,6 +2439,7 @@ def _same_value(a, b) -> bool:
 ENTITY_TYPES = {
     'PlayerStart': PlayerStart,
     'Light': Light,
+    'LightVolume': LightVolume,
     'Speaker': Speaker,
     'ReflectionProbe': ReflectionProbe,
     'Decal': Decal,
@@ -2363,7 +2469,7 @@ if _effect_class is not None:
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Prop', 'LevelChanger'],
-    'Environment': ['Light', 'Effect', 'Speaker', 'ReflectionProbe', 'Portal', 'Decal', 'Shake'],
+    'Environment': ['Light', 'LightVolume', 'Effect', 'Speaker', 'ReflectionProbe', 'Portal', 'Decal', 'Shake'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }
