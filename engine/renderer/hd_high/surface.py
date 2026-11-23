@@ -172,6 +172,8 @@ uniform highp usampler2D uLightGrid;   // Forward+: row = cluster, column k = th
 uniform vec4 uLightGridParams;     // x, z of the grid's corner, 1 / cell size, 1 while the grid is in use
 uniform vec2 uLightGridHeight;     // y of the grid's bottom, 1 / layer height
 uniform vec3 uHazeColor;
+uniform vec3 uReflectIndoor;       // what a reflection finds where no sky light reaches at all
+uniform vec3 uReflectFallback;     // ... and under the horizon of a sky, where walls would be
 uniform vec4 uHdrFog;              // the map's distance fog colour, in the frame's units; a 1 while it is on
 layout(location = 1) out vec4 FragData;
 // The sun a surface is lit by: the frame's (fioSunBegin), unless a program
@@ -360,6 +362,9 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
         if (distSq < radiusSq) {
             highp float dist = sqrt(distSq);
             vec3 l = toLight / dist;
+            // Turned away from the lamp: nothing to add, and no shadow
+            // worth its taps.
+            if (dot(n, l) <= 0.0) continue;
             float att = 1.0 - (dist / lights[i].radius);
             att = att * att;
             float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius,
@@ -374,7 +379,23 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
             result += (1.0 - shadow) * fioLight(n, v, l, diffuse, f0, rough, radiance);
         }
     }
-    if (uEnvParams.y > 0.5) {
+    // With a reflection pass (postfx.py), a surface smooth enough to show a
+    // picture is left to it: it traces the frame for what the surface
+    // reflects. A rougher one reflects no picture, only the environment's
+    // light, and takes it here -- the pass then has nothing to do for the
+    // pixel, which is most pixels of most frames.
+    bool solid = uSurfaceMode == 1 && src >= 0.999;
+    bool traced = uEnvParams.y < 0.5 && solid && rough < 0.5;
+    if (uEnvParams.y < 0.5) {
+        if (solid && !traced) {
+            vec3 r = reflect(-v, n);
+            vec3 seen = mix(uReflectFallback,
+                            textureLod(uEnvMap, fioEnvUV(r), rough * uEnvParams.x).rgb * uEnvParams2.z,
+                            uEnvParams2.x > 0.5 ? 1.0 : smoothstep(-0.05, 0.45, r.y));
+            if (uEnvParams2.x < 0.5) seen = mix(uReflectIndoor, seen, skyOpen);
+            result += seen * fioEnvBRDF(f0, rough, nov) * mix(1.0, occlusion, 0.7);
+        }
+    } else {
         // No reflection pass: the sky's reflection, hidden near the horizon
         // where walls would be in the way.
         vec3 r = reflect(-v, n);
@@ -396,9 +417,10 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
     // The map's distance fog (which replaces the haze: the renderer sends
     // one or the other).
     if (uHdrFog.a > 0.5) result = mix(result, uHdrFog.rgb, fogFactor(FragPos));
+    // Alpha below 1 asks the reflection pass for this pixel, and tells it
+    // the surface's reflectance.
     float marker = clamp(max(f0.r, max(f0.g, f0.b)), 0.02, 0.95);
-    float outAlpha = uSurfaceMode == 2 ? src
-                   : (src >= 0.999 && uSurfaceMode == 1 ? marker : 1.0);
+    float outAlpha = uSurfaceMode == 2 ? src : (traced ? marker : 1.0);
     FragColor = vec4(fioEncode(result), outAlpha);
     FragData = vec4(fioPackNormal(n), skyOpen, uSurfaceMode == 1 ? rough : 1.0);
 }

@@ -838,6 +838,15 @@ class EnvironmentMixin:
         blocked = ((leave >= np.maximum(enter, 0.0)) & (leave > 0.0)).any(axis=1)
         return float(1.0 - blocked.mean())
 
+    def _env_reflect_fallback(self):
+        """What a reflection finds under the horizon of a sky, where walls
+        would be: a dimmer version of the sky's side light. Indoors the
+        environment map is that colour already."""
+        side = self._env_ambient[1]
+        if self.environment.sky_mode == hd_graphics.SKY_NONE:
+            return tuple(self._env_ground)
+        return (side[0] * 0.45, side[1] * 0.45, side[2] * 0.45)
+
     def _env_reflection_gain(self):
         """What the reflection fallback's texels are multiplied by. A probe
         is a display picture of classic Fio's: a mid-grey of it reflects as
@@ -1658,7 +1667,8 @@ class EnvironmentMixin:
             gl.glUniform1i(mode_loc, mode)
         frame = (self._env_map_key, self._env_shadow_ready, self._env_reflect_key,
                  self._env_probe_reflections, self._env_base_exposure,
-                 self._env_skylight_ready, self._env_skylight_sig)
+                 self._env_skylight_ready, self._env_skylight_sig,
+                 self._env_indoor_colour, self._env_reflect_fallback())
         if state is None or state[1] != frame:
             ambient = self._env_ambient
             gl.glUniform3f(uniforms['uSunDir'], *self._env_sun_dir)
@@ -1687,6 +1697,8 @@ class EnvironmentMixin:
                 gl.glUniform4f(uniforms['uSkyLightScale'], 1.0 / extent[0], 1.0 / extent[1],
                                1.0 / extent[2], 2.0 if grid.follows else 1.0)
             gl.glUniform3f(uniforms['uHazeColor'], *self._env_ambient[1])
+            gl.glUniform3f(uniforms['uReflectIndoor'], *self._env_indoor_colour)
+            gl.glUniform3f(uniforms['uReflectFallback'], *self._env_reflect_fallback())
             fog = self._env_fog
             if fog is None:
                 gl.glUniform4f(uniforms['uHdrFog'], 0.0, 0.0, 0.0, 0.0)

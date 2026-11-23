@@ -31,22 +31,29 @@ def _split_casters(table, slots):
     return slots[~geometry], slots[geometry]
 
 
-#: HD_High's point-light shadow maps live in ONE texture: a depth array with
-#: six layers a light (layer = slot * 6 + cube face), sampled through one
-#: sampler. The shared source (engine.shaders.SHADOW_GLSL) declares a
-#: ``samplerCube`` per shadow slot -- eight samplers -- which, beside the
-#: surface samplers HD_High adds, is more than the 16 a fragment shader is
-#: guaranteed (and all that some drivers give: the programs then fail to
-#: link). The face a direction falls on and where on it are worked out here
-#: exactly as a cube lookup does, so the picture is the cube maps'.
-_POINT_SHADOW_SAMPLING = """
+#: HD_High's point-light shadows, in place of engine.shaders.SHADOW_GLSL.
+#:
+#: The shared source declares a ``samplerCube`` per shadow slot -- eight
+#: samplers -- which, beside the surface samplers HD_High adds, is more than
+#: the 16 a fragment shader is guaranteed (and all that some drivers give:
+#: the programs then fail to link). Here every light's map is in ONE texture,
+#: a depth array with six layers a light (layer = slot * 6 + cube face), read
+#: through one sampler; the face a direction falls on and where on it are
+#: worked out exactly as a cube lookup does.
+#:
+#: The filter is the same disk, in texels of the map, with the same bias. It
+#: is taken in nine comparisons the hardware filters (each the mean of four
+#: texels' tests) instead of twenty single ones.
+POINT_SHADOW_GLSL = """
 #define MAX_SHADOW_LIGHTS """ + str(shaders.MAX_SHADOW_LIGHTS) + """
-uniform highp sampler2DArray shadowMaps;      // layer = slot * 6 + cube face
+uniform highp sampler2DArrayShadow shadowMaps;    // layer = slot * 6 + cube face
 // Per shadow slot: x the face's width in texels, y that width over a layer's
 // (a light's own map size may be smaller than the array's).
 uniform vec2 uShadowFace[MAX_SHADOW_LIGHTS];
 
-highp float _sampleShadowCube(int idx, highp vec3 d) {
+// 1 where the map's depth along *d* is no nearer than *ref*, 0 where it is
+// (filtered over the four texels around).
+float _shadowTap(int idx, highp vec3 d, highp float ref) {
     highp vec3 a = abs(d);
     highp vec2 uv;
     highp float ma;
@@ -65,32 +72,59 @@ highp float _sampleShadowCube(int idx, highp vec3 d) {
     highp float width = max(f.x, 1.0);
     uv = clamp((uv / max(ma, 1e-9) * 0.5 + 0.5) * width, vec2(0.5), vec2(width - 0.5))
        * (f.y / width);
-    return textureLod(shadowMaps, vec3(uv, float(idx) * 6.0 + face), 0.0).r;
+    return texture(shadowMaps, vec4(uv, float(idx) * 6.0 + face, ref));
 }
 
-// The cube's face width in texels.
-highp float _shadowCubeTexels(int idx) {
-    return max(uShadowFace[idx].x, 1.0);
+// Each shadow slot's filter, from the Light that owns it: x = softness (the
+// PCF disk radius in map texels), y = bias multiplier. 0 stands for the
+// default, so a program nobody has given values to still filters sensibly.
+uniform vec2 uShadowFilter[MAX_SHADOW_LIGHTS];
+vec2 _shadowFilter(int idx) {
+    vec2 f = uShadowFilter[idx];
+    return vec2(f.x > 0.0 ? f.x : """ + repr(shaders.SHADOW_SOFTNESS_DEFAULT) + """,
+                f.y > 0.0 ? f.y : """ + repr(shaders.SHADOW_BIAS_DEFAULT) + """);
+}
+
+// idx          : which shadow slot (0..7), or <0 for a light that casts none
+// fragToLight  : lightPos - fragmentWorldPos (world space)
+// farPlane     : the light radius used when the map was rendered
+// ndotl        : diffuse term, used to scale the slope bias
+// Returns 0 (fully lit) .. 1 (fully shadowed).
+float calcPointShadow(int idx, highp vec3 fragToLight, highp float farPlane, float ndotl) {
+    if (idx < 0) return 0.0;
+    highp float currentDepth = length(fragToLight);
+    if (currentDepth >= farPlane) return 0.0;   // beyond the light's reach
+    highp vec3 lookDir = -fragToLight;
+    // One texel of the map at this distance, in world units: a face spans
+    // 90 degrees -- 2 units across at unit distance -- over its width.
+    highp float texel = currentDepth * 2.0 / max(uShadowFace[idx].x, 1.0);
+    vec2 shadowFilter = _shadowFilter(idx);
+    highp float diskRadius = texel * shadowFilter.x;
+    highp float slope = clamp(sqrt(max(1.0 - ndotl * ndotl, 0.0)) / max(ndotl, 0.1),
+                              0.0, 10.0);
+    highp float bias = (diskRadius + (texel + diskRadius) * (1.0 + slope)) * shadowFilter.y;
+    highp float ref = (currentDepth - bias) / farPlane;
+    float lit = _shadowTap(idx, lookDir, ref);
+    for (int s = 0; s < 8; ++s) {
+        vec3 corner = vec3((s & 1) == 0 ? 1.0 : -1.0, (s & 2) == 0 ? 1.0 : -1.0,
+                           (s & 4) == 0 ? 1.0 : -1.0);
+        lit += _shadowTap(idx, lookDir + corner * diskRadius, ref);
+    }
+    return 1.0 - lit / 9.0;
 }
 """
 
-_SHADOW_SAMPLING_RE = re.compile(
-    r"#define MAX_SHADOW_LIGHTS \d+\s*\nuniform samplerCube shadowMaps\[\d+\];"
-    r".*?(?=\n// Each shadow slot's filter)", re.DOTALL)
-
 
 def point_shadow_source(source):
-    """*source* with its point-light shadow maps read from one depth array
-    (:data:`_POINT_SHADOW_SAMPLING`) instead of a cube sampler per slot;
+    """*source* with its point-light shadows HD_High's way
+    (:data:`POINT_SHADOW_GLSL`) in place of the shared cube samplers;
     *source* itself when it has no shadow samplers."""
     if not source or 'samplerCube shadowMaps' not in source:
         return source
-    rewritten, count = _SHADOW_SAMPLING_RE.subn(
-        lambda _match: _POINT_SHADOW_SAMPLING.strip('\n'), source, count=1)
-    if count != 1 or 'samplerCube shadowMaps' in rewritten:
-        raise RuntimeError("HD_High: the point shadow samplers were not where "
-                           "engine.shaders.SHADOW_GLSL puts them")
-    return rewritten
+    if shaders.SHADOW_GLSL not in source:
+        raise RuntimeError("HD_High: the point shadow block is not the one "
+                           "engine.shaders.SHADOW_GLSL holds")
+    return source.replace(shaders.SHADOW_GLSL, POINT_SHADOW_GLSL)
 
 
 class LightingMixin:
@@ -436,10 +470,14 @@ class LightingMixin:
             # shadow-casting light takes a slot (_ensure_shadow_array).
             array = int(gl.glGenTextures(1))
             gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, array)
-            for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST),
-                                (gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST),
+            # Compared and filtered by the hardware: a tap is the mean of
+            # four texels' depth tests.
+            for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
+                                (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
                                 (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
-                                (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
+                                (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE),
+                                (gl.GL_TEXTURE_COMPARE_MODE, gl.GL_COMPARE_REF_TO_TEXTURE),
+                                (gl.GL_TEXTURE_COMPARE_FUNC, gl.GL_LEQUAL)):
                 gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, name, value)
             #: One element, the array: what the shadow slots share. (A list,
             #: as the pool of cube maps it replaces was: empty means no
