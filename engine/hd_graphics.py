@@ -16,7 +16,7 @@ map's primary PlayerStart (:data:`FIELDS`), resolved with the rules of its
 ``sky_image`` (the primary wins; a legacy value on another start is
 recovered; an edit clears the others). :func:`sky_settings` turns those
 properties into validated settings and :func:`apply` writes them, with a
-quality preset (:data:`PRESETS`), onto HD_High's ``Environment``. Classic
+renderer's own configuration (:data:`HD_HIGH`), onto its ``Environment``. Classic
 keeps the properties with the map and never reads them.
 
 The frame's exposure is not authored. :func:`base_exposure` derives it from
@@ -30,12 +30,12 @@ import math
 
 #: The two renderers, by the names people use, and their registry names.
 CLASSIC = "Classic"
-HD_HIGH = "HD_High"
-RENDERERS = (CLASSIC, HD_HIGH)
-REGISTRY_NAME = {CLASSIC: "Forward", HD_HIGH: "HD_High"}
+HD_HIGH_NAME = "HD_High"
+RENDERERS = (CLASSIC, HD_HIGH_NAME)
+REGISTRY_NAME = {CLASSIC: "Forward", HD_HIGH_NAME: "HD_High"}
 RENDERER_LABELS = {
     CLASSIC: "Classic (the original Fio renderer)",
-    HD_HIGH: "HD_High (physically based: sun, sky, HDR post-processing)",
+    HD_HIGH_NAME: "HD_High (physically based: sun, sky, HDR post-processing)",
 }
 DEFAULT_RENDERER = CLASSIC
 
@@ -47,7 +47,7 @@ def normalise_renderer(value, default=DEFAULT_RENDERER):
     if text in ("classic", "forward"):
         return CLASSIC
     if text in ("hd_high", "hd", "hdhigh"):
-        return HD_HIGH
+        return HD_HIGH_NAME
     return default
 
 
@@ -71,30 +71,13 @@ def display_name(registry_name):
     return str(registry_name)
 
 
-#: HD_High's quality presets. ``high`` is the renderer as named; the others
-#: exist to measure against (tools/bench_hd.py) and to try on a slower or
-#: faster machine (the ``r_hdquality`` console command). ``shadow_size`` is
-#: the sun's shadow map; the other numbers scale (0 switches off) the map's
-#: own value of that effect; ``ao_taps`` and ``ssr_steps`` are the sample
-#: counts of the ambient occlusion and reflection passes.
-QUALITIES = ("medium", "high", "ultra")
-HD_HIGH_QUALITY = "high"
-PRESETS = {
-    "medium": dict(shadow_size=1024, ambient_occlusion=1.0, bloom=1.0, fxaa=True,
-                   reflections=False, parallax=0.0, sun_shafts=0.0, cloud_shadows=0.0,
-                   ao_taps=8, ssr_steps=0),
-    "high": dict(shadow_size=2048, ambient_occlusion=1.0, bloom=1.0, fxaa=True,
-                 reflections=True, parallax=1.0, sun_shafts=1.0, cloud_shadows=1.0,
-                 ao_taps=12, ssr_steps=32),
-    "ultra": dict(shadow_size=4096, ambient_occlusion=1.0, bloom=1.0, fxaa=True,
-                  reflections=True, parallax=1.0, sun_shafts=1.0, cloud_shadows=1.0,
-                  ao_taps=16, ssr_steps=48),
-}
-
-
-def normalise_quality(value, default=HD_HIGH_QUALITY):
-    value = str(value or "").strip().lower()
-    return value if value in PRESETS else default
+#: What HD_High is: the size of the sun's shadow map, the sample counts of
+#: its ambient occlusion and reflection passes, and which effects are on.
+#: One configuration -- there are two renderers, Classic and HD_High, not a
+#: ladder of tiers -- kept in one table so it is easy to retune.
+HD_HIGH = dict(shadow_size=2048, ambient_occlusion=1.0, bloom=1.0, fxaa=True,
+               reflections=True, parallax=1.0, sun_shafts=1.0, cloud_shadows=1.0,
+               ao_taps=12, ssr_steps=32)
 
 
 # ---------------------------------------------------------------------------
@@ -355,11 +338,12 @@ PANORAMA_SKY_GAIN = 8.0
 EMISSIVE_GAIN = 5.0
 
 
-def apply(environment, settings, tier=HD_HIGH_QUALITY):
-    """Write *settings* (from :func:`sky_settings`) at quality preset *tier* onto
-    HD_High's ``Environment``. One assignment per field, so a frame in
+def apply(environment, settings, preset=None):
+    """Write *settings* (from :func:`sky_settings`) onto HD_High's
+    ``Environment``, with what HD_High switches on (:data:`HD_HIGH`; *preset*
+    replaces it, for measuring an effect's cost). One assignment per field, so a frame in
     progress never sees half a look. Returns whether the environment is on."""
-    preset = PRESETS[normalise_quality(tier)]
+    preset = HD_HIGH if preset is None else preset
     sky = settings["sky"]
     sun = bool(settings["sun"]) and sky != SKY_NONE
     procedural = sky == SKY_PROCEDURAL

@@ -212,9 +212,13 @@ void main() {
                         uParams2.x > 0.5 ? 1.0 : smoothstep(-0.05, 0.45, world.y));
         // data.z: how much of the sky the surface can see at all.
         if (uParams2.x < 0.5) seen = mix(uIndoor, seen, data.z);
-        if (rough < 0.66 && max(brdf.r, max(brdf.g, brdf.b)) > 0.006) {
+        // Traced only for surfaces smooth enough to show a picture: on a
+        // rougher one (most generated maps) neighbouring pixels' rays part
+        // company and the hits and misses between them read as sparkle.
+        if (rough < 0.5 && max(brdf.r, max(brdf.g, brdf.b)) > 0.006) {
             vec4 hit = fioTrace(p + n * max(0.25, -p.z * 0.002), r, rough);
-            seen = mix(seen, hit.rgb, hit.a * (1.0 - smoothstep(0.5, 0.66, rough)));
+            seen = mix(seen, min(hit.rgb, vec3(6.0)),
+                       hit.a * (1.0 - smoothstep(0.22, 0.5, rough)));
         }
         lin += seen * brdf * mix(1.0, ao, 0.7);
     }

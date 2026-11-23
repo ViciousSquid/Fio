@@ -195,10 +195,11 @@ float fioSunShadow(highp vec3 pos, vec3 ng) {
               + uw2 * vw2 * fioSunTap(base, u2, v2, s.z);
     return mix(1.0, lit / 144.0, uSunShadowParams.w);
 }
-// How much of the sky a point can see, 0 under a roof .. 1 in the open: the
-// share of a wide ring of columns around it that nothing stands over. Sky
-// light is scaled by it, so a room is lit by its lamps and a doorway or a
-// window lets the sky in only as far as it really reaches.
+// How much of the sky a point can see, 0 under a roof .. 1 in the open:
+// whether anything stands over it, softened over a few texels. Sky light is
+// scaled by it, so a room is lit by its lamps and the sky lights only what
+// lies under it. The point is first moved off its surface (uSkyCoverParams.w)
+// so that the inside face of a wall is tested inside the room.
 float fioSkyVisible(highp vec3 pos, vec3 ng) {
     if (uSkyCoverParams.z <= 0.0) return 1.0;
     highp vec4 clip = uSkyMatrix * vec4(pos + ng * uSkyCoverParams.w, 1.0);
@@ -207,19 +208,11 @@ float fioSkyVisible(highp vec3 pos, vec3 ng) {
     highp float z = s.z - uSkyCoverParams.y;
     float r = uSkyCoverParams.x;
     float open = texture(uSkyCover, vec3(s.xy, z)) * 2.0;
-    open += texture(uSkyCover, vec3(s.xy + vec2(0.35, 0.10) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(-0.10, 0.35) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(-0.35, -0.10) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(0.10, -0.35) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(0.70, -0.25) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(0.25, 0.70) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(-0.70, 0.25) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(-0.25, -0.70) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(0.80, 0.60) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(-0.60, 0.80) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(-0.80, -0.60) * r, z));
-    open += texture(uSkyCover, vec3(s.xy + vec2(0.60, -0.80) * r, z));
-    return open / 14.0;
+    open += texture(uSkyCover, vec3(s.xy + vec2(r, 0.0), z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(-r, 0.0), z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(0.0, r), z));
+    open += texture(uSkyCover, vec3(s.xy + vec2(0.0, -r), z));
+    return open / 6.0;
 }
 float fioCloudShadow(highp vec3 pos) {
     if (uAtmosphere.z <= 0.0) return 1.0;

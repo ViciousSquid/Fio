@@ -344,7 +344,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         # The HD renderer ([Renderer] graphics; engine/hd_graphics.py). At
         # ``low`` this sets a few attributes and nothing else of it ever
         # runs: the shaders below compile from the sources they always had.
-        self._init_environment(hd_graphics.HD_HIGH_QUALITY)
+        self._init_environment()
         self._install_surface_shading()
         # Compile common shaders (simple, sprite, depth_cube, water, glass, fog, terrain)
         self._compile_common_shaders()

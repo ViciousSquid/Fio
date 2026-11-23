@@ -297,7 +297,11 @@ def load_data_texture(path, anisotropy=0.0, alpha_path=None):
     try:
         from PIL import Image
         from engine.animated_texture import open_still_rgba
-        image = open_still_rgba(path)
+        if os.path.isabs(path) and os.path.isfile(path):
+            with Image.open(path) as opened:      # a generated map in the cache
+                image = opened.convert('RGBA')
+        else:
+            image = open_still_rgba(path)
         if alpha_path:
             height = open_still_rgba(alpha_path).convert('L')
             if height.size != image.size:
@@ -343,10 +347,11 @@ def _set_anisotropy(amount):
 class EnvironmentMixin:
     """HDHighRenderer's sun, sky and physically shaded surfaces."""
 
-    def _init_environment(self, tier=hd_graphics.HD_HIGH_QUALITY):
+    def _init_environment(self):
         """State only: no GL object is made and no file is read here."""
-        #: The quality preset in use (hd_graphics.PRESETS).
-        self.graphics = hd_graphics.normalise_quality(tier)
+        #: What is switched on: hd_graphics.HD_HIGH, or a copy of it with
+        #: effects off that the benchmark sets to cost them.
+        self.hd_preset = dict(hd_graphics.HD_HIGH)
         #: This is the HD renderer (the host asks: a classic renderer has
         #: no such attribute).
         self.hd = True
@@ -432,6 +437,8 @@ class EnvironmentMixin:
         self._env_sun_dir = (0.0, 1.0, 0.0)
         self._env_sun_rgb = (1.0, 1.0, 1.0)
         self._env_anisotropy = None
+        #: How many textures had their maps made at load (no files beside them).
+        self.material_stats = {'generated': 0}
         #: GL diffuse texture -> (normal map, material map, parallax,
         #: emission) or None when the texture has no companion maps.
         self._material_maps = {}
@@ -504,14 +511,6 @@ class EnvironmentMixin:
     # ------------------------------------------------------------------
     # The map's sky and the quality tier
     # ------------------------------------------------------------------
-    def set_graphics(self, tier):
-        """Switch quality preset (medium / high / ultra); applies to the
-        next frame. Returns whether *tier* names one."""
-        if str(tier or "").strip().lower() not in hd_graphics.PRESETS:
-            return False
-        self.graphics = hd_graphics.normalise_quality(tier)
-        return True
-
     def set_hd_sky(self, settings):
         """The map's HD sky: ``hd_graphics.sky_settings(...)``."""
         if settings is not None:
@@ -519,10 +518,11 @@ class EnvironmentMixin:
 
     def _hd_sync(self):
         """Bring the Environment up to date with the map's sky and the tier."""
-        applied = (self.graphics, hd_graphics.settings_key(self._hd_sky))
+        applied = (tuple(sorted(self.hd_preset.items())),
+                   hd_graphics.settings_key(self._hd_sky))
         if applied != self._hd_applied:
             self._hd_applied = applied
-            hd_graphics.apply(self.environment, self._hd_sky, self.graphics)
+            hd_graphics.apply(self.environment, self._hd_sky, self.hd_preset)
 
     def _configure_surface_programs(self):
         """Give each surface program's samplers their own texture units."""
@@ -712,7 +712,11 @@ class EnvironmentMixin:
                     sky_irradiance=self._env_ambient[0], sun_radiance=self._env_sun_rgb,
                     sun_elevation=env.sun_elevation,
                     ambient=tuple(a + 0.1 for a in ambient)))
-            level = hd_graphics.TYPICAL_ALBEDO * own
+            # Where no sky can be seen and the frame has no answer, a
+            # reflection finds the map's ambient and nothing more: a room's
+            # lamps reach its surfaces directly, not by way of a made-up grey.
+            level = hd_graphics.TYPICAL_ALBEDO * hd_graphics.scene_light(
+                ambient=tuple(a + 0.1 for a in ambient))
             self._env_indoor_colour = (level, level, level)
         if env.exposure is not None:
             base = float(env.exposure)
@@ -995,9 +999,8 @@ class EnvironmentMixin:
         elif mode == hd_graphics.SKY_NONE:
             # No sky light at all; what a reflection finds where it finds
             # nothing else is a dim grey of the map's own light.
-            level = hd_graphics.TYPICAL_ALBEDO * (
-                hd_graphics.luminance(hd_graphics.to_linear(ambient))
-                + self._env_lamp_light)
+            level = hd_graphics.TYPICAL_ALBEDO * hd_graphics.luminance(
+                hd_graphics.to_linear(ambient))
             self._env_ambient = ((0.0, 0.0, 0.0),) * 3
             self._env_ground = (level, level, level)
         camera = self._camera_xyz(camera_pos) if camera_pos is not None else (0.0, 0.0, 0.0)
@@ -1324,9 +1327,14 @@ class EnvironmentMixin:
         return table, static, moving, np.floor(low), np.ceil(high)
 
     #: The sky cover map's size, and how far around a point (world units)
-    #: its filter looks for open sky: the depth a doorway's daylight reaches.
-    SKY_COVER_SIZE = 1024
-    SKY_COVER_REACH = 220.0
+    #: its filter looks for open sky. Kept under a thin wall's thickness, and
+    #: a point is first moved that far off its surface, so the filter never
+    #: reaches across a wall or under a roof: sky light lands where the sky
+    #: is overhead and nowhere else. (A wider filter, tried first, let
+    #: daylight leak into the rooms beside a courtyard.)
+    SKY_COVER_SIZE = 2048
+    SKY_COVER_REACH = 12.0
+    SKY_COVER_OFFSET = 14.0
 
     def _env_sky_cover(self, config, camera_pos):
         """Keep the sky cover map: the map's standing shadow casters seen
@@ -1360,7 +1368,7 @@ class EnvironmentMixin:
                      float(np.linalg.norm((high - low)[[0, 2]])) * 0.5 + 1024.0)
         else:
             where = (0.0, 0.0, 0.0, 1.0e9)
-        span = max(high[0] - low[0], high[2] - low[2]) * 1.02 + 2.0 * self.SKY_COVER_REACH
+        span = max(high[0] - low[0], high[2] - low[2]) * 1.02 + 64.0
         mid_x, mid_z = (low[0] + high[0]) * 0.5, (low[2] + high[2]) * 0.5
         top, bottom = float(high[1]) + 32.0, float(low[1]) - 32.0
         # Looking straight down: x across, z up the map, depth downward.
@@ -1683,7 +1691,7 @@ class EnvironmentMixin:
                            # sits exactly on its stored depth: pushed a little
                            # further down, it is under cover as it should be.
                            -4.0 / max(self._env_cover_depth, 1.0),
-                           1.0 if cover else 0.0, 12.0)
+                           1.0 if cover else 0.0, self.SKY_COVER_OFFSET)
             gl.glUniform3f(uniforms['uHazeColor'], *self._env_ambient[1])
             fog = self._env_fog
             if fog is None:
@@ -1750,30 +1758,55 @@ class EnvironmentMixin:
     # ------------------------------------------------------------------
     def _material_for(self, texture):
         """A diffuse texture's companion maps: ``(normal, material,
-        parallax, emission)`` as GL names and scalars, or None. Looked for
-        once per texture, beside its file (png, webp or jpg):
+        parallax, emission)`` as GL names and scalars, or None for a
+        texture that is flat by intent. Resolved once per texture:
 
-        * ``<name>_n`` -- the normal map (OpenGL convention), with the
-          surface's height in its alpha, or in a separate ``<name>_h``;
-        * ``<name>_m`` -- ambient occlusion, roughness and metalness in R, G
-          and B, and 1 - emission in alpha;
-        * ``<name>.mat.json`` -- ``parallax``, the depth of the relief in
+        * beside its file (png, webp or jpg): ``<name>_n`` -- the normal map
+          (OpenGL convention) with the surface's height in its alpha, or in
+          a separate ``<name>_h`` -- and ``<name>_m`` -- ambient occlusion,
+          roughness and metalness in R, G and B, and 1 - emission in alpha;
+          ``<name>.mat.json`` gives ``parallax``, the depth of the relief in
           world units (scaled by the environment's ``parallax``), and
-          ``emission``, a gain on the map's emission."""
+          ``emission``, a gain on the map's emission;
+        * a texture with no such files gets them made from its own picture
+          by the same generator the stock maps were baked with
+          (engine.material_maps), off this thread, and kept on disk by the
+          picture's content: nothing is drawn flat for want of maps;
+        * tool textures (nodraw, trigger, Dev/ grids...) and what is not a
+          surface at all (light cookies, effect sprites, water's own normal
+          map) have none, on purpose."""
         try:
             return self._material_maps[texture]
         except KeyError:
             pass
+        from engine import material_maps
         from engine.asset_archives import asset_bytes, asset_exists
         from engine.asset_paths import confined_path
         if len(self._material_names) != len(self.texture_manager):
             self._material_names = {int(v): k for k, v in self.texture_manager.items()}
         found = None
         key = self._material_names.get(int(texture))
+        absolute = None
         if key and key.startswith('model_tex:'):
             # A model's own texture, cached by its resolved path.
-            key = key[len('model_tex:'):].replace(os.sep, '/')
-            key = key[len('assets/'):] if key.startswith('assets/') else None
+            path = key[len('model_tex:'):].replace(os.sep, '/')
+            if path.startswith('assets/'):
+                key = path[len('assets/'):]
+            else:
+                key, absolute = None, path
+        if key is None and absolute is None:
+            self._material_maps[texture] = None
+            return None
+        relative = (key[len('textures/'):] if key and key.startswith('textures/')
+                    else os.path.basename(key or absolute))
+        if key and key.startswith('textures/') and (
+                material_maps.is_tool_texture(relative)
+                or not material_maps.is_surface_texture(relative)):
+            self._material_maps[texture] = None
+            return None
+        anisotropy = self._env_max_anisotropy()
+        parallax, emission = 0.0, 1.0
+        normal = material = 0
         if key:
             base = os.path.splitext(key)[0]
 
@@ -1784,30 +1817,80 @@ class EnvironmentMixin:
                         return path
                 return None
 
+            sidecar = confined_path('assets', base + '.mat.json')
+            values = {}
+            if sidecar is not None and asset_exists(sidecar):
+                try:
+                    values = json.loads(asset_bytes(sidecar).decode('utf-8'))
+                except Exception as exc:
+                    print(f"[Environment] {sidecar}: {exc}")
             normal_path, material_path = companion('_n'), companion('_m')
             if normal_path and material_path:
-                anisotropy = self._env_max_anisotropy()
                 height_path = companion('_h')
                 normal = load_data_texture(normal_path, anisotropy, height_path)
                 material = load_data_texture(material_path, anisotropy)
                 # Without a height there is nothing for parallax to follow.
                 has_height = bool(height_path) or normal_path.lower().endswith(('.png', '.webp'))
-                parallax, emission = (1.0 if has_height else 0.0), 1.0
-                sidecar = confined_path('assets', base + '.mat.json')
-                if sidecar is not None and asset_exists(sidecar):
-                    try:
-                        values = json.loads(asset_bytes(sidecar).decode('utf-8'))
-                        parallax = float(values.get('parallax', parallax))
-                        emission = float(values.get('emission', 1.0))
-                    except Exception as exc:
-                        print(f"[Environment] {sidecar}: {exc}")
-                if normal and material:
-                    found = (normal, material, parallax, emission)
-                    # The diffuse texture was loaded without it.
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, int(texture))
-                    _set_anisotropy(anisotropy)
+                try:
+                    parallax = float(values.get('parallax', 1.0 if has_height else 0.0))
+                    emission = float(values.get('emission', 1.0))
+                except (TypeError, ValueError):
+                    parallax, emission = 0.0, 1.0
+                if not has_height:
+                    parallax = 0.0
+        if not (normal and material):
+            # Made from the picture itself, by the generator, on another thread.
+            made = self._material_generated(texture, key, absolute)
+            if made is None:
+                return None             # still being made: asked again next time
+            if made:
+                normal = load_data_texture(made[0], anisotropy)
+                material = load_data_texture(made[1], anisotropy)
+                parallax = 0.0          # a guessed height is not worth relief
+        # Loading put the maps on the diffuse texture's unit: give it back.
+        gl.glBindTexture(gl.GL_TEXTURE_2D, int(texture))
+        if normal and material:
+            found = (normal, material, parallax, emission)
+            _set_anisotropy(anisotropy)     # the diffuse was loaded without it
         self._material_maps[texture] = found
         return found
+
+    def _material_generated(self, texture, key, absolute):
+        """The generated maps of a texture that has none beside it:
+        ``(normal path, material path)`` in the on-disk cache, ``()`` if they
+        could not be made, or None while a worker thread is still making
+        them (numpy and file work only; no GL off this thread)."""
+        pending = self.__dict__.setdefault('_material_pending', {})
+        job = pending.get(texture)
+        if job is None:
+            from concurrent.futures import ThreadPoolExecutor
+            from engine import material_maps
+            from engine.asset_archives import asset_bytes
+            from engine.asset_paths import confined_path
+            try:
+                if key:
+                    data = asset_bytes(confined_path('assets', key))
+                else:
+                    with open(absolute, 'rb') as handle:
+                        data = handle.read()
+            except Exception:
+                return ()
+            if not data:
+                return ()
+            pool = self.__dict__.get('_material_pool')
+            if pool is None:
+                pool = self.__dict__['_material_pool'] = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix='fio-materials')
+            pending[texture] = pool.submit(material_maps.ensure_cached, data)
+            self.material_stats['generated'] += 1
+            return None
+        if not job.done():
+            return None
+        del pending[texture]
+        try:
+            return job.result() or ()
+        except Exception:
+            return ()
 
     def _bind_material_maps(self, shader_name, texture):
         """After a brush pass binds diffuse *texture* on unit 0: bind its
@@ -1842,8 +1925,10 @@ class EnvironmentMixin:
     # Teardown
     # ------------------------------------------------------------------
     def _cleanup_environment(self):
-        if not self.hd:
-            return          # nothing of it was ever made
+        pool = self.__dict__.pop('_material_pool', None)
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+        self.__dict__.pop('_material_pending', None)
         self._cleanup_postfx()
         textures = [t for t in (self._env_shadow_tex, self._env_shadow_static_tex,
                                 self._env_noise_tex, self._env_map,
