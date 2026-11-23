@@ -282,3 +282,25 @@ def test_the_preview_stops_when_its_model_is_no_longer_selected_or_there(
     assert prop._rotate_angle == 0.0
     assert not w['rotate_preview_btn'].isChecked()
     main_window.unsaved_changes = False
+
+
+def test_a_physics_model_says_rotate_does_not_run_and_will_not_preview(main_window, clock):
+    prop = _model_prop()
+    prop.properties.update(rotate_enabled=True, physics_enabled=True)
+    w = _open_animation(main_window, prop)._widgets
+    assert 'rotate_physics_note' in w
+    assert "Physics" in w['rotate_physics_note'].text()
+    w['rotate_preview_btn'].setChecked(True)
+    _run(main_window, clock, 0.2)
+    assert not main_window.rotate_preview.active
+    assert prop._rotate_angle == 0.0
+    assert not w['rotate_preview_btn'].isChecked()
+    main_window.unsaved_changes = False
+
+
+def test_a_model_without_physics_has_no_physics_note(main_window):
+    prop = _model_prop()
+    prop.properties.update(rotate_enabled=True, physics_enabled=False)
+    w = _open_animation(main_window, prop)._widgets
+    assert 'rotate_physics_note' not in w
+    main_window.unsaved_changes = False

@@ -241,12 +241,12 @@ class PropSession:
     # leaves the map as it was.
 
     def _start_rotations(self):
-        from .model_rotate import RotateMotion, axis_index
+        from .model_rotate import RotateMotion, axis_index, rotates_in_play
         self.rotations = {}
         for prop in self.props:
             prop._rotate_angle = 0.0
             props = prop.properties
-            if not props.get('rotate_enabled') or not props.get('model_path'):
+            if not rotates_in_play(props):      # off, not a model, or physics
                 continue
             bounds = None
             if str(props.get('rotate_axis', 'auto')).lower() not in ('x', 'y', 'z'):

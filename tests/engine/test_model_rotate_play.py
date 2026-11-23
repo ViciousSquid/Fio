@@ -66,6 +66,16 @@ def test_a_model_without_rotate_never_turns():
     assert prop._rotate_angle == 0.0 and not io.fired
 
 
+def test_a_physics_model_is_turned_by_its_physics_not_by_rotate():
+    """Two owners of one orientation would leave its collision box behind."""
+    prop = _model(rotate_autostart=True, physics_enabled=True)
+    assert not mr.rotates_in_play(prop.properties)
+    session, io = _session(prop)
+    assert session.start_rotate(prop) is False
+    _run(session, 1.0)
+    assert prop._rotate_angle == 0.0 and not io.fired
+
+
 def test_every_new_model_can_rotate_but_does_not_by_default():
     prop = Prop.for_model('assets/models/Oil_Drum.obj', pos=[0, 0, 0])
     for key, value in mr.ROTATE_DEFAULTS.items():

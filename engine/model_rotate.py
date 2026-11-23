@@ -86,6 +86,19 @@ def _clamp(value, lo, hi):
     return max(lo, min(hi, value))
 
 
+def physics_owns_turn(props):
+    """True when the Prop has Physics on: the simulation turns its body, so
+    Rotate does not run (two owners of one orientation would leave the
+    collision box where the drawn model is not)."""
+    return bool(props.get('physics_enabled', False))
+
+
+def rotates_in_play(props):
+    """Rotate runs in Play for this Prop: on, a model, and no physics."""
+    return (bool(props.get('rotate_enabled')) and bool(props.get('model_path'))
+            and not physics_owns_turn(props))
+
+
 def rotate_mode(props):
     mode = str(props.get('rotate_mode', CONTINUOUS) or CONTINUOUS).strip().lower()
     return mode if mode in ROTATE_MODES else CONTINUOUS

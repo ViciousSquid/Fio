@@ -3102,6 +3102,14 @@ class PropertyEditor(QWidget):
             "round, swinging back and forth, or turning to an angle -- from the "
             "start, or when an I/O input starts it.")
         form.addRow("", rotate_cb)
+        from engine.model_rotate import physics_owns_turn
+        if physics_owns_turn(props):
+            note = QLabel("Physics is on, so the physics simulation turns this "
+                          "model: Rotate does not run in Play.")
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #FFAC1C;")
+            self._widgets['rotate_physics_note'] = note
+            form.addRow("", note)
 
         mode_labels = self.ROTATE_MODE_LABELS
         mode = rotate_mode(props)

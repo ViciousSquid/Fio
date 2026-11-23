@@ -72,6 +72,8 @@ class RotatePreview(QObject):
         props = getattr(prop, 'properties', None)
         if props is None or not props.get('model_path'):
             return False
+        if model_rotate.physics_owns_turn(props):
+            return False                # as in Play: physics turns it, not Rotate
         bounds = None
         if str(props.get('rotate_axis', 'auto')).lower() not in ('x', 'y', 'z'):
             bounds = _editor_model_bounds(getattr(self.main_window, 'view_3d', None),
