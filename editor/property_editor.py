@@ -1395,6 +1395,9 @@ class PropertyEditor(QWidget):
         inputs = IOInputsWidget()
         inputs.set_entity(etype)
         layout.addWidget(inputs)
+        # Spare height goes below everything, not into gaps inside the
+        # sections (the Disabled indicator sits right under its header).
+        layout.addStretch(1)
 
         # I/O participation checkbox
         io_cb = _make_checkbox(
