@@ -1581,9 +1581,9 @@ class EnvironmentMixin:
     # Teardown
     # ------------------------------------------------------------------
     def _cleanup_environment(self):
-        self._cleanup_postfx()
         if not self.hd:
-            return
+            return          # nothing of it was ever made
+        self._cleanup_postfx()
         textures = [t for t in (self._env_shadow_tex, self._env_shadow_static_tex,
                                 self._env_noise_tex, self._env_map,
                                 self._env_reflect_map) if t]
