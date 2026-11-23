@@ -2521,11 +2521,18 @@ class Player:
         # hull. Test the same three-sphere capsule used by player collision
         # against the actual triangles instead of treating the bounds as solid.
         if brush.get('_collision_mode') == 'mesh' and 'geometry' not in brush:
-            triangles = brush.get('_mesh_triangles') or ()
+            if brush.get('is_mover'):
+                # A model carried or turning (engine.logic_groups.CarriedModels):
+                # its mesh where it is now, not where it was built.
+                shape = collision_shape(brush)
+                triangles = (shape[1] if shape is not None else None) or ()
+                bounds = shape[2] if shape is not None else None
+            else:
+                triangles = brush.get('_mesh_triangles') or ()
+                bounds = brush.get('_mesh_bounds')
             if not triangles:
                 return True
 
-            bounds = brush.get('_mesh_bounds')
             if bounds:
                 min_b, max_b = bounds
                 if (player_max.x < min_b[0] or player_min.x > max_b[0]

@@ -708,17 +708,29 @@ class SpatialGrid:
                         mesh_columns.prepare(brush.get('_mesh_triangles')),)
                 if mesh[0] is None:
                     continue                # nothing usable: its box
-                # A model carried by its group's mover is moved, never turned
-                # (engine.logic_groups.CarriedModels): its triangles as
-                # prepared, shifted to where its runtime transform puts it.
+                # A model carried by its group's mover, or turning about its
+                # own axis (engine.logic_groups.CarriedModels): carried, its
+                # triangles as prepared, shifted to where its runtime
+                # transform puts them; turned, its turned triangles
+                # (brush_placement.turned_mesh_array), prepared once per
+                # transform.
                 runtime = _placement.resolved_runtime(brush)
-                if runtime is None:
-                    shift = (0.0, 0.0, 0.0)
-                else:
+                prepared = mesh[0]
+                shift = (0.0, 0.0, 0.0)
+                if runtime is not None and runtime[6]:
+                    turned = brush.get('_mesh_columns_turned')
+                    if turned is None or turned[0] is not runtime:
+                        turned = brush['_mesh_columns_turned'] = (
+                            runtime, mesh_columns.prepare(
+                                _placement.turned_mesh_array(brush, runtime)))
+                    prepared = turned[1]
+                    if prepared is None:
+                        continue
+                elif runtime is not None:
                     home = _placement.authored_box(brush)
                     shift = (runtime[0] - home[0], runtime[1] - home[1],
                              runtime[2] - home[2])
-                b, t = mesh_columns.column(mesh[0], x[at], z[at], shift)
+                b, t = mesh_columns.column(prepared, x[at], z[at], shift)
                 bottom[at] = b
                 top[at] = t
                 continue

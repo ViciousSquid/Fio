@@ -24,7 +24,9 @@ The rotation is applied in the model's own frame, after its scale and before
 its placed rotation: ``R(rotation) @ R_rotate(axis, angle) @ S``. A scaled
 model keeps its shape as it turns, and the axis is the model's own. The
 angle is runtime state (``Prop._rotate_angle``), never written into the map:
-leaving Play puts every model back as it was placed.
+leaving Play puts every model back as it was placed. In Play a solid model's
+collision turns with it, about the same axis through its origin
+(engine.logic_groups.CarriedModels).
 
 Pure Python + NumPy: no Qt, no GL.
 """
