@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QLabel,
 
 from engine.asset_archives import (asset_archive_name, asset_isdir,
                                    asset_listdir)
+from engine.material_maps import is_companion
 
 ASSETS = 'assets'
 _PATH_ROLE = Qt.UserRole
@@ -112,7 +113,10 @@ class AssetFileDialog(QDialog):
             path = folder + '/' + name
             if asset_isdir(path):
                 dirs.append((name, path))
-            elif not self.suffixes or name.lower().endswith(self.suffixes):
+            elif ((not self.suffixes or name.lower().endswith(self.suffixes))
+                  and not is_companion(name)):
+                # A texture's material maps (<name>_n, <name>_m, .mat.json:
+                # engine.material_maps) are not textures to pick.
                 files.append((name, path))
         for name, path in sorted(dirs, key=lambda e: e[0].lower()):
             self._folder_item(item, name, path)

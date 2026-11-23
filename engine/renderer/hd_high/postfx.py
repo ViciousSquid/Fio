@@ -21,6 +21,7 @@ the framebuffer the view asked for.
 import math
 
 import glm
+import numpy as np
 import OpenGL.GL as gl
 # The raw entry point: PyOpenGL's wrapper has no array handler for the packed
 # depth-stencil pixel type, and these allocations pass no pixels anyway.
@@ -399,6 +400,15 @@ void main() {
 """
 
 
+def query_result(query):
+    """A query's 64-bit result (waits for it). PyOpenGL's own wrapper has no
+    array type for it, so it is read into a ctypes value."""
+    import ctypes
+    value = ctypes.c_uint64(0)
+    gl.glGetQueryObjectui64v(int(query), gl.GL_QUERY_RESULT, ctypes.byref(value))
+    return int(value.value)
+
+
 def _texture(internal, width, height, pixel_format, pixel_type, *, linear=True,
              mipmaps=False):
     texture = int(gl.glGenTextures(1))
@@ -454,7 +464,7 @@ class PostFXMixin:
         marks = self._hd_marks
         if marks is None:
             return
-        query = int(gl.glGenQueries(1))
+        query = int(np.asarray(gl.glGenQueries(1)).ravel()[0])
         gl.glQueryCounter(query, gl.GL_TIMESTAMP)
         marks[name] = query
 
@@ -466,7 +476,7 @@ class PostFXMixin:
         for marks in frames:
             stamps = {}
             for name, query in marks.items():
-                stamps[name] = int(gl.glGetQueryObjectui64v(query, gl.GL_QUERY_RESULT))
+                stamps[name] = query_result(query)
                 gl.glDeleteQueries(1, [query])
             previous = stamps.get('begin')
             passes = {}

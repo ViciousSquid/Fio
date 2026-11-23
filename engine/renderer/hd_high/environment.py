@@ -1864,6 +1864,38 @@ class EnvironmentMixin:
         gl.glActiveTexture(gl.GL_TEXTURE0)
         return (corner[0], corner[2], 1.0 / size, 1.0, corner[1], 1.0 / height)
 
+    def hd_memory(self):
+        """Bytes of video memory HD_High holds beyond what a classic frame
+        needs, by what it is for (tools/bench_hd.py). Counted from the
+        targets' sizes and formats; drivers may round up."""
+        width, height = self._postfx_size
+        pixels = width * height
+        half = max(1, width // 2) * max(1, height // 2)
+        bloom = sum(w * h * 4 for _t, _f, w, h in self._postfx_bloom)
+        frame = (pixels * 8 * 4 // 3      # colour, RGBA16F with mips
+                 + pixels * 8             # normal, sky cover, roughness
+                 + pixels * 4             # depth and stencil
+                 + pixels * 8             # resolved
+                 + pixels * 4             # display
+                 + half * 3) if pixels else 0
+        shadow = 2 * self._env_shadow_size ** 2 * 4 if self._env_shadow_tex else 0
+        cover = self._env_cover_size ** 2 * 4 if self._env_cover_tex else 0
+        env = ENV_MAP_SIZE[0] * ENV_MAP_SIZE[1] * 8 * 4 // 3 if self._env_map else 0
+        if self._env_reflect_map:
+            env += env // 4
+        maps = 0
+        for found in self._material_maps.values():
+            if not found:
+                continue
+            for texture in found[:2]:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+                w = gl.glGetTexLevelParameteriv(gl.GL_TEXTURE_2D, 0, gl.GL_TEXTURE_WIDTH)
+                h = gl.glGetTexLevelParameteriv(gl.GL_TEXTURE_2D, 0, gl.GL_TEXTURE_HEIGHT)
+                maps += int(w) * int(h) * 4 * 4 // 3
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        return {'frame targets': frame, 'bloom': bloom, 'sun shadow maps': shadow,
+                'sky cover map': cover, 'environment maps': env, 'material maps': maps}
+
     def _bind_terrain_layers(self, terrain_gl):
         """The terrain layers' normal maps (the companions of its sand,
         grass, rock and snow textures) on their units, and each layer's

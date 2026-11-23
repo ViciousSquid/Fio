@@ -842,6 +842,17 @@ class Ui_MainWindow(object):
         MainWindow.tools_menu.addAction(MainWindow.item_editor_action)
         MainWindow.tools_menu.addAction(MainWindow.logic_graph_action)
         MainWindow.tools_menu.addAction(MainWindow.logic_wizard_action)
+        # How the open map's textures get their material maps under HD_High.
+        MainWindow.hd_readiness_action = QAction('HD Readiness Report...', MainWindow)
+        MainWindow.hd_readiness_action.setToolTip(
+            'List each texture the open map uses and where its HD material maps '
+            'come from: hand-made, generated and committed, or generated at load.')
+
+        def _show_hd_readiness():
+            from editor.hd_readiness import show_report
+            show_report(MainWindow)
+        MainWindow.hd_readiness_action.triggered.connect(_show_hd_readiness)
+        MainWindow.tools_menu.addAction(MainWindow.hd_readiness_action)
         MainWindow.tools_menu.addSeparator()
         MainWindow.tools_menu.addAction(MainWindow.terrain_action)
         MainWindow.tools_menu.addAction(MainWindow.procedural_action)
