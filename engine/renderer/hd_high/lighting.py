@@ -4,6 +4,7 @@ The std140 light UBO and per-shader light caps, the fog/ambient uniform
 upload, and omnidirectional point-light shadows as depth cube-maps.
 """
 
+import re
 import glm
 import numpy as np
 import OpenGL.GL as gl
@@ -28,6 +29,68 @@ def _split_casters(table, slots):
     """``(box slots, convex geometry slots)`` of the caster *slots*."""
     geometry = (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
     return slots[~geometry], slots[geometry]
+
+
+#: HD_High's point-light shadow maps live in ONE texture: a depth array with
+#: six layers a light (layer = slot * 6 + cube face), sampled through one
+#: sampler. The shared source (engine.shaders.SHADOW_GLSL) declares a
+#: ``samplerCube`` per shadow slot -- eight samplers -- which, beside the
+#: surface samplers HD_High adds, is more than the 16 a fragment shader is
+#: guaranteed (and all that some drivers give: the programs then fail to
+#: link). The face a direction falls on and where on it are worked out here
+#: exactly as a cube lookup does, so the picture is the cube maps'.
+_POINT_SHADOW_SAMPLING = """
+#define MAX_SHADOW_LIGHTS """ + str(shaders.MAX_SHADOW_LIGHTS) + """
+uniform highp sampler2DArray shadowMaps;      // layer = slot * 6 + cube face
+// Per shadow slot: x the face's width in texels, y that width over a layer's
+// (a light's own map size may be smaller than the array's).
+uniform vec2 uShadowFace[MAX_SHADOW_LIGHTS];
+
+highp float _sampleShadowCube(int idx, highp vec3 d) {
+    highp vec3 a = abs(d);
+    highp vec2 uv;
+    highp float ma;
+    float face;
+    if (a.x >= a.y && a.x >= a.z) {
+        ma = a.x; face = d.x > 0.0 ? 0.0 : 1.0;
+        uv = vec2(d.x > 0.0 ? -d.z : d.z, -d.y);
+    } else if (a.y >= a.z) {
+        ma = a.y; face = d.y > 0.0 ? 2.0 : 3.0;
+        uv = vec2(d.x, d.y > 0.0 ? d.z : -d.z);
+    } else {
+        ma = a.z; face = d.z > 0.0 ? 4.0 : 5.0;
+        uv = vec2(d.z > 0.0 ? d.x : -d.x, -d.y);
+    }
+    vec2 f = uShadowFace[idx];
+    highp float width = max(f.x, 1.0);
+    uv = clamp((uv / max(ma, 1e-9) * 0.5 + 0.5) * width, vec2(0.5), vec2(width - 0.5))
+       * (f.y / width);
+    return textureLod(shadowMaps, vec3(uv, float(idx) * 6.0 + face), 0.0).r;
+}
+
+// The cube's face width in texels.
+highp float _shadowCubeTexels(int idx) {
+    return max(uShadowFace[idx].x, 1.0);
+}
+"""
+
+_SHADOW_SAMPLING_RE = re.compile(
+    r"#define MAX_SHADOW_LIGHTS \d+\s*\nuniform samplerCube shadowMaps\[\d+\];"
+    r".*?(?=\n// Each shadow slot's filter)", re.DOTALL)
+
+
+def point_shadow_source(source):
+    """*source* with its point-light shadow maps read from one depth array
+    (:data:`_POINT_SHADOW_SAMPLING`) instead of a cube sampler per slot;
+    *source* itself when it has no shadow samplers."""
+    if not source or 'samplerCube shadowMaps' not in source:
+        return source
+    rewritten, count = _SHADOW_SAMPLING_RE.subn(
+        lambda _match: _POINT_SHADOW_SAMPLING.strip('\n'), source, count=1)
+    if count != 1 or 'samplerCube shadowMaps' in rewritten:
+        raise RuntimeError("HD_High: the point shadow samplers were not where "
+                           "engine.shaders.SHADOW_GLSL puts them")
+    return rewritten
 
 
 class LightingMixin:
@@ -359,62 +422,65 @@ class LightingMixin:
     # Depth cube-map shadow mapping
     # --------------------------------------------------------------------------
     def _init_shadow_resources(self):
-        """Allocate the FBO and the pool of depth cube-maps used for
-        omnidirectional point-light shadows.  Called once, after the GL context
-        and shaders are ready."""
+        """Allocate the FBO and the depth array that holds every point
+        light's shadow map (six layers a shadow slot). Called once, after
+        the GL context and shaders are ready."""
         if 'depth_cube' not in self.shaders:
             return
         try:
             prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
             self._shadow_fbo = int(gl.glGenFramebuffers(1))
-            self._shadow_cubemaps = []
             self.shadow_units_changed()
-            size = self.shadow_map_size
-            # Every slot starts as a 1x1 placeholder -- complete, so each
-            # shadow sampler always has a valid cube bound -- and is given its
-            # full size only when a shadow-casting light takes it.
-            self._shadow_cube_sizes = []
-            for _ in range(self.MAX_SHADOW_LIGHTS):
-                cm = int(gl.glGenTextures(1))
-                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
-                self._specify_shadow_cube(1)
-                self._shadow_cube_sizes.append(1)
-                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
-                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
-                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
-                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
-                gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
-                self._shadow_cubemaps.append(cm)
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            # A 1x1 placeholder, complete, so the shadow sampler always has
+            # a valid texture; layers are given their size when a
+            # shadow-casting light takes a slot (_ensure_shadow_array).
+            array = int(gl.glGenTextures(1))
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, array)
+            for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST),
+                                (gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST),
+                                (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
+                                (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
+                gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, name, value)
+            #: One element, the array: what the shadow slots share. (A list,
+            #: as the pool of cube maps it replaces was: empty means no
+            #: shadow resources.)
+            self._shadow_cubemaps = [array]
+            self._shadow_array_size = 0
+            self._shadow_array_slots = 0
+            self._specify_shadow_array(1, 1)
+            self._shadow_cube_sizes = [1] * self.MAX_SHADOW_LIGHTS
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
             self.shadow_units_changed()
 
-            # Depth-only FBO: validate completeness with the first face attached.
+            # Depth-only FBO: validate completeness with the first layer.
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._shadow_fbo)
             gl.glDrawBuffer(gl.GL_NONE)
             gl.glReadBuffer(gl.GL_NONE)
-            gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
-                                      gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X, self._shadow_cubemaps[0], 0)
+            gl.glFramebufferTextureLayer(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
+                                         array, 0, 0)
             status = gl.glCheckFramebufferStatus(gl.GL_FRAMEBUFFER)
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, prev_fbo)
             if status != gl.GL_FRAMEBUFFER_COMPLETE:
-                print(f"[Shadow] depth cube-map FBO incomplete (0x{status:x}); shadows disabled")
+                print(f"[Shadow] depth array FBO incomplete (0x{status:x}); shadows disabled")
                 self._shadow_fbo = None
+                gl.glDeleteTextures([array])
                 self._shadow_cubemaps = []
             else:
-                print(f"[Shadow] depth cube-map shadows ready "
-                      f"({self.MAX_SHADOW_LIGHTS} lights @ {size}px)")
+                print(f"[Shadow] point shadow array ready "
+                      f"({self.MAX_SHADOW_LIGHTS} lights @ {self.shadow_map_size}px)")
         except Exception as e:
             print(f"[Shadow] initialisation failed: {e}")
             self._shadow_fbo = None
             self._shadow_cubemaps = []
 
-    @staticmethod
-    def _specify_shadow_cube(size):
-        """(Re)allocate the six depth faces of the bound cube-map at *size*."""
-        for face in range(6):
-            gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0,
-                            gl.GL_DEPTH_COMPONENT24, size, size, 0,
-                            gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+    def _specify_shadow_array(self, size, slots):
+        """(Re)allocate the bound depth array: *slots* shadow slots of six
+        *size*-square layers each."""
+        gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_DEPTH_COMPONENT24,
+                        int(size), int(size), 6 * int(slots), 0,
+                        gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+        self._shadow_array_size = int(size)
+        self._shadow_array_slots = int(slots)
 
     #: The range a Light's own shadow_map_size is clamped to.
     SHADOW_MAP_SIZE_MIN = 64
@@ -429,67 +495,74 @@ class LightingMixin:
                 (self.MAX_SHADOW_LIGHTS, 2), dtype=np.float32)
         return array
 
-    def _ensure_shadow_cube_size(self, slot, size=None):
-        """Give shadow slot *slot*'s cube-map *size* (default: the renderer's
-        shadow_map_size) before it is rendered into; returns whether it was
-        (re)allocated."""
-        size = int(self.shadow_map_size if size is None else size)
-        sizes = getattr(self, '_shadow_cube_sizes', None)
-        if sizes is None or slot >= len(sizes) or sizes[slot] == size:
+    def _shadow_face_array(self):
+        """Per shadow slot ``(face width in texels, that width over a
+        layer's)`` for the lit passes' uShadowFace."""
+        array = getattr(self, '_shadow_face', None)
+        if array is None:
+            array = self._shadow_face = np.ones(
+                (self.MAX_SHADOW_LIGHTS, 2), dtype=np.float32)
+        return array
+
+    def _ensure_shadow_array(self, slot_sizes):
+        """Make the depth array hold every slot of *slot_sizes* (``{slot:
+        face size}``); returns whether it was reallocated -- every slot's
+        map is then gone and must be drawn again. The array only grows: a
+        light that is switched off and on does not reallocate it."""
+        if not slot_sizes or not self._shadow_cubemaps:
             return False
-        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, self._shadow_cubemaps[slot])
-        self._specify_shadow_cube(size)
-        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
-        sizes[slot] = size
-        self.shadow_units_changed()
-        return True
+        size = max(max(slot_sizes.values()), 1)
+        slots = max(slot_sizes) + 1
+        grown = size > self._shadow_array_size or slots > self._shadow_array_slots
+        if grown:
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._shadow_cubemaps[0])
+            self._specify_shadow_array(max(size, self._shadow_array_size),
+                                       max(slots, self._shadow_array_slots))
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+            self.shadow_units_changed()
+        layer = float(max(self._shadow_array_size, 1))
+        faces = self._shadow_face_array()
+        for slot, face in slot_sizes.items():
+            self._shadow_cube_sizes[slot] = int(face)
+            faces[slot] = (float(face), float(face) / layer)
+        return grown
 
     def _bind_shadow_maps(self, uniforms):
-        """Bind shadow samplers to dedicated texture units.
+        """Give the bound lit program the point shadow array and each
+        slot's filter.
 
-        Lighting shaders contain both sampler2D and samplerCube uniforms.
-        OpenGL requires sampler uniforms of different types to reference
-        different texture units at draw time, even when no shadowing light
-        is active. Keep the cube samplers on their reserved units and bind
-        texture 0 when shadow resources are unavailable.
-
-        A sampler's unit is program state: it holds from the first assignment
-        until the program is deleted, and a recompiled program gets a new
-        UniformCache. So the units are assigned on the program's first pass
-        only; every pass still binds the cube-maps, since the texture units
-        are shared context state (terrain binds its own there).
+        The sampler's unit is program state: it holds from the first
+        assignment until the program is deleted, and a recompiled program
+        gets a new UniformCache, so it is assigned on the program's first
+        pass only. The array is bound on every pass that finds something
+        else there, since texture units are shared context state.
         """
         base = self.SHADOW_TEXTURE_UNIT_BASE
-        slots = uniforms.shadow_slots
-        if slots is None:
-            live = []
-            for i in range(self.MAX_SHADOW_LIGHTS):
-                loc = uniforms[f'shadowMaps[{i}]']
-                if loc != -1:
-                    gl.glUniform1i(loc, base + i)
-                    live.append(i)
-            slots = uniforms.shadow_slots = tuple(live)
+        if uniforms.shadow_slots is None:
+            loc = uniforms['shadowMaps']
+            if loc != -1:
+                gl.glUniform1i(loc, base)
+            uniforms.shadow_slots = (0,) if loc != -1 else ()
         loc = uniforms['uShadowFilter[0]']
         if loc != -1:
             gl.glUniform2fv(loc, self.MAX_SHADOW_LIGHTS, self._shadow_filter_array())
-        cubemaps = self._shadow_cubemaps
-        count = len(cubemaps)
-        # What each shadow unit holds is remembered for the frame: every lit
-        # pass used to bind all of them again (two GL calls a unit, ~80 calls
-        # a frame, a third of the frame's GL calls on a map with no shadows).
-        # The record is dropped at the start of each frame, after the terrain
-        # pass (which binds its own there) and whenever the cube-maps are
-        # made or deleted (shadow_units_changed).
+        loc = uniforms['uShadowFace[0]']
+        if loc != -1:
+            gl.glUniform2fv(loc, self.MAX_SHADOW_LIGHTS, self._shadow_face_array())
+        if not uniforms.shadow_slots:
+            return
+        texture = self._shadow_cubemaps[0] if self._shadow_cubemaps else 0
+        # What the shadow unit holds is remembered for the frame; the record
+        # is dropped at the start of each frame and whenever the array is
+        # made, resized or deleted (shadow_units_changed).
         bound = getattr(self, '_shadow_units_bound', None)
         if bound is None:
             bound = self._shadow_units_bound = {}
-        for i in slots:
-            texture = cubemaps[i] if i < count else 0
-            if bound.get(i) != texture:
-                gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
-                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, texture)
-                bound[i] = texture
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+        if bound.get(0) != texture:
+            gl.glActiveTexture(gl.GL_TEXTURE0 + base)
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
+            bound[0] = texture
+            gl.glActiveTexture(gl.GL_TEXTURE0)
 
     def shadow_units_changed(self):
         """Forget what the shadow and cookie units hold: something other
@@ -629,6 +702,9 @@ class LightingMixin:
                     size = int(max(self.SHADOW_MAP_SIZE_MIN,
                                    min(self.SHADOW_MAP_SIZE_MAX, authored)))
             slot_size[s] = int(size)
+        if self._ensure_shadow_array(slot_size):
+            # A larger array: nothing in it yet.
+            self._shadow_slot_sig = [None] * self.MAX_SHADOW_LIGHTS
 
         to_render = []
         for light_key in light_keys:
@@ -681,7 +757,8 @@ class LightingMixin:
         gl.glDrawBuffer(gl.GL_NONE)
         gl.glReadBuffer(gl.GL_NONE)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        gl.glDisable(gl.GL_SCISSOR_TEST)
+        prev_scissor = [int(v) for v in gl.glGetIntegerv(gl.GL_SCISSOR_BOX)]
+        gl.glEnable(gl.GL_SCISSOR_TEST)
         gl.glDisable(gl.GL_BLEND)
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthMask(gl.GL_TRUE)
@@ -718,9 +795,11 @@ class LightingMixin:
             proj = glm.perspective(
                 glm.radians(90.0), 1.0, near_plane, far_plane)
             size = slot_size.get(slot, self.shadow_map_size)
-            self._ensure_shadow_cube_size(slot, size)
+            # A light's faces are the corner of its six layers; the clear
+            # is kept to them by the scissor.
             gl.glViewport(0, 0, size, size)
-            cubemap = self._shadow_cubemaps[slot]
+            gl.glScissor(0, 0, size, size)
+            shadow_array = self._shadow_cubemaps[0]
 
             gl.glUniform3f(lightpos_loc, lx, ly, lz)
             gl.glUniform1f(far_loc, far_plane)
@@ -748,9 +827,9 @@ class LightingMixin:
                 key=('shadow', slot))
 
             for face in range(6):
-                gl.glFramebufferTexture2D(
+                gl.glFramebufferTextureLayer(
                     gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
-                    gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cubemap, 0)
+                    shadow_array, 0, slot * 6 + face)
                 gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
                 lsm = proj * glm.lookAt(
                     center, center + face_dirs[face][0], face_dirs[face][1])
@@ -828,7 +907,8 @@ class LightingMixin:
         gl.glViewport(
             int(prev_vp[0]), int(prev_vp[1]),
             int(prev_vp[2]), int(prev_vp[3]))
-        if scissor_was:
-            gl.glEnable(gl.GL_SCISSOR_TEST)
+        gl.glScissor(*prev_scissor)
+        if not scissor_was:
+            gl.glDisable(gl.GL_SCISSOR_TEST)
         gl.glUseProgram(prev_program)
         self._current_shader = prev_shader

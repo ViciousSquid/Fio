@@ -33,6 +33,7 @@ from engine import hd_graphics
 from engine.constants import RENDER_MODE_LIT
 from engine.renderer.core.uniform_rows import uniform_rows
 from engine.renderer.hd_high import hdr, surface
+from engine.renderer.hd_high.lighting import point_shadow_source
 
 ENV_MAP_SIZE = (512, 256)
 #: Frames between redraws of a procedural sky's environment map while its
@@ -481,6 +482,10 @@ class EnvironmentMixin:
         For the programs that are compiled without the shader loader."""
         if not self.hd or not self.surface_shading:
             return source
+        # Every point shadow map through one sampler (lighting.py): with a
+        # cube sampler per slot the lit programs need more than the 16 a
+        # fragment shader is guaranteed.
+        source = point_shadow_source(source)
         if 'FioLightBlock' not in source:
             # Not yet through engine.shaders.light_ubo_source, which must
             # come after: it rewrites the light loops these paths add.

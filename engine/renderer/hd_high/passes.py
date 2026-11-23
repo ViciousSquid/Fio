@@ -315,7 +315,9 @@ class PassesMixin:
         terrain_gl.render(
             terrain, projection, view, camera_pos, frustum_planes,
             active_lights_count,
-            shadow_cubemaps=(self._shadow_cubemaps if self.shadows_enabled else None),
+            # HD_High's point shadows are one depth array, bound with the
+            # program's other surface state (_bind_shadow_maps).
+            shadow_cubemaps=None,
             shadow_filter=self._shadow_filter_array(),
             shadow_unit_base=self.SHADOW_TEXTURE_UNIT_BASE,
             env_uniforms=self.env_uniform_values(),

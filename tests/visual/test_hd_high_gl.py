@@ -69,6 +69,90 @@ def test_hd_high_is_a_separate_renderer_that_satisfies_the_contract():
     glh.reset_texture_cache()
 
 
+#: What OpenGL 3.3 guarantees a fragment shader, and all that some drivers
+#: (macOS) give: a program that samples more does not link there.
+FRAGMENT_SAMPLER_LIMIT = 16
+#: Samplers only a program's vertex shader reads.
+VERTEX_SAMPLERS = ("uTransforms", "uHeights")
+
+
+def _active_samplers(program):
+    import OpenGL.GL as gl
+    kinds = {int(getattr(gl, name)) for name in dir(gl)
+             if name.startswith(("GL_SAMPLER_", "GL_INT_SAMPLER_", "GL_UNSIGNED_INT_SAMPLER_"))}
+    found = {}
+    for index in range(gl.glGetProgramiv(program, gl.GL_ACTIVE_UNIFORMS)):
+        name, size, kind = gl.glGetActiveUniform(program, index)
+        if int(kind) in kinds:
+            name = name.decode() if isinstance(name, bytes) else str(name)
+            found[name.split("[")[0]] = int(size)
+    return found
+
+
+def test_no_program_samples_more_than_a_fragment_shader_is_guaranteed():
+    """Every HD_High program links where a fragment shader has 16 samplers
+    and no more: the point lights' shadow maps are one depth array, not a
+    cube sampler per light."""
+    glh.reset_texture_cache()
+    with glh.GLTestContext(64, 64):
+        renderer = glh.make_renderer(_config(), name="HD_High")
+        try:
+            assert renderer.ready
+            for name in ("lit", "textured", "textured_instanced", "brush_instanced",
+                         "geo_batched", "terrain"):
+                assert renderer.shaders.get(name), name
+            for name, program in renderer.shaders.items():
+                if not program:
+                    continue
+                samplers = _active_samplers(int(getattr(program, "id", program)))
+                in_fragment = sum(size for sampler, size in samplers.items()
+                                  if sampler not in VERTEX_SAMPLERS)
+                assert in_fragment <= FRAGMENT_SAMPLER_LIMIT, (name, samplers)
+                if "shadowMaps" in samplers:
+                    assert samplers["shadowMaps"] == 1, (name, samplers)
+        finally:
+            renderer.cleanup()
+    glh.reset_texture_cache()
+
+
+def test_point_shadows_share_one_array_and_keep_each_lights_own_size():
+    """Two shadow-casting lamps, one with its own (smaller) map size: both
+    cast shadows from the one depth array, each at its size."""
+    from editor.things import Light
+    from tests.helpers.worlds import box_brush, make_thing
+    brushes = [box_brush("floor", (0, -16, 0), (2048, 32, 2048)),
+               box_brush("cube", (0, 150, 0), (300, 300, 300))]
+
+    def lamps(shadows):
+        return [make_thing(Light, "a", (-700.0, 500.0, 0.0), color=[255, 255, 255],
+                           intensity=2.0, radius=1600.0, state="on", casts_shadows=shadows),
+                make_thing(Light, "b", (0.0, 500.0, -700.0), color=[255, 255, 255],
+                           intensity=1.6, radius=1400.0, state="on", casts_shadows=shadows,
+                           shadow_map_size=256)]
+    frames = {}
+    glh.reset_texture_cache()
+    with glh.GLTestContext(240, 150) as context:
+        renderer = glh.make_renderer(_config(), name="HD_High")
+        try:
+            from engine import hd_graphics
+            renderer.set_hd_sky(hd_graphics.sky_settings({"hd_grain": 0.0}, ""))
+            for shadows in (True, False):
+                frames[shadows] = _frame(context, renderer, brushes, lamps(shadows),
+                                         aspect=1.6, eye=(500.0, 420.0, 900.0),
+                                         target=(0.0, 60.0, 0.0)).astype(np.int32)
+            assert len(renderer._shadow_cubemaps) == 1
+            assert renderer._shadow_array_size == renderer.shadow_map_size
+            assert renderer._shadow_array_slots == 2
+            assert sorted(renderer._shadow_cube_sizes[:2]) == [256, renderer.shadow_map_size]
+        finally:
+            renderer.cleanup()
+    glh.reset_texture_cache()
+    darker = (frames[False] - frames[True]).max(axis=2)
+    # The cube's shadows are there, and nothing is brighter for casting them.
+    assert (darker > 10).mean() > 0.01, [(darker > t).mean() for t in (5, 10, 25)]
+    assert (frames[True] - frames[False]).max() <= 2
+
+
 @pytest.mark.parametrize("sky, sun", [("none", False), ("panorama", False),
                                       ("panorama", True), ("procedural", True),
                                       ("procedural", False)])
