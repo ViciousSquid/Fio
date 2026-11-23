@@ -97,11 +97,15 @@ def test_box_face_materials_match_authored_desktop_plane_normals():
         np.testing.assert_allclose(vertices[:,:3] @ plane['n'],plane['d'])
 
 
-def test_mobile_light_capacity_matches_desktop_instead_of_truncating_at_32():
-    from engine.shaders import MAX_LIGHTS
-    world = PlayerWorld(level([{'type':'Light','pos':[i,100,0]} for i in range(MAX_LIGHTS)]))
+def test_mobile_light_capacity_is_the_player_budget_instead_of_truncating_at_32():
+    # The player keeps its own budget (MAX_LIGHTS_PLAYER), below the desktop
+    # MAX_LIGHTS: some Android GLES drivers cannot link a larger light block.
+    from engine.shaders import MAX_LIGHTS, MAX_LIGHTS_PLAYER
+    assert 32 < MAX_LIGHTS_PLAYER <= MAX_LIGHTS
+    world = PlayerWorld(level([{'type':'Light','pos':[i,100,0]}
+                               for i in range(MAX_LIGHTS_PLAYER + 1)]))
     try:
-        assert len(lights(EntityProjection().update(world),(0,100,0))) == MAX_LIGHTS
+        assert len(lights(EntityProjection().update(world),(0,100,0))) == MAX_LIGHTS_PLAYER
     finally:
         world.close()
 

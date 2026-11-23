@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBo
                              QMenu, QRadioButton, QSplitter, QTabWidget, QToolTip, QWidget)
 
 UI_FONT = "Fio UI"
-MONO_FONT = "IBM Plex Mono"
+MONO_FONT = "Fio Mono"
 ICON_DIRECTORY = Path(__file__).resolve().parents[1] / 'assets' / 'ui' / 'controls'
 
 
@@ -383,14 +383,35 @@ def install_editor_style(app):
     app._fio_editor_style_installed = True
 
 
+#: Widget classes Qt gives their own font from the platform theme
+#: (QApplicationPrivate::initializeWidgetFontHash). Qt refills these whenever
+#: a style is installed -- and QApplication.setStyleSheet installs one -- so on
+#: macOS QLabel, QPushButton, the item views and the rest go back to the 13pt
+#: system font until QApplication.setFont(font) clears them again.
+_THEME_FONT_CLASSES = (
+    'QMenu', 'QMenuBar', 'QMenuItem', 'QMessageBox', 'QLabel', 'QTipLabel',
+    'QTitleBar', 'QStatusBar', 'QMdiSubWindowTitleBar', 'QDockWidgetTitle',
+    'QPushButton', 'QCheckBox', 'QRadioButton', 'QToolButton',
+    'QAbstractItemView', 'QListView', 'QHeaderView', 'QListBox',
+    'QComboMenuItem', 'QComboLineEdit', 'QSmallFont', 'QMiniFont',
+)
+
+
 def set_editor_font_size(app, size):
     font = QFont(UI_FONT, int(size))
     font.setHintingPreference(QFont.PreferNoHinting)
     # QApplication.setFont synchronously sends FontChange events through the
     # entire widget tree. MainWindow applies the saved setting after building
     # its UI; repeating the startup value there needlessly re-enters every
-    # widget (including a live QOpenGLWidget) during construction.
-    if app.font() != font:
+    # widget (including a live QOpenGLWidget) during construction -- so it is
+    # skipped when nothing would change. But "nothing" includes the theme's
+    # per-class fonts: the application stylesheet is set after the startup
+    # font, Qt refills those fonts when it installs the stylesheet's style, and
+    # skipping on the application font alone left every themed class on the
+    # platform font (on macOS, .AppleSystemUIFont at 13pt in place of the
+    # editor font at its size).
+    if (app.font() != font
+            or any(app.font(name) != font for name in _THEME_FONT_CLASSES)):
         app.setFont(font)
     # QMdiSubWindowTitleBar is the font QMessageBox measures its title with.
     for widget_class in ('QMenu', 'QMenuBar', 'QMessageBox', 'QMdiSubWindowTitleBar'):

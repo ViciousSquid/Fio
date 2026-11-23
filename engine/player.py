@@ -133,6 +133,43 @@ def _closest_point_on_triangle(p, a, b, c):
             a[2] + ab[2] * v + ac[2] * w)
 
 
+def _closest_point_on_triangle_xz(x, z, triangle):
+    """Return the triangle height and squared XZ distance to its projection.
+
+    Used by model stair stepping: a tread may begin just ahead of the player's
+    centre, while the capsule footprint already reaches its leading edge.
+    """
+    a, b, c = triangle
+    abx, abz = b[0] - a[0], b[2] - a[2]
+    acx, acz = c[0] - a[0], c[2] - a[2]
+    det = abx * acz - abz * acx
+    dx, dz = x - a[0], z - a[2]
+
+    if abs(det) > 1e-12:
+        u = (dx * acz - dz * acx) / det
+        v = (abx * dz - abz * dx) / det
+        if u >= -1e-7 and v >= -1e-7 and u + v <= 1.0 + 1e-7:
+            height = a[1] + u * (b[1] - a[1]) + v * (c[1] - a[1])
+            return height, 0.0
+
+    best = (None, float("inf"))
+    for start, end in ((a, b), (b, c), (c, a)):
+        ex, ez = end[0] - start[0], end[2] - start[2]
+        length_sq = ex * ex + ez * ez
+        if length_sq <= 1e-20:
+            t = 0.0
+        else:
+            t = max(0.0, min(1.0, (
+                (x - start[0]) * ex + (z - start[2]) * ez
+            ) / length_sq))
+        qx, qz = start[0] + ex * t, start[2] + ez * t
+        distance_sq = (x - qx) ** 2 + (z - qz) ** 2
+        if distance_sq < best[1]:
+            height = start[1] + (end[1] - start[1]) * t
+            best = (height, distance_sq)
+    return best
+
+
 def _oriented_triangle_normal(normal, point, reference, velocity):
     """Orient a triangle normal toward the side occupied by the capsule centre.
 
@@ -187,6 +224,33 @@ def _model_triangle_contact_normal(displacement, distance, face_normal,
     if length <= 1e-10:
         return face_side
     return (n[0] / length, n[1] / length, n[2] / length)
+
+
+def _ground_slide_normal(contact_normal, face_normal):
+    """The normal a swept capsule slides along after a touch.
+
+    A ground-like touch -- the contact normal within walking slope of up,
+    which is what the ground check already counts as standing -- slides as
+    ground: along a walkable triangle's own face, or straight up off the top
+    edge of a wall or riser. Sliding along the closest-point normal instead
+    tilted it back toward the player at a stair's nose, turning walking speed
+    into a hop (200 units a second forward became 22 upward) that left the
+    player airborne for two ticks at every step of a model staircase.
+    Steeper contacts keep their own normal: a capsule still rolls off a ledge
+    and still meets the top of a step too high to climb.
+    """
+    if contact_normal[1] < PM_GROUND_NORMAL:
+        return contact_normal
+    fy = float(face_normal[1])
+    if abs(fy) < PM_GROUND_NORMAL:
+        return (0.0, 1.0, 0.0)
+    sign = 1.0 if fy > 0.0 else -1.0
+    fx, fz = float(face_normal[0]) * sign, float(face_normal[2]) * sign
+    fy = abs(fy)
+    length = math.sqrt(fx * fx + fy * fy + fz * fz)
+    if length <= 1e-10:
+        return contact_normal
+    return (fx / length, fy / length, fz / length)
 
 
 def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle,
@@ -532,6 +596,8 @@ class Player:
         self._cover = None
         self.physics_enabled = physics_enabled
         self.step_height = 18.0  # Max height the player can step up automatically
+        # Downward allowance for mesh-footprint support, refreshed per physics tick.
+        self._mesh_support_snap_distance = 0.25
 
         # Water / swimming state (refreshed every update)
         self.in_water = False          # any meaningful immersion (wading or deeper)
@@ -842,6 +908,11 @@ class Player:
         if gravity is None:
             gravity = world_gravity()
         self._gravity = gravity
+        # A grounded player receives gravity before collision resolution. Permit
+        # the footprint probe to recover that one-tick drop at lower frame rates.
+        self._mesh_support_snap_distance = max(
+            0.25, abs(float(gravity)) * float(delta) * float(delta) + 1e-3
+        )
         # --- Build collider list ---
         if spatial_grid:
             # Use the grid to get only nearby static brushes
@@ -1512,6 +1583,24 @@ class Player:
         # Sweep the frame displacement before discrete depenetration; otherwise
         # a fast player can cross a thin model wall completely between ticks.
         if _resolve_models and model_meshes and sweep_start is not None:
+            # A model stair's riser and tread are separate triangles. When a
+            # horizontal move meets the riser, step onto the tread first and
+            # raise the sweep origin by the same amount so the face sweep
+            # follows the raised path rather than colliding with the riser.
+            step_rise = self._try_step_up_model_meshes(
+                model_meshes, aabb_brushes, sweep_start
+            )
+            if step_rise:
+                if hasattr(sweep_start, "x"):
+                    sweep_start = (
+                        float(sweep_start.x), float(sweep_start.y) + step_rise,
+                        float(sweep_start.z)
+                    )
+                else:
+                    sweep_start = (
+                        float(sweep_start[0]), float(sweep_start[1]) + step_rise,
+                        float(sweep_start[2])
+                    )
             self._sweep_model_triangle_meshes(
                 model_meshes, offsets, radius, sweep_start
             )
@@ -1701,6 +1790,108 @@ class Player:
         apply_final_ground_state()
         return False
 
+    def _try_step_up_model_meshes(self, model_meshes, aabb_brushes, start):
+        """Step onto a nearby model tread when its mesh blocks horizontal travel.
+
+        Model collision is a non-convex surface mesh, so its riser cannot use
+        the AABB resolver's top bound. Find an actual walkable triangle within
+        the capsule footprint, lift by no more than the normal step height, and
+        require the complete standing capsule to clear every nearby shape.
+        """
+        if self.swimming or not model_meshes:
+            return 0.0
+        if hasattr(start, "x"):
+            start_x, start_y, start_z = (
+                float(start.x), float(start.y), float(start.z)
+            )
+        else:
+            start_x, start_y, start_z = (float(v) for v in start)
+        if ((float(self.pos.x) - start_x) ** 2
+                + (float(self.pos.z) - start_z) ** 2 <= 1e-8):
+            return 0.0
+
+        half = self._half
+        player_min = glm.vec3(
+            self.pos.x - half.x, self.pos.y - half.y, self.pos.z - half.z
+        )
+        player_max = glm.vec3(
+            self.pos.x + half.x, self.pos.y + half.y, self.pos.z + half.z
+        )
+        blocked = []
+        for brush, triangles, _bounds in model_meshes:
+            if not self._has_headroom(brush, player_min, player_max):
+                blocked.append((brush, triangles))
+        if not blocked:
+            return 0.0
+
+        feet_y = start_y - float(half.y)
+        radius = min(float(half.x), float(half.z))
+        radius_sq = radius * radius
+        step_top = None
+        for _brush, triangles in blocked:
+            brush_top = None
+            for triangle, normal in triangles:
+                # Face winding is not authoritative for a model's collision
+                # surface (reversed OBJ decks are supported elsewhere too).
+                if abs(float(normal[1])) < PM_GROUND_NORMAL:
+                    continue
+                top, distance_sq = _closest_point_on_triangle_xz(
+                    float(self.pos.x), float(self.pos.z), triangle
+                )
+                if distance_sq > radius_sq + 1e-6:
+                    continue
+                rise = top - feet_y
+                if rise <= 1e-4 or rise > self.step_height + 1e-4:
+                    continue
+                if brush_top is None or top > brush_top:
+                    brush_top = top
+            # Every mesh that blocks this destination must provide a real
+            # tread; a nearby low surface cannot hide a separate tall wall.
+            if brush_top is None:
+                return 0.0
+            if step_top is None or brush_top > step_top:
+                step_top = brush_top
+
+        if step_top is None:
+            return 0.0
+        lifted_y = max(
+            float(self.pos.y), step_top + float(half.y) + 1e-3
+        )
+        rise = lifted_y - float(self.pos.y)
+        if rise <= 1e-4:
+            return 0.0
+
+        lifted_min = glm.vec3(
+            player_min[0], lifted_y - half.y, player_min[2]
+        )
+        lifted_max = glm.vec3(
+            player_max[0], lifted_y + half.y, player_max[2]
+        )
+        # The lift happens where the capsule starts this tick and the sweep
+        # then carries it forward, so the lifted hull must be clear there as
+        # well as at the destination: a ceiling edge cleared at the end but
+        # not at the start would be crossed by the lift and swept out of
+        # again, where nothing afterwards can see it. It is lifted there by
+        # the same rise from its own height, which differs from the
+        # destination's when it fell (or rose) this tick.
+        start_lifted_y = start_y + rise
+        start_min = glm.vec3(
+            start_x - half.x, start_lifted_y - half.y, start_z - half.z
+        )
+        start_max = glm.vec3(
+            start_x + half.x, start_lifted_y + half.y, start_z + half.z
+        )
+        for lo, hi in ((lifted_min, lifted_max), (start_min, start_max)):
+            for brush, _triangles, _bounds in model_meshes:
+                if not self._has_headroom(brush, lo, hi):
+                    return 0.0
+            for brush in aabb_brushes or ():
+                if not self._has_headroom(brush, lo, hi):
+                    return 0.0
+
+        self.pos.y = lifted_y
+        return rise
+
     def _sweep_model_triangle_meshes(self, model_meshes, offsets, radius, sweep_start):
         """Sweep the capsule through its integrated displacement against model triangles."""
         if not model_meshes:
@@ -1777,7 +1968,8 @@ class Player:
                         )
                         if hit and (best is None or hit_time < best[0]):
                             best = (hit_time, (float(normal.x), float(normal.y),
-                                               float(normal.z)), brush)
+                                               float(normal.z)), brush,
+                                    face_normal)
 
             if best is None:
                 position = (position[0] + remaining[0],
@@ -1787,7 +1979,8 @@ class Player:
                 break
 
             hit_any = True
-            hit_time, normal, brush = best
+            hit_time, normal, brush, face_normal = best
+            normal = _ground_slide_normal(normal, face_normal)
             position = (position[0] + remaining[0] * hit_time + normal[0] * 1e-3,
                         position[1] + remaining[1] * hit_time + normal[1] * 1e-3,
                         position[2] + remaining[2] * hit_time + normal[2] * 1e-3)
@@ -1813,8 +2006,15 @@ class Player:
         self.pos = glm.vec3(*position)
         return hit_any
 
-    def _find_model_mesh_support(self, model_meshes, offsets, radius):
-        """Return (supporting model, outward contact normal), if supported."""
+    def _find_model_mesh_support(self, model_meshes, offsets, radius,
+                                 clearance=None):
+        """Return (supporting model, outward contact normal), if supported.
+
+        A tread found under the hull's footprint lifts the player onto it
+        (the snap below). *clearance*, if given, is asked whether the hull is
+        clear of everything once lifted; when it is not, the lift is undone
+        and that tread does not count as support this tick.
+        """
         if not model_meshes or not offsets:
             return None
         ox, oy, oz = min(offsets, key=lambda offset: offset[1])
@@ -1825,9 +2025,20 @@ class Player:
                     float(self.velocity.z))
         support_radius = radius + 0.25
         limit_sq = support_radius * support_radius
+        feet_y = float(self.pos.y - self._half.y)
         best_normal_y = PM_GROUND_NORMAL
         best_brush = None
         best_normal = None
+        best_footprint_top = None
+        # Treads that reach under the hull's edge but not under its centre:
+        # (normal_y, brush, normal, top), decided once the loop is done.
+        edge_treads = []
+        # The best support by capsule contact alone, which needs no lift:
+        # what remains if a footprint tread's lift is refused.
+        contact_best = None
+        support_snap_distance = max(
+            0.25, float(self._mesh_support_snap_distance)
+        )
 
         for brush, triangles, bounds in model_meshes:
             if bounds:
@@ -1852,17 +2063,101 @@ class Player:
                 delta = (sphere[0] - closest[0], sphere[1] - closest[1],
                          sphere[2] - closest[2])
                 distance_sq = sum(v * v for v in delta)
-                if distance_sq > limit_sq:
-                    continue
-                distance = math.sqrt(max(0.0, distance_sq))
-                contact_normal = _model_triangle_contact_normal(
-                    delta, distance, face_normal, closest, centre, velocity
-                )
-                if contact_normal[1] > best_normal_y:
-                    best_normal_y = contact_normal[1]
+                if distance_sq <= limit_sq:
+                    distance = math.sqrt(max(0.0, distance_sq))
+                    contact_normal = _model_triangle_contact_normal(
+                        delta, distance, face_normal, closest, centre, velocity
+                    )
+                    if contact_normal[1] > best_normal_y:
+                        best_normal_y = contact_normal[1]
+                        best_brush = brush
+                        best_normal = contact_normal
+                        best_footprint_top = None
+                    if (contact_normal[1] > PM_GROUND_NORMAL
+                            and (contact_best is None
+                                 or contact_normal[1] > contact_best[0])):
+                        contact_best = (contact_normal[1], brush, contact_normal)
+
+                # The player hull has a flat supporting footprint. At the
+                # leading edge of a stepped tread, the lower capsule sphere
+                # can be more than one radius from the triangle even though
+                # the tread is directly under the overlapping hull. Only
+                # inspect walkable triangles whose height range reaches the
+                # feet plane; then use the actual triangle projection.
+                if (abs(float(face_normal[1])) >= PM_GROUND_NORMAL
+                        and tri_min[1] - support_snap_distance <= feet_y
+                        <= tri_max[1] + 0.25):
+                    top, footprint_distance_sq = _closest_point_on_triangle_xz(
+                        centre[0], centre[2], tri
+                    )
+                    support_gap = top - feet_y
+                    if (footprint_distance_sq <= radius * radius + 1e-6
+                            and -0.25 <= support_gap <= support_snap_distance + 1e-6):
+                        support_point = (centre[0], top, centre[2])
+                        contact_normal = _oriented_triangle_normal(
+                            face_normal, support_point, centre, velocity
+                        )
+                        if footprint_distance_sq > 1e-6:
+                            edge_treads.append(
+                                (contact_normal[1], brush, contact_normal, top))
+                        elif contact_normal[1] > best_normal_y:
+                            best_normal_y = contact_normal[1]
+                            best_brush = brush
+                            best_normal = contact_normal
+                            best_footprint_top = top
+        # A tread under only the edge of the hull holds the player on a
+        # staircase -- where there is a lower tread under its centre, within
+        # a step -- but not over a ledge: a player whose centre has gone past
+        # the edge of a deck, with nothing within a step below it, falls.
+        if edge_treads and self._model_mesh_ground_beneath(
+                model_meshes, centre[0], centre[2], feet_y):
+            for normal_y, brush, contact_normal, top in edge_treads:
+                if normal_y > best_normal_y:
+                    best_normal_y = normal_y
                     best_brush = brush
                     best_normal = contact_normal
+                    best_footprint_top = top
+        # Snap only downward/inward motion onto the actual accepted surface.
+        # Positive separating velocity is left untouched so jumping still detaches.
+        if (best_footprint_top is not None and velocity[1] <= 1e-3
+                and feet_y < best_footprint_top):
+            lowered = self.pos.y
+            self.pos.y = best_footprint_top + float(self._half.y)
+            if clearance is not None and not clearance():
+                # Lifted into a ceiling, a railing or a wall: stay put, and
+                # stand only on what the capsule itself touches.
+                self.pos.y = lowered
+                if contact_best is None:
+                    return None
+                return (contact_best[1], contact_best[2])
         return (best_brush, best_normal) if best_brush is not None else None
+
+    def _model_mesh_ground_beneath(self, model_meshes, x, z, feet_y):
+        """Whether a walkable model triangle lies under (x, z) within a step
+        below *feet_y* (or just above it)."""
+        low = feet_y - float(self.step_height) - 1e-3
+        high = feet_y + 0.25
+        for _brush, triangles, bounds in model_meshes:
+            if bounds:
+                mn, mx = bounds
+                if (x < mn[0] or x > mx[0] or z < mn[2] or z > mx[2]
+                        or mx[1] < low or mn[1] > high):
+                    continue
+            for tri, face_normal in triangles:
+                if abs(float(face_normal[1])) < PM_GROUND_NORMAL:
+                    continue
+                v0, v1, v2 = tri
+                if (max(v0[1], v1[1], v2[1]) < low
+                        or min(v0[1], v1[1], v2[1]) > high
+                        or x < min(v0[0], v1[0], v2[0])
+                        or x > max(v0[0], v1[0], v2[0])
+                        or z < min(v0[2], v1[2], v2[2])
+                        or z > max(v0[2], v1[2], v2[2])):
+                    continue
+                top, distance_sq = _closest_point_on_triangle_xz(x, z, tri)
+                if distance_sq <= 1e-6 and low <= top <= high:
+                    return True
+        return False
 
     def _model_mesh_max_penetration(self, model_meshes, offsets, radius):
         """Maximum sphere/triangle penetration at the current capsule position."""
@@ -2025,7 +2320,16 @@ class Player:
         support = None
         support_normal = None
 
-        model_support = self._find_model_mesh_support(model_meshes, offsets, radius)
+        def hull_is_clear():
+            half = self._half
+            lo = glm.vec3(self.pos.x - half.x, self.pos.y - half.y, self.pos.z - half.z)
+            hi = glm.vec3(self.pos.x + half.x, self.pos.y + half.y, self.pos.z + half.z)
+            return (self._model_mesh_max_penetration(model_meshes, offsets, radius) <= 1e-4
+                    and self._convex_max_penetration(shapes, offsets, radius) <= 1e-4
+                    and all(self._has_headroom(b, lo, hi) for b in aabb_brushes or ()))
+
+        model_support = self._find_model_mesh_support(
+            model_meshes, offsets, radius, clearance=hull_is_clear)
         if model_support is not None:
             support, support_normal = model_support
 

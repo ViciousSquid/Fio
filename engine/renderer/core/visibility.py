@@ -46,10 +46,14 @@ class VisibilityMixin:
 
     PORTAL_RENDER_DISTANCE = 2048.0
 
-    # Render-only inset for the portal aperture.  Physical portal size and
-    # transit geometry remain authored; this keeps coplanar floor/wall edges
-    # from bleeding into the portal image at its boundary.
-    PORTAL_APERTURE_INSET = 4.0
+    # Render-only inset for the portal aperture (world units on every side).
+    # It was 4: the drawn aperture was smaller than the authored one, so a
+    # portal standing on the floor showed a band of the real floor behind it
+    # along its bottom edge (and of whatever was behind it along the others).
+    # The aperture is now drawn at its authored size; a wall coplanar with the
+    # portal is kept from z-fighting its image by the polygon offset on the
+    # depth flatten (PortalsMixin._portal_flatten_depth) instead.
+    PORTAL_APERTURE_INSET = 0.0
 
     #: How close (world units) a published glasses position must be to the
     #: frame camera to count as the viewer's own body. Both are the player's

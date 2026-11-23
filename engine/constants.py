@@ -3,6 +3,14 @@ import math
 
 import glm
 
+#: A shadow-casting Light's filter when it does not set its own
+#: (``shadow_softness``, ``shadow_bias``): the PCF disk radius in cube-map
+#: texels, and the multiplier on the acne-preventing depth bias. Here rather
+#: than in engine.shaders so the Light entity can read them without importing
+#: the shader module (which imports entities in turn).
+SHADOW_SOFTNESS_DEFAULT = 1.25
+SHADOW_BIAS_DEFAULT = 1.0
+
 # --- Settings ---
 WIDTH, HEIGHT = 1280, 720
 FOV = math.pi / 3

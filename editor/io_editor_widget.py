@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QMenu, QAction, QSizePolicy
 )
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QFontMetrics
 
 try:
     from .io_system import (
@@ -539,6 +539,50 @@ class IOConnectionDialog(QDialog):
         )
 
 
+class _DisabledWord(QLabel):
+    """The I/O tab's big "Disabled": the top of its capitals a few pixels
+    under the header above, and only as tall as the word.
+
+    Measured from the font it is actually drawn with, at draw time -- a
+    64 px font keeps a wide band of empty line space above its capitals,
+    and how wide depends on the font in use, which is only known once the
+    label is styled and shown.
+    """
+
+    #: Space above the capitals and below the descenders, pixels.
+    TOP_GAP = 6
+    BOTTOM_GAP = 12
+
+    def _bounds(self, metrics):
+        return metrics.tightBoundingRect(self.text())
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        self.ensurePolished()
+        bounds = self._bounds(QFontMetrics(self.font()))
+        hint.setHeight(self.TOP_GAP + bounds.height() + self.BOTTOM_GAP)
+        return hint
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def paintEvent(self, event):
+        from PyQt5.QtGui import QPainter
+        from PyQt5.QtWidgets import QStyle, QStyleOption
+        painter = QPainter(self)
+        option = QStyleOption()
+        option.initFrom(self)
+        # The stylesheet's background, then the word placed by its glyphs.
+        self.style().drawPrimitive(QStyle.PE_Widget, option, painter, self)
+        metrics = painter.fontMetrics()
+        bounds = self._bounds(metrics)
+        x = (self.width() - metrics.horizontalAdvance(self.text())) / 2.0
+        baseline = self.TOP_GAP - bounds.top()
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(int(round(x)), int(round(baseline)), self.text())
+        painter.end()
+
+
 class IOEditorWidget(QWidget):
     """
     Widget for editing I/O connections on an entity.
@@ -668,8 +712,9 @@ class IOEditorWidget(QWidget):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         
-        self.disabled_label = QLabel("Disabled")
-        self.disabled_label.setAlignment(Qt.AlignCenter)
+        # Right under the Output Connections header, sized to the word. It
+        # used to be centred in a 220 px expanding box, far down the tab.
+        self.disabled_label = _DisabledWord("Disabled")
         self.disabled_label.setStyleSheet("""
             QLabel {
                 color: #555555;
@@ -679,10 +724,9 @@ class IOEditorWidget(QWidget):
                 border: none;
             }
         """)
-        self.disabled_label.setMinimumHeight(220)
         self.disabled_label.setSizePolicy(
             QSizePolicy.Expanding,
-            QSizePolicy.Expanding
+            QSizePolicy.Fixed
         )
         self.disabled_label.hide()
 

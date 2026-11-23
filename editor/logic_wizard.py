@@ -990,7 +990,7 @@ class ScenarioPage(QWizardPage):
         self._wire_lbl.setWordWrap(True)
         # Use a monospace variant of the app font — no hardcoded point size
         mono = QFont(QApplication.font())
-        mono.setFamily("IBM Plex Mono")
+        mono.setFamily("Fio Mono")
         self._wire_lbl.setFont(mono)
         self._wire_lbl.setStyleSheet("color: #80c0ff;")
         wire_lay.addWidget(self._wire_lbl)
@@ -1349,7 +1349,7 @@ class SummaryPage(QWizardPage):
         # Use a monospace variant of the app font for the connection list.
         # No font-size: Npx — size is inherited from QApplication.font().
         mono = QFont(QApplication.font())
-        mono.setFamily("IBM Plex Mono")
+        mono.setFamily("Fio Mono")
         self._summary_lbl.setFont(mono)
         self._summary_lbl.setStyleSheet("""
             background: #1a1a22;

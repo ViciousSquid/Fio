@@ -2,7 +2,7 @@
 import time
 from engine.entity_table import EntityTable
 from engine.render_table import brush_lights_of, emissive_brushes
-from engine.shaders import MAX_LIGHTS
+from engine.shaders import MAX_LIGHTS_PLAYER as MAX_LIGHTS
 
 
 class EntityProjection:

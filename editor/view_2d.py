@@ -9,7 +9,8 @@ from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor import model_wireframe
 from editor.things import (Thing, Light, PlayerStart, Speaker, ReflectionProbe, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
-                          LogicCamera, LogicSpawner, Portal, LogicState, Effect, Shake)
+                          LogicCamera, LogicSpawner, Portal, LogicState, Effect, Shake,
+                          LightVolume)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
 from engine import brush_placement
 from engine.constants import brush_aabb_bounds, PLAYER_HULL_SIZE
@@ -224,6 +225,10 @@ class View2D(QWidget):
         #: A selected decal's edge being dragged (decal_handles): the decal,
         #: which edge, and whether its undo step is saved yet.
         self._decal_resize = None
+        #: A selected LightVolume's box handle or light source being dragged
+        #: (light_volume_handles): the volume, what is dragged, and whether
+        #: its undo step is saved yet.
+        self._light_volume_drag = None
 
         # --- Component editing (face / edge / vertex / side stretch) ---
         # The mode, hover and selection live on the main window's shared
@@ -1390,22 +1395,64 @@ class View2D(QWidget):
                 and min_y < visible_bounds.bottom() and visible_bounds.top() < max_y)
 
     def is_thing_visible(self, thing, visible_bounds, axis1_idx, axis2_idx):
-        """Check if a thing's position (plus its radius) is within the visible area."""
+        """Whether any of what a thing draws can be in the visible area.
+
+        Its origin, padded by the most it draws away from it: 32 pixels for
+        a sprite, its radius (world units) for a Light or Speaker, and the
+        reach of its model for a model -- whose origin is the point it
+        stands on. The pad used to be 32 *pixels* for everything (a radius
+        was divided by the zoom too), so zoomed in on the top of a model,
+        or on a radius circle, the origin left the view and the whole thing
+        vanished: the closer the zoom, the sooner.
+        """
         pos = thing.pos
         x = pos[axis1_idx]
         y = pos[axis2_idx]
 
-        # Include the radius if the thing has one (Light, Speaker, etc.)
-        radius = 0
+        margin = 32.0 / self.zoom_factor if self.zoom_factor > 0 else 32.0
+        # The radius a Light, Speaker etc. draws, in world units.
         if hasattr(thing, 'get_radius'):
-            radius = thing.get_radius()
-        # Also add a small fixed margin for sprites
-        margin = max(32.0, radius) / self.zoom_factor if self.zoom_factor > 0 else 32.0
+            try:
+                margin = max(margin, float(thing.get_radius() or 0.0))
+            except (TypeError, ValueError):
+                pass
         if isinstance(thing, PlayerStart):
             margin = max(margin, 64.0)  # full 100-unit sign, including its base
+        margin = max(margin, self._model_reach(thing))
 
         point_rect = QRectF(x - margin, y - margin, margin * 2, margin * 2)
         return visible_bounds.intersects(point_rect)
+
+    #: Models whose reach is remembered (each ``positions`` array is its
+    #: loaded model's, shared by every instance).
+    MODEL_REACH_CACHE = 256
+
+    def _model_reach(self, thing):
+        """How far (world units) a thing's drawn model reaches from its
+        origin in any direction; 0 when it draws no model wireframe."""
+        render_mode = str(thing.properties.get('render_mode', 'model')).lower()
+        if not entity_model_path(thing) or not (render_mode == 'model'
+                                                or isinstance(thing, PlayerStart)):
+            return 0.0
+        found = self._model_edges_for(thing)
+        placed = self._model_placement(thing) if found is not None else None
+        if placed is None:
+            return 0.0
+        positions = found[1]
+        cache = self.__dict__.setdefault('_model_reach_cache', {})
+        entry = cache.get(id(positions))
+        if entry is None or entry[0] is not positions:
+            pts = np.asarray(positions, dtype=float).reshape(-1, 3)
+            reach = float(np.sqrt((pts * pts).sum(axis=1).max())) if len(pts) else 0.0
+            if len(cache) >= self.MODEL_REACH_CACHE:
+                cache.clear()
+            entry = cache[id(positions)] = (positions, reach)
+        scale = placed[0]
+        try:
+            factor = max(abs(float(v)) for v in scale)
+        except TypeError:
+            factor = abs(float(scale))
+        return entry[1] * factor
 
     def get_axes(self):
         if self.view_type == 'top': return 'x', 'z'
@@ -1555,6 +1602,7 @@ class View2D(QWidget):
         self.draw_terrain(painter, visible_bounds)
         self.draw_brushes(painter, visible_bounds)
         self.draw_things(painter, visible_bounds)
+        self.draw_light_volumes(painter)
         self.draw_decal_handles(painter)
         return visible_bounds
 
@@ -2538,6 +2586,10 @@ class View2D(QWidget):
             # Skip hidden things
             if self._hidden(thing):
                 continue
+            # A light volume has no icon: draw_light_volumes draws its box
+            # and its light source.
+            if isinstance(thing, LightVolume):
+                continue
             
             # CULL thing if not visible
             if not self.is_thing_visible(thing, visible_bounds, axis1_idx, axis2_idx):
@@ -3326,6 +3378,171 @@ class View2D(QWidget):
         if panel is not None and decal in tool.selected():
             panel.show_values(decal.properties)
 
+    # ------------------------------------------------------------------
+    # Light volumes: the box, its handles and the light source
+    # ------------------------------------------------------------------
+    def _handle_light_volume(self):
+        """The light volume whose handles show: the selected one, unlocked."""
+        from editor.things import LightVolume
+        volume = self.editor.primary_selection()
+        if not isinstance(volume, LightVolume) or volume.properties.get('lock', False):
+            return None
+        return volume
+
+    def draw_light_volumes(self, painter):
+        """Every light volume's box, in its light's colour; the selected one
+        solid, with its handles and its light source (a line from the box's
+        centre shows where the source sits when it is outside the box)."""
+        from editor import light_volume_handles as lvh
+        from editor.things import LightVolume
+        idx = self._axis_indices()
+        if idx is None:
+            return
+        i1, i2, _ = idx
+        selected = self._handle_light_volume()
+        for thing in self.editor.state.things:
+            if not isinstance(thing, LightVolume) or self._hidden(thing):
+                continue
+            u0, v0, u1, v1 = lvh.outline(thing, i1, i2)
+            rect = QRectF(self.world_to_screen(QPointF(u0, v0)),
+                          self.world_to_screen(QPointF(u1, v1))).normalized()
+            r, g, b = (max(0, min(255, int(c * 255))) for c in thing.get_color()[:3])
+            colour = QColor(r, g, b)
+            pen = QPen(colour, 1.5 if thing is selected else 1.0,
+                       Qt.SolidLine if thing is selected else Qt.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(rect)
+            su, sv = lvh.source_point(thing, i1, i2)
+            source = self.world_to_screen(QPointF(su, sv))
+            radius = self.LIGHT_SOURCE_MARKER_PIXELS / 2.0
+            if thing is not selected:
+                # The light source is what there is to click on.
+                painter.setPen(QPen(colour, 1))
+                painter.setBrush(QBrush(QColor(r, g, b, 90)))
+                painter.drawEllipse(source, radius * 0.75, radius * 0.75)
+                continue
+            painter.setPen(QPen(QColor(255, 255, 255), 1))
+            painter.setBrush(QBrush(QColor(255, 255, 255)))
+            size = 8
+            for _key, (u, v) in lvh.handles(thing, i1, i2):
+                at = self.world_to_screen(QPointF(u, v))
+                painter.drawRect(QRectF(at.x() - size / 2, at.y() - size / 2, size, size))
+            centre = self.world_to_screen(QPointF((u0 + u1) / 2.0, (v0 + v1) / 2.0))
+            painter.setPen(QPen(QColor(255, 220, 0), 1, Qt.DotLine))
+            painter.drawLine(centre, source)
+            painter.setPen(QPen(QColor(0, 0, 0), 1))
+            painter.setBrush(QBrush(QColor(255, 220, 0)))
+            painter.drawEllipse(source, radius, radius)
+            painter.drawLine(QPointF(source.x() - radius, source.y()),
+                             QPointF(source.x() + radius, source.y()))
+            painter.drawLine(QPointF(source.x(), source.y() - radius),
+                             QPointF(source.x(), source.y() + radius))
+
+    #: The light-source marker's size on screen, pixels.
+    LIGHT_SOURCE_MARKER_PIXELS = 12
+    #: How near (pixels) a click must be to a light volume's outline.
+    LIGHT_VOLUME_PICK_PIXELS = 6
+
+    def _light_volume_hit_test(self, volume, screen_pos):
+        """Whether a click at *screen_pos* is on a light volume's outline
+        or its light-source marker in this view."""
+        from editor import light_volume_handles as lvh
+        idx = self._axis_indices()
+        if idx is None:
+            return False
+        i1, i2, _ = idx
+        su, sv = lvh.source_point(volume, i1, i2)
+        source = self.world_to_screen(QPointF(su, sv))
+        if (abs(source.x() - screen_pos.x()) <= self.LIGHT_SOURCE_MARKER_PIXELS * 0.75
+                and abs(source.y() - screen_pos.y()) <= self.LIGHT_SOURCE_MARKER_PIXELS * 0.75):
+            return True
+        u0, v0, u1, v1 = lvh.outline(volume, i1, i2)
+        rect = QRectF(self.world_to_screen(QPointF(u0, v0)),
+                      self.world_to_screen(QPointF(u1, v1))).normalized()
+        pad = self.LIGHT_VOLUME_PICK_PIXELS
+        outer = rect.adjusted(-pad, -pad, pad, pad)
+        inner = rect.adjusted(pad, pad, -pad, -pad)
+        return outer.contains(screen_pos) and not (
+            inner.isValid() and inner.contains(screen_pos))
+
+
+    def _begin_light_volume_drag(self, screen_pos, modifiers=Qt.NoModifier):
+        """A press on the selected light volume's source marker or a box
+        handle starts dragging it; the source wins where the two overlap.
+        (A light volume has no icon: what it shows is its box and source.)"""
+        from editor import light_volume_handles as lvh
+        volume = self._handle_light_volume()
+        idx = self._axis_indices()
+        if volume is None or idx is None:
+            return False
+        i1, i2, _ = idx
+        world = self.screen_to_world(QPointF(screen_pos))
+        point = (world.x(), world.y())
+        per_pixel = 1.0 / max(self.zoom_factor, 1e-9)
+        if lvh.source_at(volume, i1, i2, point,
+                         per_pixel * self.LIGHT_SOURCE_MARKER_PIXELS * 0.75):
+            self._light_volume_drag = {'volume': volume, 'mode': 'source',
+                                       'saved': False}
+            return True
+        key = lvh.handle_at(volume, i1, i2, point, per_pixel * 10.0)
+        if key is None:
+            return False
+        self._light_volume_drag = {
+            'volume': volume, 'mode': 'resize', 'key': key, 'saved': False,
+            # The source stays where it is in the world while the box moves
+            # around it (it is stored relative to the box's centre).
+            'source': volume.get_source_position(),
+        }
+        return True
+
+    def _update_light_volume_drag(self, world_pos):
+        """Move the dragged handle or the source to the cursor (snapped while
+        grid snap is on); the whole drag is one undo step."""
+        from editor import light_volume_handles as lvh
+        from engine.change_journal import touch
+        drag = self._light_volume_drag
+        idx = self._axis_indices()
+        if drag is None or idx is None:
+            return
+        i1, i2, _ = idx
+        volume = drag['volume']
+        grid = self.grid_size if self.snap_to_grid_enabled else None
+        point = (world_pos.x(), world_pos.y())
+        props = volume.properties
+        if drag['mode'] == 'source':
+            pos, size = list(volume.pos), volume.get_volume_size()
+            offset = lvh.move_source(volume, point, i1, i2, grid)
+        else:
+            pos, size = lvh.resize(volume, drag['key'], point, i1, i2, grid)
+            offset = [s - p for s, p in zip(drag['source'], pos)]
+        unchanged = (
+            all(abs(a - float(b)) < 1e-6 for a, b in zip(pos, volume.pos))
+            and all(abs(a - b) < 1e-6 for a, b in zip(size, volume.get_volume_size()))
+            and all(abs(a - b) < 1e-6 for a, b in zip(offset, volume.get_source_offset())))
+        if unchanged:
+            return
+        if not drag['saved']:
+            self.main_window.save_state()
+            drag['saved'] = True
+        volume.pos = list(pos)
+        props['volume_size'] = list(size)
+        props['source_offset'] = list(offset)
+        touch(volume)
+        self.main_window.refresh_views()
+
+    def _end_light_volume_drag(self):
+        """The drag is over: the property panel shows the new values."""
+        drag, self._light_volume_drag = self._light_volume_drag, None
+        if drag is None or not drag['saved']:
+            return
+        volume = drag['volume']
+        self.editor.state.mark_world_changed([volume])
+        self.main_window.mark_as_modified()
+        editor = getattr(self.main_window, 'property_editor', None)
+        if editor is not None and editor.current_object is volume:
+            editor.set_object(volume)
+
     def draw_resize_handles(self, painter, rect):
         painter.setPen(QPen(QColor(255, 255, 255), 1))
         painter.setBrush(QBrush(QColor(255, 255, 255)))
@@ -3712,6 +3929,11 @@ class View2D(QWidget):
                 self.update()
                 return
 
+            # --- A selected light volume's box handles and light source ---
+            if self._begin_light_volume_drag(event.pos(), event.modifiers()):
+                self.update()
+                return
+
             # --- Group bounding-box handles (multi-selection) take priority ---
             g_handle = self._group_handle_at(event.pos())
             if g_handle != -1:
@@ -3866,6 +4088,14 @@ class View2D(QWidget):
                 self._update_decal_resize(world_pos)
                 return
             self._end_decal_resize()
+            self.update()
+
+        # So does a light volume's handle or light source.
+        if self._light_volume_drag is not None:
+            if event.buttons() & Qt.LeftButton:
+                self._update_light_volume_drag(world_pos)
+                return
+            self._end_light_volume_drag()
             self.update()
 
         # Clone-and-place: the copies ride the cursor until a click drops them.
@@ -4027,6 +4257,10 @@ class View2D(QWidget):
             self._end_decal_resize()
             self.update()
             return
+        if event.button() == Qt.LeftButton and self._light_volume_drag is not None:
+            self._end_light_volume_drag()
+            self.update()
+            return
         action_taken = self.is_dragging_object or self.is_resizing_brush
 
         # A component drag commits on button-up — one drag, one undo step.
@@ -4176,9 +4410,15 @@ class View2D(QWidget):
         # Check if we clicked on a brush for brush-specific options using click_pos
         clicked_brush = self.get_brush_at(click_pos)
         select_inside_action = None
+        add_light_volume_action = None
         
         if clicked_brush:
             select_inside_action = menu.addAction("Select Inside")
+            # An idTech 4-style light filling this brush's box; the brush
+            # was only the sizing guide and is removed (one undo restores it).
+            add_light_volume_action = menu.addAction("Light Volume")
+            add_light_volume_action.setToolTip(
+                "Replace this brush with a light that lights exactly its box")
             menu.addSeparator()
         
         # Standard Things
@@ -4251,6 +4491,10 @@ class View2D(QWidget):
         # Handle Select Inside
         if select_inside_action and action == select_inside_action:
             self.select_brushes_inside(clicked_brush)
+            return
+
+        if add_light_volume_action and action == add_light_volume_action:
+            self.create_light_volume_from_brush(clicked_brush)
             return
         
         plugin_choice = plugin_actions.get(action)
@@ -4388,6 +4632,37 @@ class View2D(QWidget):
             if self.main_window.properties_tab_widget:
                 self._focus_properties_tab()
             self.update()
+
+    def create_light_volume_from_brush(self, brush):
+        """Replace *brush* with a LightVolume filling its world box.
+
+        The box is the brush's derived world bounds (an angled or turned
+        brush included), the light source at its centre. The brush goes and
+        the volume is selected, as one undo step. A locked brush is left
+        alone. Returns the new volume, or None.
+        """
+        from editor.things import LightVolume
+        from engine.brush_placement import world_box
+        if not isinstance(brush, dict) or brush not in self.editor.state.brushes:
+            return None
+        if brush.get('lock', False):
+            self.main_window.show_toast("Cannot replace a locked brush", is_error=True)
+            return None
+        cx, cy, cz, hx, hy, hz = (float(v) for v in world_box(brush))
+        volume = LightVolume.from_bounds((cx - hx, cy - hy, cz - hz),
+                                         (cx + hx, cy + hy, cz + hz))
+        self.main_window.save_state()
+        self.editor.state.brushes.remove(brush)
+        self.editor.state.things.append(volume)
+        self.editor.set_selected_objects([volume])
+        if self.main_window.properties_tab_widget:
+            self._focus_properties_tab()
+        self.main_window.show_toast("Light Volume created from the brush")
+        self.update()
+        view_3d = getattr(self.main_window, 'view_3d', None)
+        if view_3d is not None:
+            view_3d.update()
+        return volume
 
     def _place_plugin_entity(self, plugin, cls, label, pos_3d):
         """Place a plugin entity from this view's native context-menu path."""
@@ -4726,6 +5001,12 @@ class View2D(QWidget):
             # the tiny generic Thing-icon hitbox.
             if isinstance(thing, Portal):
                 is_hit = self._portal_gizmo_hit_test(thing, screen_pos, ax1, ax2)
+            elif isinstance(thing, LightVolume):
+                # Its outline or its light source; never its inside, so a
+                # brush within the box stays clickable.
+                is_hit = self._light_volume_hit_test(thing, screen_pos)
+                if not is_hit:
+                    continue        # not by its centre, as an icon would be
 
             # Standard Thing Hit Test
             elif entity_model_path(thing):

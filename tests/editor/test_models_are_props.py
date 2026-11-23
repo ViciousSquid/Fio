@@ -107,8 +107,10 @@ def test_the_asset_browser_places_a_model_as_a_prop(main_window):
     assert prop.properties["model_path"] == DRUM
     assert prop.properties["rotation"] == [0, 90, 0]
     assert prop.properties["name"] == "Oil_Drum"
-    # A Prop's defaults: neither solid nor carryable until the author says so.
-    assert prop.properties["no_collision"] is True
+    # A placed model is solid scenery: Solid on, Physics off, Gravity off.
+    assert prop.properties["no_collision"] is False
+    assert prop.properties["physics_enabled"] is False
+    assert prop.properties["gravity"] is False
     assert prop.properties["carry_enabled"] is False
 
 

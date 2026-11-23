@@ -127,6 +127,9 @@ def detect_low_power_arm():
 # ==============================================================================
 MAX_SHADOW_LIGHTS = 8
 
+# A shadow-casting Light's default filter (engine.constants).
+from engine.constants import SHADOW_BIAS_DEFAULT, SHADOW_SOFTNESS_DEFAULT  # noqa: E402
+
 # ==============================================================================
 # DYNAMIC LIGHT CAPACITY
 # ------------------------------------------------------------------------------
@@ -142,7 +145,13 @@ MAX_SHADOW_LIGHTS = 8
 # undefined behaviour, and 24 of the "32" lights never worked in the first
 # place. Every loop over `active_lights` is now clamped to its own array as
 # well, so a mismatch can never be more than lights quietly not contributing.
-MAX_LIGHTS = 64
+MAX_LIGHTS = 128
+
+# The Android/GLES player keeps the previous 64. Its shared light block packs
+# each light into three vec4s, and some Android GLES translators count block
+# members against the default-uniform budget, whose ES 3.0 minimum is 224
+# vectors: 64 lights (192 vectors) fit, 128 (384) would not link there.
+MAX_LIGHTS_PLAYER = 64
 
 # The ARM/low-power variants keep a smaller array deliberately. Uniform storage
 # is the scarce resource on those GPUs, and the per-fragment loop runs
@@ -357,6 +366,28 @@ highp float _sampleShadowCube(int idx, highp vec3 dir) {
     return texture(shadowMaps[7], dir).r;
 }
 
+// The cube-map's face width in texels (every face of a cube is square).
+highp float _shadowCubeTexels(int idx) {
+    if (idx == 0) return float(textureSize(shadowMaps[0], 0).x);
+    else if (idx == 1) return float(textureSize(shadowMaps[1], 0).x);
+    else if (idx == 2) return float(textureSize(shadowMaps[2], 0).x);
+    else if (idx == 3) return float(textureSize(shadowMaps[3], 0).x);
+    else if (idx == 4) return float(textureSize(shadowMaps[4], 0).x);
+    else if (idx == 5) return float(textureSize(shadowMaps[5], 0).x);
+    else if (idx == 6) return float(textureSize(shadowMaps[6], 0).x);
+    return float(textureSize(shadowMaps[7], 0).x);
+}
+
+// Each shadow slot's filter, from the Light that owns it: x = softness (the
+// PCF disk radius in cube-map texels), y = bias multiplier. 0 stands for the
+// default, so a program nobody has given values to still filters sensibly.
+uniform vec2 uShadowFilter[MAX_SHADOW_LIGHTS];
+vec2 _shadowFilter(int idx) {
+    vec2 f = uShadowFilter[idx];
+    return vec2(f.x > 0.0 ? f.x : """ + repr(SHADOW_SOFTNESS_DEFAULT) + """,
+                f.y > 0.0 ? f.y : """ + repr(SHADOW_BIAS_DEFAULT) + """);
+}
+
 // idx          : which cube-map (0..7), or <0 for a non-shadow-casting light
 // fragToLight  : lightPos - fragmentWorldPos (world space)
 // farPlane     : the light radius used when the cube-map was rendered
@@ -370,11 +401,23 @@ float calcPointShadow(int idx, highp vec3 fragToLight, highp float farPlane, flo
     // The cube-map was rendered from the light looking outward, so the lookup
     // direction runs light -> fragment, i.e. the negation of fragToLight.
     highp vec3 lookDir = -fragToLight;
-    highp float diskRadius = farPlane * 0.004 * (1.0 + currentDepth / farPlane);
-    // Bias covers surface slope plus the depth spread from the PCF disk, so
-    // flat lit surfaces don't self-shadow ("shadow acne").
-    highp float bias = diskRadius + clamp(farPlane * 0.03 * (1.0 - ndotl),
-                                          farPlane * 0.004, farPlane * 0.04);
+    // One cube-map texel at this distance, in world units: a face spans 90
+    // degrees -- 2 units across at unit distance -- over its width in texels.
+    // The filter and the bias are measured in texels, so a shadow is as sharp
+    // as its map resolves and keeps thin casters (railings, grating) solid.
+    // They used to be fractions of the light's radius -- the same blur for a
+    // 2048-unit light at any resolution, ~20 world units wide, which smeared
+    // a catwalk's bars into a faint grey and dropped thin ones altogether.
+    highp float texel = currentDepth * 2.0 / _shadowCubeTexels(idx);
+    vec2 shadowFilter = _shadowFilter(idx);
+    highp float diskRadius = texel * shadowFilter.x;
+    // Bias covers the depth spread across one texel and the PCF disk on a
+    // surface sloped away from the light (the tangent of its angle, capped),
+    // so lit surfaces don't self-shadow ("shadow acne"), scaled by the
+    // light's bias multiplier.
+    highp float slope = clamp(sqrt(max(1.0 - ndotl * ndotl, 0.0)) / max(ndotl, 0.1),
+                              0.0, 10.0);
+    highp float bias = (diskRadius + (texel + diskRadius) * (1.0 + slope)) * shadowFilter.y;
     vec3 sampleDirs[20] = vec3[](
         vec3( 1, 1, 1), vec3( 1,-1, 1), vec3(-1,-1, 1), vec3(-1, 1, 1),
         vec3( 1, 1,-1), vec3( 1,-1,-1), vec3(-1,-1,-1), vec3(-1, 1,-1),

@@ -24,7 +24,8 @@ from engine.prop_entity import (MODEL_PRESETS, OIL_BARREL_VARIANTS, oil_barrel_v
                                  normalise_collect_type)
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
-                           LogicState, PlayerStart, LevelChanger, Decal, Shake)
+                           LogicState, PlayerStart, LevelChanger, Decal, Shake,
+                           LightVolume)
 from editor.terrain_selection import TerrainHandle
 from engine import player_starts as start_rules
 from editor import state_values as _sv
@@ -306,7 +307,7 @@ class _Style:
               "QPushButton:hover { background-color: #7B4AB9; border: 2px solid #A875D6; } "
               "QPushButton:pressed { background-color: #5A2E96; }")
     ID_FIELD = ("QLineEdit { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px; "
-                "border: 2px solid #8B5AC2; border-radius: 3px; font-family: 'IBM Plex Mono'; } "
+                "border: 2px solid #8B5AC2; border-radius: 3px; font-family: 'Fio Mono'; } "
                 "QLineEdit:focus { border: 2px solid #A875D6; background-color: #7B4AB9; }")
 
     @staticmethod
@@ -1394,6 +1395,9 @@ class PropertyEditor(QWidget):
         inputs = IOInputsWidget()
         inputs.set_entity(etype)
         layout.addWidget(inputs)
+        # Spare height goes below everything, not into gaps inside the
+        # sections (the Disabled indicator sits right under its header).
+        layout.addStretch(1)
 
         # I/O participation checkbox
         io_cb = _make_checkbox(
@@ -4645,7 +4649,7 @@ class PropertyEditor(QWidget):
                 continue
 
             # Light state.
-            if isinstance(thing, Light) and key == 'state':
+            if isinstance(thing, (Light, LightVolume)) and key == 'state':
                 cb = _make_checkbox(
                     "Enabled",
                     bool(value),
@@ -4695,18 +4699,69 @@ class PropertyEditor(QWidget):
                 self.add_cookie_texture_widget(form, thing, str(value or ''))
                 continue
 
-            # Light shadow-map size.
-            if isinstance(thing, Light) and key == 'shadow_map_size':
+            # Light shadow-map size: 0 is the renderer's ([Renderer]
+            # shadow_map_size), shown as "Default".
+            if isinstance(thing, (Light, LightVolume)) and key == 'shadow_map_size':
                 spin = QSpinBox()
-                spin.setRange(64, 4096)
-                spin.setSingleStep(64)
-                spin.setValue(int(value or 512))
-
+                spin.setRange(0, 4096)
+                spin.setSingleStep(128)
+                spin.setSpecialValueText("Default (settings)")
+                try:
+                    spin.setValue(max(0, int(float(value or 0))))
+                except (TypeError, ValueError):
+                    spin.setValue(0)
+                spin.setToolTip(
+                    "Shadow-map resolution per cube face for this light.\n"
+                    "Default uses [Renderer] shadow_map_size in settings.ini.\n"
+                    "Higher is sharper and costs 6 x size x size depth texels.")
                 spin.valueChanged.connect(
                     lambda v: self.update_object_prop('shadow_map_size', v)
                 )
 
                 form.addRow(QLabel("Shadow Map Size:"), spin)
+                continue
+
+            # Light shadow filter: edge softness and acne bias.
+            if isinstance(thing, (Light, LightVolume)) and key in ('shadow_softness', 'shadow_bias'):
+                from engine.constants import SHADOW_BIAS_DEFAULT, SHADOW_SOFTNESS_DEFAULT
+                softness = key == 'shadow_softness'
+                default = SHADOW_SOFTNESS_DEFAULT if softness else SHADOW_BIAS_DEFAULT
+                spin = QDoubleSpinBox()
+                spin.setDecimals(2)
+                spin.setRange(0.05, 16.0)
+                spin.setSingleStep(0.25 if softness else 0.1)
+                try:
+                    spin.setValue(float(value) if float(value) > 0 else default)
+                except (TypeError, ValueError):
+                    spin.setValue(default)
+                spin.setToolTip(
+                    "Shadow edge softness: the blur radius in shadow-map pixels.\n"
+                    "Lower is sharper (and shows the map's pixels); higher is softer.\n"
+                    "Default %.2f." % SHADOW_SOFTNESS_DEFAULT
+                    if softness else
+                    "Multiplier on the shadow's depth bias.\n"
+                    "Raise it if lit surfaces show speckled self-shadowing (acne);\n"
+                    "lower it if thin objects near a surface lose their shadow.\n"
+                    "Default %.2f." % SHADOW_BIAS_DEFAULT)
+                spin.valueChanged.connect(
+                    lambda v, k=key: self.update_object_prop(k, v)
+                )
+                form.addRow(QLabel("Shadow Softness:" if softness else "Shadow Bias:"), spin)
+                continue
+
+            # A light volume's box and light source: X, Y, Z fields.
+            if isinstance(thing, LightVolume) and key in ('volume_size', 'source_offset'):
+                current = (thing.get_volume_size() if key == 'volume_size'
+                           else thing.get_source_offset())
+                row, _inputs = self._vec3_row(
+                    [round(v, 3) for v in current],
+                    lambda v, k=key: self.update_object_prop(k, [float(c) for c in v]))
+                row.setToolTip(
+                    "The box that is lit: its width, height and depth, centred on\n"
+                    "the entity's position." if key == 'volume_size' else
+                    "Where the light (and its shadows) come from, relative to the\n"
+                    "box's centre. It may be outside the box.")
+                form.addRow(QLabel("Volume Size:" if key == 'volume_size' else "Light Source:"), row)
                 continue
 
             # Speaker sound file.

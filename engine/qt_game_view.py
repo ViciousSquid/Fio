@@ -2,6 +2,7 @@ import atexit
 from engine.asset_archives import asset_exists, asset_listdir
 from engine.asset_qt import add_application_font, load_pixmap
 import contextlib
+import dataclasses
 import io
 import time
 import zipfile
@@ -79,6 +80,8 @@ from .view_pause import ViewPause
 from .view_terrain_edit import ViewTerrainEdit
 from .view_components import ViewComponents
 from .view_picking import ViewPicking
+from .view_gizmo import ViewGizmo
+from . import view_light_volumes
 from .view_debug_draw import ViewDebugDraw
 from .terrain_frame import frustum_planes
 from .overlay_geometry import (
@@ -129,6 +132,8 @@ class QtGameView(QOpenGLWidget):
         self.terrain_edit = ViewTerrainEdit(self)
         self.components = ViewComponents(self)
         self.picking = ViewPicking(self)
+        #: The Move / Rotate / Scale gizmo (engine.view_gizmo).
+        self.gizmo = ViewGizmo(self)
         self.debug_draw = ViewDebugDraw(self)
         self._logic_tick_fault_signal.connect(self._handle_logic_tick_fault)
 
@@ -332,10 +337,6 @@ class QtGameView(QOpenGLWidget):
             "grid_visible": True,
         }
 
-        self.is_dragging_gizmo = False
-        self.gizmo_drag_axis = None
-        self.gizmo_object_start_pos = None
-        self.drag_start_on_axis = None
         self.terrain_sculpt_active = False
         # Where the sculpt cursor is; off-screen until the mouse moves over the
         # view. Read by every paint while sculpting, which can begin before it.
@@ -392,7 +393,7 @@ class QtGameView(QOpenGLWidget):
         # Up repeats the last command (the history every console shares).
         self._console_input = CommandInput(self)
         self._console_input.setPlaceholderText("Enter command…   Esc to close")
-        self._console_input.setFont(QFont("IBM Plex Mono", 11))
+        self._console_input.setFont(QFont("Fio Mono", 11))
         self._console_input.setStyleSheet("""
             QLineEdit {
                 background-color: rgba(10, 10, 10, 220);
@@ -400,7 +401,7 @@ class QtGameView(QOpenGLWidget):
                 border: none;
                 border-top: 2px solid #F08000;
                 padding: 6px 10px;
-                font-family: "IBM Plex Mono";
+                font-family: "Fio Mono";
                 font-size: 11pt;
             }
         """)
@@ -1446,6 +1447,9 @@ class QtGameView(QOpenGLWidget):
         # The renderer sees the selection only as this descriptor, on both
         # channels: render_scene's argument and the frame input.
         _selection = describe_selection(self.editor.primary_selection())
+        if _selection is not None and _selection.gizmo_pos is not None:
+            # The gizmo is drawn by self.gizmo with the 2D painter instead.
+            _selection = dataclasses.replace(_selection, gizmo_pos=None)
         self._render_config["primary_selection"] = _selection
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
@@ -1773,6 +1777,12 @@ class QtGameView(QOpenGLWidget):
                 self.editor.state, self.editor.terrain
             )
 
+        if not self.play_mode:
+            # Light volumes: their boxes and light sources (no sprite).
+            view_light_volumes.paint(self, painter)
+            # Over the scene, under the floating windows: never hidden in
+            # the object it moves.
+            self.gizmo.paint(painter)
         self.floating_windows.draw_all(painter)
 
         # Live terrain sculpting hint: draw this inside the 3D viewport rather
@@ -2288,28 +2298,12 @@ class QtGameView(QOpenGLWidget):
                 self.editor.set_selected_objects([obj])
                 self.update()
             return
-        if event.button() == Qt.LeftButton and self.editor.primary_selection() and not self.play_mode:
-            obj_pos = self.get_primary_selection_pos()
-            if obj_pos:
-                ray_o, ray_d = self.picking.get_ray_from_mouse(event.x(), event.y())
-                best_dist = float('inf')
-                hit_axis = None
-                start_pt = None
-                for axis, vec in [('x', glm.vec3(1,0,0)), ('y', glm.vec3(0,1,0)), ('z', glm.vec3(0,0,1))]:
-                    pt, dist = self.picking.intersect_ray_with_axis(ray_o, ray_d, obj_pos, vec)
-                    if pt and dist < 1.5 and glm.distance(pt, obj_pos) < 40.0:
-                        if dist < best_dist:
-                            best_dist = dist
-                            hit_axis = axis
-                            start_pt = pt
-                if hit_axis:
-                    self.editor.save_state()
-                    self.is_dragging_gizmo = True
-                    self.gizmo_drag_axis = hit_axis
-                    self.gizmo_object_start_pos = obj_pos
-                    self.drag_start_on_axis = start_pt
-                    self.setCursor(Qt.ClosedHandCursor)
-                    return
+        if self.gizmo.dragging and event.button() == Qt.RightButton:
+            self.gizmo.cancel()                 # Blender: a right click cancels
+            return
+        if event.button() == Qt.LeftButton and not self.play_mode:
+            if self.gizmo.press(event.x(), event.y()):
+                return
         if not self.play_mode and event.button() == Qt.RightButton:
             self._editor_right_mouse_held = True
             window = self.window()
@@ -2576,14 +2570,11 @@ class QtGameView(QOpenGLWidget):
                 and self.terrain_sculpt_mode != 'stamp'):
             self.terrain_edit._apply_sculpt_at_mouse(event.x(), event.y())
             return
-        if self.is_dragging_gizmo:
-            ray_o, ray_d = self.picking.get_ray_from_mouse(event.x(), event.y())
-            axis_vec = {'x': glm.vec3(1,0,0), 'y': glm.vec3(0,1,0), 'z': glm.vec3(0,0,1)}[self.gizmo_drag_axis]
-            pt, _ = self.picking.intersect_ray_with_axis(ray_o, ray_d, self.gizmo_object_start_pos, axis_vec)
-            if pt:
-                diff = pt - self.drag_start_on_axis
-                self.set_primary_selection_pos(self.gizmo_object_start_pos + diff)
+        if self.gizmo.dragging:
+            self.gizmo.drag_to(event.x(), event.y())
             return
+        if not event.buttons() and not self.play_mode and self.gizmo.hover_at(event.x(), event.y()):
+            self.update()
         # Component hover: highlight what a press would grab.  Selection-scoped
         # and repainted only when the highlight actually changes.
         if self.components._component_mode_active() and not event.buttons():
@@ -2661,10 +2652,8 @@ class QtGameView(QOpenGLWidget):
         if self.sysmon.handle_mouse_release(event, self.play_mode):
             self.setCursor(Qt.ArrowCursor)
             return
-        if self.is_dragging_gizmo:
-            self.is_dragging_gizmo = False
-            self.setCursor(Qt.ArrowCursor)
-            self.editor.save_state()
+        if event.button() == Qt.LeftButton and self.gizmo.release():
+            return
         if not self.play_mode and event.button() == Qt.RightButton:
             self._editor_right_mouse_held = False
             self._sync_editor_mouselook()
@@ -2837,6 +2826,10 @@ class QtGameView(QOpenGLWidget):
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape and self.gizmo.dragging:
+            self.gizmo.cancel()
+            event.accept()
+            return
         if not self.play_mode and event.key() == Qt.Key_Escape and self.mouselook_active:
             self.stop_editor_mouselook()
             event.accept()

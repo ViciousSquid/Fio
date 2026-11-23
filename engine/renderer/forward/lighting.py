@@ -51,7 +51,11 @@ class LightingMixin:
     # --- Depth cube-map shadow mapping (omnidirectional point-light shadows) ---
     MAX_SHADOW_LIGHTS = shaders.MAX_SHADOW_LIGHTS  # authoritative point-light shadow budget
 
-    SHADOW_MAP_SIZE = 384         # per-face resolution of each depth cube-map
+    #: Per-face resolution of each depth cube-map ([Renderer] shadow_map_size).
+    #: A cube-map is only sized when a shadow-casting light takes its slot
+    #: (_ensure_shadow_cube_size), so this costs 6 * size^2 depth texels per
+    #: light actually casting shadows -- about 24 MB at 1024 -- not per slot.
+    SHADOW_MAP_SIZE = 1024
 
     SHADOW_TEXTURE_UNIT_BASE = 4   # shadow cube-maps bind to units 4..(4+MAX_SHADOW_LIGHTS-1)
 
@@ -364,13 +368,15 @@ class LightingMixin:
             self._shadow_cubemaps = []
             self.shadow_units_changed()
             size = self.shadow_map_size
+            # Every slot starts as a 1x1 placeholder -- complete, so each
+            # shadow sampler always has a valid cube bound -- and is given its
+            # full size only when a shadow-casting light takes it.
+            self._shadow_cube_sizes = []
             for _ in range(self.MAX_SHADOW_LIGHTS):
                 cm = int(gl.glGenTextures(1))
                 gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
-                for face in range(6):
-                    gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0,
-                                    gl.GL_DEPTH_COMPONENT24, size, size, 0,
-                                    gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+                self._specify_shadow_cube(1)
+                self._shadow_cube_sizes.append(1)
                 gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
                 gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
                 gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
@@ -400,6 +406,42 @@ class LightingMixin:
             self._shadow_fbo = None
             self._shadow_cubemaps = []
 
+    @staticmethod
+    def _specify_shadow_cube(size):
+        """(Re)allocate the six depth faces of the bound cube-map at *size*."""
+        for face in range(6):
+            gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0,
+                            gl.GL_DEPTH_COMPONENT24, size, size, 0,
+                            gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+
+    #: The range a Light's own shadow_map_size is clamped to.
+    SHADOW_MAP_SIZE_MIN = 64
+    SHADOW_MAP_SIZE_MAX = 4096
+
+    def _shadow_filter_array(self):
+        """Per shadow slot ``(softness, bias)`` for the lit passes' uShadowFilter
+        (0: the shader's default), filled by render_shadow_maps."""
+        array = getattr(self, '_shadow_filter', None)
+        if array is None:
+            array = self._shadow_filter = np.zeros(
+                (self.MAX_SHADOW_LIGHTS, 2), dtype=np.float32)
+        return array
+
+    def _ensure_shadow_cube_size(self, slot, size=None):
+        """Give shadow slot *slot*'s cube-map *size* (default: the renderer's
+        shadow_map_size) before it is rendered into; returns whether it was
+        (re)allocated."""
+        size = int(self.shadow_map_size if size is None else size)
+        sizes = getattr(self, '_shadow_cube_sizes', None)
+        if sizes is None or slot >= len(sizes) or sizes[slot] == size:
+            return False
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, self._shadow_cubemaps[slot])
+        self._specify_shadow_cube(size)
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+        sizes[slot] = size
+        self.shadow_units_changed()
+        return True
+
     def _bind_shadow_maps(self, uniforms):
         """Bind shadow samplers to dedicated texture units.
 
@@ -425,6 +467,9 @@ class LightingMixin:
                     gl.glUniform1i(loc, base + i)
                     live.append(i)
             slots = uniforms.shadow_slots = tuple(live)
+        loc = uniforms['uShadowFilter[0]']
+        if loc != -1:
+            gl.glUniform2fv(loc, self.MAX_SHADOW_LIGHTS, self._shadow_filter_array())
         cubemaps = self._shadow_cubemaps
         count = len(cubemaps)
         # What each shadow unit holds is remembered for the frame: every lit
@@ -567,6 +612,22 @@ class LightingMixin:
                     light_slot[key] = s
                     break
 
+        # Each slot's filter for the lit passes (uShadowFilter), and each
+        # light's cube-map size, from the Light that owns the slot.
+        shadow_columns = getattr(light_table, 'light_shadow', None)
+        shadow_filter = self._shadow_filter_array()
+        shadow_filter[:] = 0.0
+        slot_size = {}
+        for key, s in light_slot.items():
+            size = self.shadow_map_size
+            if shadow_columns is not None:
+                softness, bias, authored = (float(v) for v in shadow_columns[int(key)])
+                shadow_filter[s] = (softness, bias)
+                if authored > 0.0:
+                    size = int(max(self.SHADOW_MAP_SIZE_MIN,
+                                   min(self.SHADOW_MAP_SIZE_MAX, authored)))
+            slot_size[s] = int(size)
+
         to_render = []
         for light_key in light_keys:
             shadow_slot = light_slot.get(light_key)
@@ -588,6 +649,7 @@ class LightingMixin:
             sig = (
                 round(lx, 3), round(ly, 3), round(lz, 3),
                 round(radius, 3), brush_keys, model_keys,
+                slot_size[shadow_slot],
             )
             self._light_shadow_index[light_slot_value] = shadow_slot
             if self._shadow_slot_sig[shadow_slot] == sig:
@@ -616,8 +678,6 @@ class LightingMixin:
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._shadow_fbo)
         gl.glDrawBuffer(gl.GL_NONE)
         gl.glReadBuffer(gl.GL_NONE)
-        size = self.shadow_map_size
-        gl.glViewport(0, 0, size, size)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glDisable(gl.GL_SCISSOR_TEST)
         gl.glDisable(gl.GL_BLEND)
@@ -655,6 +715,9 @@ class LightingMixin:
             near_plane = max(far_plane * 0.002, 1.0)
             proj = glm.perspective(
                 glm.radians(90.0), 1.0, near_plane, far_plane)
+            size = slot_size.get(slot, self.shadow_map_size)
+            self._ensure_shadow_cube_size(slot, size)
+            gl.glViewport(0, 0, size, size)
             cubemap = self._shadow_cubemaps[slot]
 
             gl.glUniform3f(lightpos_loc, lx, ly, lz)

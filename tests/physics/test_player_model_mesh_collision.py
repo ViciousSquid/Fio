@@ -10,6 +10,7 @@ from editor.editor_state import EditorState
 from engine.logic_thread import LogicThread
 from engine.player import Player, _gather
 from engine.prop_entity import Prop
+from engine.spatial_grid import SpatialGrid
 from engine.threaded_game_state import ThreadedGameState
 
 pytestmark = pytest.mark.qt
@@ -24,6 +25,27 @@ def _platform(y=0.0, x0=-100.0, x1=100.0):
     c, d = (x1, y, 100.0), (x1, y, -100.0)
     # Winding gives the top face an upward normal.
     return _quad(a, b, c, d, (0.0, 1.0, 0.0))
+
+
+def _staircase():
+    """Three 12-unit risers with real vertical faces and horizontal treads."""
+    triangles = _platform(y=0.0, x0=-200.0, x1=0.0)
+    tread_depth = 60.0
+    tread_rise = 12.0
+    for index in range(3):
+        x = index * tread_depth
+        lower = index * tread_rise
+        upper = lower + tread_rise
+        triangles += _quad(
+            (x, lower, -100.0), (x, upper, -100.0),
+            (x, upper, 100.0), (x, lower, 100.0),
+            (1.0, 0.0, 0.0),
+        )
+        triangles += _platform(
+            y=upper, x0=x, x1=x + tread_depth
+        )
+    triangles += _platform(y=36.0, x0=180.0, x1=400.0)
+    return triangles
 
 
 def _model_collision_brushes(triangles, *, solid=True):
@@ -240,6 +262,72 @@ def test_player_update_sweeps_against_a_model_wall_from_either_side(start_x, dir
     assert player.velocity.x == pytest.approx(0.0, abs=1e-3)
 
 
+
+
+@pytest.mark.parametrize("use_grid", [False, True], ids=["no-grid", "grid"])
+def test_player_can_climb_individual_stair_treads_in_a_model_mesh(use_grid):
+    brush = _model_collision_brushes(_staircase(), solid=True)[0]
+    player = _player_at(x=-80.0, y=50.0)
+    player.angle = 0.0  # Positive strafe must move toward the staircase (+X).
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    player.on_ground = True
+    player.ground_object = brush
+
+    spatial = SpatialGrid() if use_grid else None
+    if spatial is not None:
+        spatial.populate([brush])
+
+    move = glm.vec3(1.0, 0.0, 0.0)
+    saw_raised_tread = False
+    for _ in range(240):
+        player.update(
+            1.0 / 60.0, move, False, False, [brush],
+            spatial_grid=spatial, gravity=-800.0,
+        )
+        if player.pos.y > 50.5:
+            saw_raised_tread = True
+            assert player.on_ground, "a mesh tread must support the player immediately"
+            assert player.ground_object is brush
+        if player.pos.x >= 220.0:
+            break
+
+    assert saw_raised_tread, "the fixture must exercise mesh step-up"
+    assert player.pos.x >= 200.0, "the player should climb all three mesh treads"
+    assert player.pos.y == pytest.approx(86.0, abs=1.0)
+    assert player.on_ground
+    assert player.ground_object is brush
+
+
+@pytest.mark.parametrize("use_grid", [False, True], ids=["no-grid", "grid"])
+def test_model_tread_footprint_support_survives_30hz_and_allows_jump(use_grid):
+    brush = _model_collision_brushes(_staircase(), solid=True)[0]
+    # The player's centre is 20 units before the first tread edge; the 25-unit
+    # horizontal capsule radius overlaps the tread and should support the hull.
+    player = _player_at(x=-20.0, y=62.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    player.on_ground = True
+    player.ground_object = brush
+
+    spatial = SpatialGrid() if use_grid else None
+    if spatial is not None:
+        spatial.populate([brush])
+
+    idle = glm.vec3(0.0, 0.0, 0.0)
+    player.update(
+        1.0 / 30.0, idle, False, False, [brush],
+        spatial_grid=spatial, gravity=-800.0,
+    )
+
+    assert player.on_ground, "gravity at 30 Hz must not drop footprint tread support"
+    assert player.ground_object is brush
+    assert player.pos.y == pytest.approx(62.0, abs=1e-3)
+
+    player.update(
+        1.0 / 30.0, idle, True, False, [brush],
+        spatial_grid=spatial, gravity=-800.0,
+    )
+    assert player.velocity.y > 0.0, "the supported player must be able to jump"
+    assert not player.on_ground, "upward separation must detach from the tread"
 
 
 def test_jump_leaving_a_model_deck_is_not_cancelled_by_the_face_sweep():
@@ -601,3 +689,96 @@ def test_model_headroom_uses_triangles_not_the_enclosing_bounds():
     blocked_min = glm.vec3(55.0, 0.0, -25.0)
     blocked_max = glm.vec3(105.0, 100.0, 25.0)
     assert not player._has_headroom(brush, blocked_min, blocked_max)
+
+
+@pytest.mark.parametrize("ceiling_bottom, lifted", [(111.8, False), (113.0, True)],
+                         ids=["no-room", "room"])
+def test_tread_lift_needs_headroom(ceiling_bottom, lifted):
+    """The footprint lift onto a tread is checked against what is above it.
+
+    At 30 Hz a player standing with its centre 20 units before the first
+    tread sinks 0.89 units under gravity, and the footprint support lifts it
+    back onto the tread. With a ceiling 111.8 high that lift would put the
+    head (feet + 100) 0.2 units into it: the lift is refused and the tread
+    gives no support. With room above, the lift stands.
+    """
+    from tests.helpers.worlds import box_brush
+    brush = _model_collision_brushes(_staircase(), solid=True)[0]
+    ceiling = box_brush("ceiling", (-20.0, ceiling_bottom + 8.0, 0.0),
+                        (300.0, 16.0, 300.0))
+    player = _player_at(x=-20.0, y=62.0)
+    player.velocity = glm.vec3(0.0, 0.0, 0.0)
+    player.on_ground = True
+    player.ground_object = brush
+
+    player.update(1.0 / 30.0, glm.vec3(0.0, 0.0, 0.0), False, False,
+                  [brush, ceiling], gravity=-800.0)
+
+    head = player.pos.y + player._half.y
+    assert head <= ceiling_bottom + 1e-3, "the hull must not end inside the ceiling"
+    if lifted:
+        assert player.pos.y == pytest.approx(62.0, abs=1e-3)
+        assert player.on_ground and player.ground_object is brush
+    else:
+        assert player.pos.y < 62.0 - 0.5, "the refused lift leaves the player sinking"
+        assert not player.on_ground
+
+
+def test_step_up_checks_the_lift_where_it_starts():
+    """The step lifts the capsule where it stands, then sweeps it forward.
+
+    A model ceiling 100.5 high ending at x=-41.1 clears the lifted hull at
+    the destination (x=-20) but not at the start (x=-23.3): the top sphere
+    would be lifted 2.7 units into its edge and then swept out of it, a
+    crossing nothing afterwards can see. That step is refused.
+    """
+    ceiling = [((
+        (-400.0, 100.5, -100.0), (-41.1, 100.5, -100.0), (-41.1, 100.5, 100.0)),
+        (0.0, -1.0, 0.0)), ((
+        (-400.0, 100.5, -100.0), (-41.1, 100.5, 100.0), (-400.0, 100.5, 100.0)),
+        (0.0, -1.0, 0.0))]
+    open_brush = _model_collision_brushes(_staircase(), solid=True)[0]
+    low_brush = _model_collision_brushes(_staircase() + ceiling, solid=True)[0]
+    start = (-23.333, 50.0 - 800.0 / 3600.0, 0.0)
+
+    lifted = {}
+    for name, brush in (("open", open_brush), ("low", low_brush)):
+        player = _player_at(x=-20.0, y=start[1])
+        player.velocity = glm.vec3(200.0, -800.0 / 60.0, 0.0)
+        player.on_ground = True
+        _aabb, meshes, shapes = _gather([brush], [])
+        player._resolve_mesh_capsule(meshes, shapes, sweep_start=start)
+        lifted[name] = player.pos.y
+
+    assert lifted["open"] == pytest.approx(62.0, abs=0.05), "an open stair still steps"
+    assert lifted["low"] < 55.0, "the lift would cross the ceiling's edge"
+
+
+def test_the_lift_at_the_start_is_checked_from_the_start_height():
+    """Where the capsule starts higher than it ends (it fell this tick), the
+    lift there is checked from its own height plus the rise -- not from the
+    destination's lifted height, which would test a hull lower than the one
+    that crosses the start. A ceiling edge 106 high over the start clears
+    the lower hull but not the real one: the step is refused (CodeRabbit,
+    PR 143)."""
+    ceiling = [((
+        (-400.0, 106.0, -100.0), (-41.1, 106.0, -100.0), (-41.1, 106.0, 100.0)),
+        (0.0, -1.0, 0.0)), ((
+        (-400.0, 106.0, -100.0), (-41.1, 106.0, 100.0), (-400.0, 106.0, 100.0)),
+        (0.0, -1.0, 0.0))]
+    destination_y = 50.0 - 800.0 / 3600.0
+    lifted = {}
+    for name, start_y, extra in (("level", destination_y, []),
+                                 ("fell", destination_y + 5.0, []),
+                                 ("fell-low-ceiling", destination_y + 5.0, ceiling)):
+        brush = _model_collision_brushes(_staircase() + extra, solid=True)[0]
+        player = _player_at(x=-20.0, y=destination_y)
+        player.velocity = glm.vec3(200.0, -800.0 / 60.0, 0.0)
+        player.on_ground = True
+        _aabb, meshes, shapes = _gather([brush], [])
+        player._resolve_mesh_capsule(meshes, shapes, sweep_start=(-23.333, start_y, 0.0))
+        lifted[name] = player.pos.y
+
+    assert lifted["level"] == pytest.approx(62.0, abs=0.05)
+    assert lifted["fell"] == pytest.approx(62.0, abs=0.05), "open: still steps"
+    assert lifted["fell-low-ceiling"] < 55.0, "the start's real lift meets the ceiling"

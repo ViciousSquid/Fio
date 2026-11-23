@@ -13,6 +13,7 @@ from .uniforms import location as uniform_location
 from .gles_context import compile_program
 from .overlay import OverlayRenderer
 from . import glmath
+from engine.shaders import MAX_LIGHTS_PLAYER
 
 
 class GLESRenderer:
@@ -111,8 +112,8 @@ class GLESRenderer:
         gl.glClearColor(0.06, 0.07, 0.09, 1.0)
         self._build_reference_triangle()
         self.overlay.on_gl_ready(self.programs)
-        from .shadows import ShadowAtlas
-        self.shadows = ShadowAtlas(self.gles, tile=256 if self.quality.name == "mobile" else 384)
+        from .shadows import ShadowAtlas, MOBILE_SHADOW_TILE, PLAYER_SHADOW_TILE
+        self.shadows = ShadowAtlas(self.gles, tile=MOBILE_SHADOW_TILE if self.quality.name == "mobile" else PLAYER_SHADOW_TILE)
         from .lighting import LightBuffer
         self.light_buffer = LightBuffer(gl, self.programs['world'])
         from .fog import FogVolumes
@@ -718,7 +719,7 @@ class GLESRenderer:
                 else:
                     gl.glDisable(gl.GL_CULL_FACE)
                 last_state = draw_state
-            if self.quality.lights_per_batch < 64:
+            if self.quality.lights_per_batch < MAX_LIGHTS_PLAYER:
                 from .lighting import batch_lights
                 center, half = self._bounds[vao]
                 chosen = () if transparent else batch_lights(self._lights, model[:3,:3] @ center + model[:3,3],
@@ -754,7 +755,7 @@ class GLESRenderer:
                             'view_distance': distance.effective_distance,
                             'fog_start': env['uFogStart'], 'fog_end': env['uFogEnd'],
                             'lights': len(self._lights), 'shadow_lights': len(shadow_indices),
-                            'max_batch_lights': max_batch_lights if self.quality.lights_per_batch < 64 else len(self._lights),
+                            'max_batch_lights': max_batch_lights if self.quality.lights_per_batch < MAX_LIGHTS_PLAYER else len(self._lights),
                             **self.shadows.stats,
                             'effect_batches': sum(1 for source in self._draw_sources.values()
                                                   if source[0] == 'effect')}

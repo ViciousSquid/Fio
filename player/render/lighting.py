@@ -1,6 +1,6 @@
 """Compact std140 storage preserves all desktop light values on GLES drivers."""
 import numpy as np
-from engine.shaders import MAX_LIGHTS, LIGHT_UBO_BINDING, COOKIE_TEXTURE_UNIT
+from engine.shaders import MAX_LIGHTS_PLAYER as MAX_LIGHTS, LIGHT_UBO_BINDING, COOKIE_TEXTURE_UNIT
 
 
 LIGHT_DTYPE = np.dtype([('position_radius','<f4',4), ('color_intensity','<f4',4),
