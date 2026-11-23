@@ -1871,12 +1871,15 @@ class Player:
         # then carries it forward, so the lifted hull must be clear there as
         # well as at the destination: a ceiling edge cleared at the end but
         # not at the start would be crossed by the lift and swept out of
-        # again, where nothing afterwards can see it.
+        # again, where nothing afterwards can see it. It is lifted there by
+        # the same rise from its own height, which differs from the
+        # destination's when it fell (or rose) this tick.
+        start_lifted_y = start_y + rise
         start_min = glm.vec3(
-            start_x - half.x, lifted_y - half.y, start_z - half.z
+            start_x - half.x, start_lifted_y - half.y, start_z - half.z
         )
         start_max = glm.vec3(
-            start_x + half.x, lifted_y + half.y, start_z + half.z
+            start_x + half.x, start_lifted_y + half.y, start_z + half.z
         )
         for lo, hi in ((lifted_min, lifted_max), (start_min, start_max)):
             for brush, _triangles, _bounds in model_meshes:

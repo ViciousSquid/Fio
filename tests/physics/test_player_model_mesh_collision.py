@@ -752,3 +752,33 @@ def test_step_up_checks_the_lift_where_it_starts():
 
     assert lifted["open"] == pytest.approx(62.0, abs=0.05), "an open stair still steps"
     assert lifted["low"] < 55.0, "the lift would cross the ceiling's edge"
+
+
+def test_the_lift_at_the_start_is_checked_from_the_start_height():
+    """Where the capsule starts higher than it ends (it fell this tick), the
+    lift there is checked from its own height plus the rise -- not from the
+    destination's lifted height, which would test a hull lower than the one
+    that crosses the start. A ceiling edge 106 high over the start clears
+    the lower hull but not the real one: the step is refused (CodeRabbit,
+    PR 143)."""
+    ceiling = [((
+        (-400.0, 106.0, -100.0), (-41.1, 106.0, -100.0), (-41.1, 106.0, 100.0)),
+        (0.0, -1.0, 0.0)), ((
+        (-400.0, 106.0, -100.0), (-41.1, 106.0, 100.0), (-400.0, 106.0, 100.0)),
+        (0.0, -1.0, 0.0))]
+    destination_y = 50.0 - 800.0 / 3600.0
+    lifted = {}
+    for name, start_y, extra in (("level", destination_y, []),
+                                 ("fell", destination_y + 5.0, []),
+                                 ("fell-low-ceiling", destination_y + 5.0, ceiling)):
+        brush = _model_collision_brushes(_staircase() + extra, solid=True)[0]
+        player = _player_at(x=-20.0, y=destination_y)
+        player.velocity = glm.vec3(200.0, -800.0 / 60.0, 0.0)
+        player.on_ground = True
+        _aabb, meshes, shapes = _gather([brush], [])
+        player._resolve_mesh_capsule(meshes, shapes, sweep_start=(-23.333, start_y, 0.0))
+        lifted[name] = player.pos.y
+
+    assert lifted["level"] == pytest.approx(62.0, abs=0.05)
+    assert lifted["fell"] == pytest.approx(62.0, abs=0.05), "open: still steps"
+    assert lifted["fell-low-ceiling"] < 55.0, "the start's real lift meets the ceiling"
