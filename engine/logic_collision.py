@@ -776,7 +776,7 @@ class LogicCollision:
                 if b.get('_physics_body')
             ]
             if logic.session_runtime.play_mode:
-                self.carry_grouped_models()
+                self.carry_moving_models()
             if logic.session_runtime.play_mode and logic.session_runtime.spatial_grid is not None:
                 logic.session_runtime.spatial_grid.populate(logic.editor_state.brushes + self._model_collision_brushes)
                 if logic.session_runtime.physics_world is not None:
@@ -784,7 +784,7 @@ class LogicCollision:
         else:
             self._model_collision_brushes = []
             if logic.session_runtime.play_mode:
-                self.carry_grouped_models()
+                self.carry_moving_models()
             if logic.session_runtime.play_mode and logic.session_runtime.spatial_grid is not None:
                 logic.session_runtime.spatial_grid.populate(logic.editor_state.brushes)
                 if logic.session_runtime.physics_world is not None:
@@ -817,9 +817,10 @@ class LogicCollision:
             b for b in self._model_collision_brushes if b.get('_physics_body')]
         scenery = {id(b.get('_physics_entity')) for b in self._model_collision_brushes
                    if not b.get('_physics_body')}
-        # A carried model's proxy is new too, and only the new one is carried:
+        # A carried or turning model's proxy is new too, and only the new one
+        # is carried:
         # the grid must hold it instead of the old one.
-        carried = self.carry_grouped_models()
+        carried = self.carry_moving_models()
         if (scenery != before_scenery or carried) and session.spatial_grid is not None:
             session.spatial_grid.populate(
                 logic.editor_state.brushes + self._model_collision_brushes)
@@ -834,9 +835,10 @@ class LogicCollision:
                     physics.add_body(brush)
         self.refresh_collision_brushes_cache()
 
-    def carry_grouped_models(self):
+    def carry_moving_models(self):
         """Hand the model collision proxies just built to the brush groups,
-        which carry those of solid models riding a group's mover or door
+        which move those of solid models riding a group's mover or door, or
+        turning about their own axis (Rotate), where the model is drawn
         (engine.logic_groups.CarriedModels). In play, before the spatial grid
         is populated with them; whether any is carried (or was)."""
         groups = getattr(getattr(self.logic, 'mover_runtime', None), 'groups', None)

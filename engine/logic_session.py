@@ -201,8 +201,9 @@ class LogicSession:
                 for b in logic.collision_runtime._model_collision_brushes
                 if b.get("_physics_body")
             ]
-            # A solid model riding a group's mover takes its collision with it.
-            logic.collision_runtime.carry_grouped_models()
+            # A solid model riding a group's mover, or turning (Rotate), takes
+            # its collision with it.
+            logic.collision_runtime.carry_moving_models()
             logic.collision_runtime.refresh_collision_brushes_cache()
 
             # Runtime effect state belongs to this play session, not authoring.

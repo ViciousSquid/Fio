@@ -142,13 +142,17 @@ def collision_wireframes(brushes):
             colour = MESH_COLOUR
         else:
             continue
-        # A model carried by its group's mover: drawn where its collision now
-        # is (moved, never turned: engine.logic_groups.CarriedModels).
+        # A model carried by its group's mover, or turning about its own
+        # axis: drawn where its collision now is (engine.logic_groups.
+        # CarriedModels), ``P + R (x - A)`` about its built centre *A*.
         runtime = brush_placement.runtime_of(brush)
         if runtime is not None:
-            home = brush_placement.authored_box(brush)
-            lines = np.asarray(lines, dtype=np.float64) + np.array(
-                (runtime[0] - home[0], runtime[1] - home[1], runtime[2] - home[2]))
+            home = np.array(brush_placement.authored_box(brush)[:3], dtype=np.float64)
+            lines = np.asarray(lines, dtype=np.float64) - home
+            turn = brush_placement.rotation_matrix(runtime[3:6], runtime[6])
+            if turn is not None:
+                lines = lines @ np.asarray(turn, dtype=np.float64).T
+            lines = lines + np.array(runtime[:3], dtype=np.float64)
         lines = np.ascontiguousarray(lines, dtype=np.float32)
         chunks.append(lines)
         runs.append((first, len(lines), colour))

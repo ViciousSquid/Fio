@@ -270,6 +270,7 @@ class PropSession:
     def _update_rotations(self, delta):
         if not self.rotations:
             return
+        turned = False
         for prop, motion in list(self.rotations.values()):
             before = motion.angle
             for event in motion.step(delta):
@@ -277,6 +278,13 @@ class PropSession:
                     self._fire(prop, "OnRotateStopped")
             if motion.angle != before:
                 prop._rotate_angle = motion.angle
+                turned = True
+        if turned:
+            # A solid model's collision turns with it (engine.logic_groups.
+            # CarriedModels), before physics steps against it.
+            groups = getattr(getattr(self.logic, 'mover_runtime', None), 'groups', None)
+            if groups is not None:
+                groups.follow_models()
 
     def _motion(self, prop):
         entry = self.rotations.get(id(prop))
