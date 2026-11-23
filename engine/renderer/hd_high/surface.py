@@ -40,7 +40,7 @@ ENV_MAP_UNIT = 18
 NORMAL_MAP_UNIT = 19
 MATERIAL_MAP_UNIT = 20
 NOISE_UNIT = 21
-SKY_COVER_UNIT = 22
+SKY_LIGHT_UNIT = 22
 
 #: The programs :func:`surface_source` is applied to (those built from
 #: ``lit.frag`` / ``textured.frag``).
@@ -52,14 +52,6 @@ SURFACE_PROGRAMS = ('lit', 'textured', 'lit_instanced', 'textured_instanced',
 #: unit 0 beside the diffuse sampler2D is an invalid program state).
 TERRAIN_NORMAL_UNIT = 23       # .. 26: the terrain layers' normal maps
 LIGHT_GRID_UNIT = 27
-
-#: The directions the sky is asked in (toward the sky) and how much each
-#: counts: straight up, and four slanted ones 40 degrees above the horizon,
-#: through which daylight comes in at a window. One sky cover layer each.
-SKY_DIRECTIONS = ((0.0, 1.0, 0.0),) + tuple(
-    (0.766 * x, 0.643, 0.766 * z)
-    for x, z in ((0.7071, 0.7071), (-0.7071, 0.7071), (-0.7071, -0.7071), (0.7071, -0.7071)))
-SKY_WEIGHTS = (0.4, 0.15, 0.15, 0.15, 0.15)
 
 #: Forward+ (clustered forward shading, as Filament and Bevy do it): the
 #: frame's lamps are binned on the CPU into a grid of clusters
@@ -75,7 +67,7 @@ LIGHT_GRID_DEPTH = 32
 SURFACE_SAMPLERS = (('uSunShadow', SUN_SHADOW_UNIT), ('uEnvMap', ENV_MAP_UNIT),
                     ('uNormalMap', NORMAL_MAP_UNIT),
                     ('uMaterialMap', MATERIAL_MAP_UNIT), ('uNoise', NOISE_UNIT),
-                    ('uSkyCover', SKY_COVER_UNIT), ('uLightGrid', LIGHT_GRID_UNIT))
+                    ('uSkyLight', SKY_LIGHT_UNIT), ('uLightGrid', LIGHT_GRID_UNIT))
 
 #: Value noise and the cloud layer, shared by the sky and by the cloud
 #: shadows the surfaces receive, so a shadow on the ground is under the cloud
@@ -126,8 +118,7 @@ highp vec2 fioEnvUV(highp vec3 d) {
     return vec2(atan(d.x, -d.z) / (2.0 * FIO_PI) + 0.5,
                 0.5 - asin(clamp(d.y, -1.0, 1.0)) / FIO_PI);
 }
-// Gamma 2.0 (hd_graphics.GAMMA): a multiply to decode, a square root to encode.
-vec3 fioToLinear(vec3 c) { c = max(c, vec3(0.0)); return c * c; }
+vec3 fioToLinear(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
 // A unit vector in two numbers (octahedral), 0..1 each.
 vec2 fioPackNormal(vec3 n) {
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
@@ -143,7 +134,7 @@ vec3 fioUnpackNormal(vec2 p) {
     n.y += n.y >= 0.0 ? -t : t;
     return normalize(n);
 }
-vec3 fioEncode(vec3 c) { return sqrt(max(c, vec3(0.0))); }
+vec3 fioEncode(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
 // Split-sum environment BRDF, Karis' mobile approximation.
 vec3 fioEnvBRDF(vec3 f0, float rough, float nov) {
     vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
@@ -155,16 +146,8 @@ vec3 fioEnvBRDF(vec3 f0, float rough, float nov) {
 }
 """
 
-_SKY_CONSTANTS = (
-    "#define FIO_SKY_DIRECTIONS %d\n" % len(SKY_DIRECTIONS)
-    + "const vec3 FIO_SKY_DIRS[FIO_SKY_DIRECTIONS] = vec3[](%s);\n" % ", ".join(
-        "vec3(%.4f, %.4f, %.4f)" % d for d in SKY_DIRECTIONS)
-    + "const float FIO_SKY_WEIGHTS[FIO_SKY_DIRECTIONS] = float[](%s);\n" % ", ".join(
-        "%.3f" % w for w in SKY_WEIGHTS))
-
-SURFACE_GLSL_TEMPLATE = """
+SURFACE_GLSL = """
 // ---- physically based surfaces (engine/renderer/hd_high/surface.py) ----
-FIO_SKY_CONSTANTS
 uniform int uSurfaceMode;          // 0 legacy, 1 opaque phase, 2 blended phase, 3 opaque in a portal's view
 uniform highp vec3 uSunDir;        // toward the sun
 uniform vec3 uSunColor;
@@ -182,14 +165,15 @@ uniform vec4 uMaterial;            // x maps bound, y parallax depth (world unit
 uniform vec4 uSurfaceDefault;      // x roughness, y metalness, z detail strength, w unused
 uniform vec4 uAtmosphere;          // x haze density, y haze height falloff, z cloud shadow strength, w unused
 uniform vec4 uEnvParams2;          // x the environment map is a probe's whole sphere, y haze colour from uHazeColor, z gain on the environment map
-uniform highp mat4 uSkyMatrix[FIO_SKY_DIRECTIONS];   // world -> each sky cover layer's clip space
-uniform highp sampler2DArrayShadow uSkyCover;        // the standing casters seen from each sky direction
-uniform vec4 uSkyCoverParams;      // x filter radius (uv), y unused, z on, w normal offset (world)
-uniform float uSkyBias[FIO_SKY_DIRECTIONS];          // each layer's depth bias
+uniform highp sampler3D uSkyLight; // the sky light volume (skylight.py): r light, g whether the cell is open
+uniform highp vec4 uSkyLightOrigin; // xyz the volume's corner (world), w normal offset (world)
+uniform highp vec4 uSkyLightScale;  // xyz 1 / the volume's extent, w 0 off, 1 on, 2 on and a window on a larger map
 uniform highp usampler2D uLightGrid;   // Forward+: row = cluster, column k = the cluster's k-th lamp (255: no more)
 uniform vec4 uLightGridParams;     // x, z of the grid's corner, 1 / cell size, 1 while the grid is in use
 uniform vec2 uLightGridHeight;     // y of the grid's bottom, 1 / layer height
 uniform vec3 uHazeColor;
+uniform vec3 uReflectIndoor;       // what a reflection finds where no sky light reaches at all
+uniform vec3 uReflectFallback;     // ... and under the horizon of a sky, where walls would be
 uniform vec4 uHdrFog;              // the map's distance fog colour, in the frame's units; a 1 while it is on
 layout(location = 1) out vec4 FragData;
 // The sun a surface is lit by: the frame's (fioSunBegin), unless a program
@@ -236,43 +220,26 @@ float fioSunShadow(highp vec3 pos, vec3 ng) {
               + uw2 * vw2 * fioSunTap(base, u2, v2, s.z);
     return mix(1.0, lit / 144.0, uSunShadowParams.w);
 }
-// How much of the sky a surface can see, 0 .. 1. The sky is asked in a
-// handful of directions -- straight up and four slanted ones, FIO_SKY_DIRS
-// -- each with a depth map of the standing casters seen from there, so
-// daylight is not only what falls from overhead: it comes in through a
-// window or a doorway along the slanted directions and lands on the floor
-// and the walls it can reach, and stops at a roof or a wall. Each direction
-// counts by how much the surface faces it; out in the open the answer is 1.
-// The point is first moved off its surface (uSkyCoverParams.w) so that a
-// wall's inside face is tested inside the room.
-float fioSkyTap(int i, highp vec4 where) {
-    highp vec4 clip = uSkyMatrix[i] * where;
-    highp vec3 s = clip.xyz * 0.5 + 0.5;
-    if (s.x <= 0.0 || s.x >= 1.0 || s.y <= 0.0 || s.y >= 1.0) return 1.0;
-    // One tap: the driver's own 2x2 comparison filter softens the edge.
-    return texture(uSkyCover, vec4(s.xy, float(i), s.z + uSkyBias[i]));
-}
+// How much of the sky's light reaches a point, 0 in a closed room .. 1 in
+// the open: all of it where nothing is overhead, and what spreads in through
+// the windows and doors indoors (the sky light volume, skylight.py). Sky
+// light is scaled by it. The point is first moved off its surface
+// (uSkyLightOrigin.w), into the room it faces; the filtered light is divided
+// by the filtered share of open cells, which leaves the cells a wall fills
+// out of the filter, so a wall is lit by its own side.
 float fioSkyVisible(highp vec3 pos, vec3 ng) {
-    if (uSkyCoverParams.z <= 0.0) return 1.0;
-    highp vec4 where = vec4(pos + ng * uSkyCoverParams.w, 1.0);
-    float seen = 0.0;
-    float total = 0.0;
-    // Straight up first. A surface that faces up with nothing over it is in
-    // the open: the slanted directions would only say so again.
-    float up = FIO_SKY_WEIGHTS[0] * max(ng.y + 0.35, 0.0);
-    if (up > 0.0) {
-        float open = fioSkyTap(0, where);
-        if (open >= 0.999 && ng.y > 0.5) return 1.0;
-        seen = up * open;
-        total = up;
+    if (uSkyLightScale.w <= 0.0) return 1.0;
+    highp vec3 q = (pos + ng * uSkyLightOrigin.w - uSkyLightOrigin.xyz) * uSkyLightScale.xyz;
+    // Beside the volume or above it there is only sky (below it, its floor).
+    if (q.x <= 0.0 || q.x >= 1.0 || q.z <= 0.0 || q.z >= 1.0 || q.y >= 1.0) return 1.0;
+    vec2 s = textureLod(uSkyLight, q, 0.0).rg;
+    float open = clamp(s.r / max(s.g, 1e-4), 0.0, 1.0) * smoothstep(FIO_OPEN_LOW, FIO_OPEN_HIGH, s.g);
+    if (uSkyLightScale.w > 1.5) {
+        // A window that follows the view: eased into the open at its rim.
+        highp vec2 rim = min(q.xz, 1.0 - q.xz);
+        open = mix(1.0, open, clamp(min(rim.x, rim.y) * 12.0, 0.0, 1.0));
     }
-    for (int i = 1; i < FIO_SKY_DIRECTIONS; i++) {
-        float weight = FIO_SKY_WEIGHTS[i] * max(dot(ng, FIO_SKY_DIRS[i]) + 0.35, 0.0);
-        if (weight <= 0.0) continue;
-        total += weight;
-        seen += weight * fioSkyTap(i, where);
-    }
-    return total > 0.0 ? seen / total : 0.0;
+    return open;
 }
 float fioCloudShadow(highp vec3 pos) {
     if (uAtmosphere.z <= 0.0) return 1.0;
@@ -303,13 +270,13 @@ vec3 fioLight(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float rough, vec3 r
 // Steep parallax with a linear refinement: the texture coordinate the view
 // ray reaches in the height field of uNormalMap's alpha.
 highp vec2 fioParallax(highp vec2 uv, highp vec2 dx, highp vec2 dy, highp vec2 reach, float nov) {
-    float count = mix(12.0, 5.0, nov);
+    float count = mix(20.0, 8.0, nov);
     float layer = 1.0 / count;
     highp vec2 delta = reach * layer;
     float depth = 0.0;
     float here = 1.0 - textureGrad(uNormalMap, uv, dx, dy).a;
     float before = here;
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 20; i++) {
         if (depth >= here) break;
         uv += delta;
         depth += layer;
@@ -329,44 +296,11 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
 void fioLegacyMain();
 """
 
-SURFACE_GLSL = SURFACE_GLSL_TEMPLATE.replace("FIO_SKY_CONSTANTS", _SKY_CONSTANTS)
+from engine.renderer.hd_high import skylight as _skylight
+SURFACE_GLSL = (SURFACE_GLSL.replace('FIO_OPEN_LOW', repr(_skylight.OPEN_LOW))
+                .replace('FIO_OPEN_HIGH', repr(_skylight.OPEN_HIGH)))
 
 SURFACE_SHADE_GLSL = """
-// A lamp's cube-map shadow, as calcPointShadow filters it, but taking the
-// kernel's four far corners first: where they agree with each other the
-// pixel is plainly lit or plainly shadowed and that is the answer; only in
-// a penumbra are the other sixteen taps taken. (Most pixels of most frames
-// are not in a penumbra, and this was the dearest thing a lit pixel did.)
-float fioPointShadow(int idx, highp vec3 fragToLight, highp float farPlane, float ndotl) {
-    if (idx < 0) return 0.0;
-    highp float currentDepth = length(fragToLight);
-    if (currentDepth >= farPlane) return 0.0;
-    highp vec3 lookDir = -fragToLight;
-    highp float texel = currentDepth * 2.0 / _shadowCubeTexels(idx);
-    vec2 shadowFilter = _shadowFilter(idx);
-    highp float diskRadius = texel * shadowFilter.x;
-    highp float slope = clamp(sqrt(max(1.0 - ndotl * ndotl, 0.0)) / max(ndotl, 0.1),
-                              0.0, 10.0);
-    highp float bias = (diskRadius + (texel + diskRadius) * (1.0 + slope)) * shadowFilter.y;
-    highp float limit = currentDepth - bias;
-    vec3 corners[4] = vec3[](vec3(1, 1, 1), vec3(-1, -1, 1), vec3(-1, 1, -1), vec3(1, -1, -1));
-    float shadow = 0.0;
-    for (int s = 0; s < 4; ++s)
-        if (limit > _sampleShadowCube(idx, lookDir + corners[s] * diskRadius) * farPlane) shadow += 1.0;
-    if (shadow == 0.0 || shadow == 4.0) return shadow * 0.25;
-    vec3 rest[16] = vec3[](
-        vec3( 1,-1, 1), vec3(-1, 1, 1), vec3( 1, 1,-1), vec3(-1,-1,-1),
-        vec3( 1, 1, 0), vec3( 1,-1, 0), vec3(-1,-1, 0), vec3(-1, 1, 0),
-        vec3( 1, 0, 1), vec3(-1, 0, 1), vec3( 1, 0,-1), vec3(-1, 0,-1),
-        vec3( 0, 1, 1), vec3( 0,-1, 1), vec3( 0,-1,-1), vec3( 0, 1,-1));
-    for (int s = 0; s < 16; ++s)
-        if (limit > _sampleShadowCube(idx, lookDir + rest[s] * diskRadius) * farPlane) shadow += 1.0;
-    return shadow / 20.0;
-}
-// fioShade's light loop calls calcPointShadow by that name (the light block
-// rewrite looks for it, to add a cookie's shadow floor); below here it is
-// the adaptive one.
-#define calcPointShadow fioPointShadow
 // Light a surface. *src* is the surface's own opacity.
 void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occlusion,
               vec3 emission, float src) {
@@ -428,6 +362,9 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
         if (distSq < radiusSq) {
             highp float dist = sqrt(distSq);
             vec3 l = toLight / dist;
+            // Turned away from the lamp: nothing to add, and no shadow
+            // worth its taps.
+            if (dot(n, l) <= 0.0) continue;
             float att = 1.0 - (dist / lights[i].radius);
             att = att * att;
             float shadow = calcPointShadow(lights[i].shadowIndex, toLight, lights[i].radius,
@@ -437,13 +374,28 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
             // decoded like a colour. The light then falls off across a room
             // exactly as the map's author saw it, instead of reaching much
             // further in linear light.
-            float level = lights[i].intensity * att;
             vec3 radiance = fioToLinear(lights[i].color)
-                          * (level * level * uEnvParams.w);
+                          * (pow(lights[i].intensity * att, 2.2) * uEnvParams.w);
             result += (1.0 - shadow) * fioLight(n, v, l, diffuse, f0, rough, radiance);
         }
     }
-    if (uEnvParams.y > 0.5) {
+    // With a reflection pass (postfx.py), a surface smooth enough to show a
+    // picture is left to it: it traces the frame for what the surface
+    // reflects. A rougher one reflects no picture, only the environment's
+    // light, and takes it here -- the pass then has nothing to do for the
+    // pixel, which is most pixels of most frames.
+    bool solid = uSurfaceMode == 1 && src >= 0.999;
+    bool traced = uEnvParams.y < 0.5 && solid && rough < 0.5;
+    if (uEnvParams.y < 0.5) {
+        if (solid && !traced) {
+            vec3 r = reflect(-v, n);
+            vec3 seen = mix(uReflectFallback,
+                            textureLod(uEnvMap, fioEnvUV(r), rough * uEnvParams.x).rgb * uEnvParams2.z,
+                            uEnvParams2.x > 0.5 ? 1.0 : smoothstep(-0.05, 0.45, r.y));
+            if (uEnvParams2.x < 0.5) seen = mix(uReflectIndoor, seen, skyOpen);
+            result += seen * fioEnvBRDF(f0, rough, nov) * mix(1.0, occlusion, 0.7);
+        }
+    } else {
         // No reflection pass: the sky's reflection, hidden near the horizon
         // where walls would be in the way.
         vec3 r = reflect(-v, n);
@@ -465,9 +417,10 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
     // The map's distance fog (which replaces the haze: the renderer sends
     // one or the other).
     if (uHdrFog.a > 0.5) result = mix(result, uHdrFog.rgb, fogFactor(FragPos));
+    // Alpha below 1 asks the reflection pass for this pixel, and tells it
+    // the surface's reflectance.
     float marker = clamp(max(f0.r, max(f0.g, f0.b)), 0.02, 0.95);
-    float outAlpha = uSurfaceMode == 2 ? src
-                   : (src >= 0.999 && uSurfaceMode == 1 ? marker : 1.0);
+    float outAlpha = uSurfaceMode == 2 ? src : (traced ? marker : 1.0);
     FragColor = vec4(fioEncode(result), outAlpha);
     FragData = vec4(fioPackNormal(n), skyOpen, uSurfaceMode == 1 ? rough : 1.0);
 }

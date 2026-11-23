@@ -15,7 +15,8 @@ imports the other.
 | Package | `engine/renderer/forward` | `engine/renderer/hd_high` |
 | Class | `ForwardRenderer` | `HDHighRenderer` |
 | Registry name | `Forward` (alias `Classic`) | `HD_High` |
-| Default | yes | no |
+| Shipped `settings.ini` starts with | | yes |
+| Used when no renderer is set, or HD_High cannot start | yes | |
 | Low-power ARM mode | yes (its reduced shaders) | never chosen |
 | Android player | yes | no |
 
@@ -87,19 +88,16 @@ frame is finished.
    and models over a copy of it. A filtered 2048 map; in a world larger than
    the shadow range it follows the view in coarse steps.
 2. **Sky cover map** (when the map has a sky): the standing casters seen from
-   five directions, straight above and four slanted ones, one depth layer
-   each. Surfaces read from it how much of the sky they can see, so daylight
-   also comes in at a window or a doorway.
+   straight above. Surfaces read from it whether the sky is overhead.
 3. The frame is drawn into a **floating-point target**: colour, the shading
    normal with sky visibility and roughness, depth.
 4. **Opaque world**, physically shaded (`surface.py`): albedo decoded to
    linear light, GGX specular and energy-conserving diffuse, roughness /
    metalness / ambient occlusion / emission from material maps, normal
-   mapping with the tangent frame taken from screen-space derivatives (no
-   mesh needs tangents), parallax where a person made the height map, the
-   sun with shadow and cloud shadows, sky light, the map's lamps with their
-   cube-map shadows (filtered adaptively: four taps where a pixel is plainly
-   lit or shadowed, twenty in a penumbra), haze or fog.
+   mapping and parallax with the tangent frame taken from screen-space
+   derivatives (no mesh needs tangents), the sun with shadow and cloud
+   shadows, sky light, the map's lamps with their cube-map shadows, haze or
+   fog.
 5. **Forward+**: with 12 or more lamps in a frame they are binned on the CPU
    into world-space clusters (32 x 32 over the floor plan, 4 layers high) and
    a fragment loops over its cluster's lamps only. The clusters are of the
@@ -113,18 +111,10 @@ frame is finished.
 7. **Blended things** (sprites, particles, effects, water, glass) over the
    result. These are not physically shaded: each keeps the colour it has in
    Classic, converted so that the tone curve brings it back (`hdr.py`).
-8. **Bloom** (a four-level chain from a quarter of the frame's size), then one
-   pass that does **anti-aliasing (FXAA), sun shafts, exposure, tone mapping**
-   (an extended Reinhard curve: straight through the shadows, so a low-lit
-   map stays as dark as it was lit and no darker), **grade, vignette and
-   grain**, and writes the frame's depth, straight into the framebuffer the
-   view asked for.
-
-A frame is the scene plus four full-screen passes (ambient occlusion at half
-size, the occlusion-and-reflection resolve, the bloom chain at quarter size,
-and the final pass). Colours are decoded and encoded with gamma 2.0 (a
-multiply and a square root, where 2.2 is two `pow()` calls on every texel and
-pixel).
+8. **Bloom, sun shafts, exposure, tone mapping** (an extended Reinhard curve:
+   straight through the shadows, so a low-lit map stays as dark as it was
+   lit and no darker), **grade, vignette, grain, FXAA**, into the
+   framebuffer the view asked for.
 
 ### Light, by kind of map
 
@@ -142,8 +132,7 @@ pixel).
 * **Procedural sky.** An analytic atmosphere under a moving cloud layer, a sun
   on by default, cloud shadows, haze.
 
-Under any sky, **sky light lands only on what can see the sky** -- overhead,
-or through a window or doorway -- and never through a roof or a wall, and the
+Under any sky, **sky light lands only where the sky is overhead**, and the
 **exposure follows the view**: an outdoor value from the sky's and sun's
 light, an indoor value from the lamps, and between them by how much sky is
 over the view point (rays against the casters' boxes on the CPU), eased over
@@ -195,11 +184,8 @@ See [`hd_high_performance.md`](hd_high_performance.md) and `tools/bench_hd.py`.
   material maps of their own.
 * A model's untextured groups take the default roughness and metalness.
 * The block-mesh terrain and the grass are drawn as Classic draws them.
-* Daylight through a window comes in along four slanted directions, so it
-  lands as soft patches rather than a full spread of sky light.
-* Parallax is applied only to hand-made height maps: a height guessed from a
-  picture smears at grazing angles (set `"parallax_generated": true` in a
-  texture's `.mat.json` to try it anyway).
+* Sky light is all-or-nothing by what is overhead: daylight does not spread
+  sideways into a room through a window (the sun, with its shadow map, does).
 
 ---
 

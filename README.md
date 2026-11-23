@@ -198,12 +198,12 @@ Fio draws through a renderer contract (`engine/renderer`), and ships two rendere
 
 | | **Classic** | **HD_High** |
 | --- | --- | --- |
-| What it is | Fio's original forward renderer (`engine/renderer/forward`). The default. | A separate, physically based renderer (`engine/renderer/hd_high`). |
+| What it is | Fio's original forward renderer (`engine/renderer/forward`). What Fio falls back to when no renderer is set, or HD_High cannot start. | A separate, physically based renderer (`engine/renderer/hd_high`). |
 | Lighting | Lambert per lamp, in display space | Physically based surfaces (GGX specular, energy-conserving diffuse), a sun with a filtered shadow map, sky light, Forward+ clustered lamp culling |
 | Materials | The diffuse texture | Diffuse + normal/height + AO/roughness/metalness/emission maps for every surface, parallax |
 | Frame | Straight to the display | HDR target, ambient occlusion, screen-space reflections, bloom, sun shafts, tone mapping, grading, FXAA |
 
-Each is documented in [`docs/renderers.md`](docs/renderers.md). Choose one in **Settings > Display > Renderer** (`[Renderer] renderer = Classic | HD_High` in `settings.ini`), or switch at any moment with the console's `r_renderer Classic` / `r_renderer HD_High`. No restart: the renderers share nothing but the contract. Low-power ARM mode always uses Classic, and the Android player is Classic only.
+Choose one in **Settings > Display > Renderer** (`[Renderer] renderer = Classic | HD_High` in `settings.ini`), or switch at any moment with the console's `r_renderer Classic` / `r_renderer HD_High`. No restart: the renderers share nothing but the contract. Low-power ARM mode always uses Classic, and the Android player is Classic only.
 
 Classic is locked: HD_High is its own package and Classic's files, shaders and pixels are checked against what they were before HD_High existed (`tests/visual/test_classic_lock.py`, `tests/visual/test_classic_golden.py`, `tools/hd_golden.py`).
 
@@ -224,7 +224,7 @@ What an HD_High frame looks like is map data, kept where the sky image is: on th
 How light behaves:
 
 * **A map with no sky is lit exactly by its lamps**, at the brightness Classic shows it: a lamp falls off across a room as its author saw it, and the frame is not lifted toward mid-grey.
-* **Under a sky, sky light lands only on what can see the sky.** A courtyard is lit by the sky, daylight comes in at a window or a doorway, and the rooms beside it are lit by their lamps; nothing leaks through a roof or a wall.
+* **Under a sky, sky light lands only where the sky is overhead.** A courtyard is lit by the sky and the rooms beside it by their lamps; nothing leaks through a roof or a wall.
 * **Exposure is worked out, not authored**: from the sky's and sun's light outdoors, held at classic brightness indoors, and eased between the two by how much sky is over the view point. `hd_exposure` nudges it.
 * **Reflections** show the frame itself where a reflected ray finds it; otherwise the nearest ReflectionProbe, else the sky, else the map's ambient.
 * **Terrain** under a sky is shaded like every other surface (sun, sky light, shadows, its layers' normal maps).

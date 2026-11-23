@@ -2,8 +2,8 @@
 
 HD_High (``engine/renderer/hd_high``) is created through the registry like any
 renderer and drawn with on a real GL context: every sky mode draws without a
-GL error; an indoor map keeps the brightness Classic gives it; sky light
-lands only where the sky is overhead; the host swaps Classic and HD_High live
+GL error; an indoor map keeps the brightness Classic gives it; daylight
+spreads through a window and stops at a wall; the host swaps Classic and HD_High live
 and Classic's picture is unchanged by the round trip; and a texture's
 material maps are found beside it, or made and kept on disk when it has none.
 """
@@ -69,6 +69,90 @@ def test_hd_high_is_a_separate_renderer_that_satisfies_the_contract():
     glh.reset_texture_cache()
 
 
+#: What OpenGL 3.3 guarantees a fragment shader, and all that some drivers
+#: (macOS) give: a program that samples more does not link there.
+FRAGMENT_SAMPLER_LIMIT = 16
+#: Samplers only a program's vertex shader reads.
+VERTEX_SAMPLERS = ("uTransforms", "uHeights")
+
+
+def _active_samplers(program):
+    import OpenGL.GL as gl
+    kinds = {int(getattr(gl, name)) for name in dir(gl)
+             if name.startswith(("GL_SAMPLER_", "GL_INT_SAMPLER_", "GL_UNSIGNED_INT_SAMPLER_"))}
+    found = {}
+    for index in range(gl.glGetProgramiv(program, gl.GL_ACTIVE_UNIFORMS)):
+        name, size, kind = gl.glGetActiveUniform(program, index)
+        if int(kind) in kinds:
+            name = name.decode() if isinstance(name, bytes) else str(name)
+            found[name.split("[")[0]] = int(size)
+    return found
+
+
+def test_no_program_samples_more_than_a_fragment_shader_is_guaranteed():
+    """Every HD_High program links where a fragment shader has 16 samplers
+    and no more: the point lights' shadow maps are one depth array, not a
+    cube sampler per light."""
+    glh.reset_texture_cache()
+    with glh.GLTestContext(64, 64):
+        renderer = glh.make_renderer(_config(), name="HD_High")
+        try:
+            assert renderer.ready
+            for name in ("lit", "textured", "textured_instanced", "brush_instanced",
+                         "geo_batched", "terrain"):
+                assert renderer.shaders.get(name), name
+            for name, program in renderer.shaders.items():
+                if not program:
+                    continue
+                samplers = _active_samplers(int(getattr(program, "id", program)))
+                in_fragment = sum(size for sampler, size in samplers.items()
+                                  if sampler not in VERTEX_SAMPLERS)
+                assert in_fragment <= FRAGMENT_SAMPLER_LIMIT, (name, samplers)
+                if "shadowMaps" in samplers:
+                    assert samplers["shadowMaps"] == 1, (name, samplers)
+        finally:
+            renderer.cleanup()
+    glh.reset_texture_cache()
+
+
+def test_point_shadows_share_one_array_and_keep_each_lights_own_size():
+    """Two shadow-casting lamps, one with its own (smaller) map size: both
+    cast shadows from the one depth array, each at its size."""
+    from editor.things import Light
+    from tests.helpers.worlds import box_brush, make_thing
+    brushes = [box_brush("floor", (0, -16, 0), (2048, 32, 2048)),
+               box_brush("cube", (0, 150, 0), (300, 300, 300))]
+
+    def lamps(shadows):
+        return [make_thing(Light, "a", (-700.0, 500.0, 0.0), color=[255, 255, 255],
+                           intensity=2.0, radius=1600.0, state="on", casts_shadows=shadows),
+                make_thing(Light, "b", (0.0, 500.0, -700.0), color=[255, 255, 255],
+                           intensity=1.6, radius=1400.0, state="on", casts_shadows=shadows,
+                           shadow_map_size=256)]
+    frames = {}
+    glh.reset_texture_cache()
+    with glh.GLTestContext(240, 150) as context:
+        renderer = glh.make_renderer(_config(), name="HD_High")
+        try:
+            from engine import hd_graphics
+            renderer.set_hd_sky(hd_graphics.sky_settings({"hd_grain": 0.0}, ""))
+            for shadows in (True, False):
+                frames[shadows] = _frame(context, renderer, brushes, lamps(shadows),
+                                         aspect=1.6, eye=(500.0, 420.0, 900.0),
+                                         target=(0.0, 60.0, 0.0)).astype(np.int32)
+            assert len(renderer._shadow_cubemaps) == 1
+            assert renderer._shadow_array_size == renderer.shadow_map_size
+            assert renderer._shadow_array_slots == 2
+            assert sorted(renderer._shadow_cube_sizes[:2]) == [256, renderer.shadow_map_size]
+        finally:
+            renderer.cleanup()
+    glh.reset_texture_cache()
+    darker = (frames[False] - frames[True]).max(axis=2)
+    # The cube's shadows are there, and nothing is brighter for casting them.
+    assert (darker > 10).mean() > 0.01, [(darker > t).mean() for t in (5, 10, 25)]
+    assert (frames[True] - frames[False]).max() <= 2
+
+
 @pytest.mark.parametrize("sky, sun", [("none", False), ("panorama", False),
                                       ("panorama", True), ("procedural", True),
                                       ("procedural", False)])
@@ -86,7 +170,7 @@ def test_every_sky_mode_draws(sky, sun):
             assert not glh.is_blank(pixels)
             assert renderer.environment.enabled and renderer.environment.sky_mode == sky
             assert bool(renderer._env_shadow_ready) == sun
-            assert bool(renderer._env_cover_ready) == (sky != "none")
+            assert bool(renderer._env_skylight_ready) == (sky != "none")
             # A sky was drawn above the horizon; indoors the clear colour.
             top = glh.luminance(glh.region(pixels, 0.0, 0.0, 1.0, 0.15)).mean()
             assert (top > 60.0) == (sky != "none"), (sky, top)
@@ -117,51 +201,65 @@ def test_an_indoor_map_is_as_bright_as_classic_shows_it():
     assert 0.6 < ratio < 1.6, means
 
 
-def _room(window):
-    """A closed room on open ground under the sky: floor, four walls, a roof.
-    With *window*, the +x wall has a gap in its middle."""
+def _daylight_room(window):
+    """A closed room on a wide floor, with a window in its +x wall or none."""
     from tests.helpers.worlds import box_brush
-    brushes = [box_brush("ground", (0, -16, 0), (4096, 32, 4096)),
-               box_brush("roof", (0, 416, 0), (1088, 32, 1088)),
-               box_brush("west", (-528, 200, 0), (32, 400, 1088)),
-               box_brush("north", (0, 200, -528), (1024, 400, 32)),
-               box_brush("south", (0, 200, 528), (1024, 400, 32))]
-    if window:
-        brushes += [box_brush("east a", (528, 200, -344), (32, 400, 400)),
-                    box_brush("east b", (528, 200, 344), (32, 400, 400))]
-    else:
-        brushes.append(box_brush("east", (528, 200, 0), (32, 400, 1088)))
+    brushes = [box_brush("floor", (0, -16, 0), (2048, 32, 2048)),
+               box_brush("roof", (0, 264, 0), (544, 16, 544)),
+               box_brush("west", (-264, 128, 0), (16, 256, 544)),
+               box_brush("north", (0, 128, -264), (544, 256, 16)),
+               box_brush("south", (0, 128, 264), (544, 256, 16)),
+               box_brush("east a", (264, 128, -168), (16, 256, 208)),
+               box_brush("east b", (264, 128, 168), (16, 256, 208)),
+               box_brush("sill", (264, 32, 0), (16, 64, 128)),
+               box_brush("head", (264, 224, 0), (16, 64, 128))]
+    if not window:
+        brushes.append(box_brush("plug", (264, 128, 0), (16, 128, 128)))
     return brushes
 
 
-def test_daylight_comes_in_at_a_window_and_not_through_a_wall():
-    """Sky light is asked in several directions, not only overhead: a sealed
-    room under the sky is dark inside, the same room with a window has
-    daylight on its floor by the window, and the ground outside is lit."""
+def test_daylight_spreads_through_a_window_and_stops_at_a_wall():
+    """Under a sky with no lamps, seen from inside a room: with a window the
+    floor is lit, brightest by the window; with the window walled up the
+    room is dark. Outside, the ground is as bright either way."""
     from engine import hd_graphics
-    seen = {}
-    for label, brushes, eye, target in (
-            ("sealed", _room(False), (-200.0, 300.0, 0.0), (350.0, 0.0, 0.0)),
-            ("window", _room(True), (-200.0, 300.0, 0.0), (350.0, 0.0, 0.0)),
-            ("outside", _room(False), (1400.0, 300.0, 0.0), (1000.0, 0.0, 0.0))):
-        glh.reset_texture_cache()
-        with glh.GLTestContext(160, 120) as context:
-            renderer = glh.make_renderer(_config(), name="HD_High")
-            try:
-                renderer.set_background_image(PANORAMA)
-                renderer.set_hd_sky(hd_graphics.sky_settings({"hd_grain": 0.0}, PANORAMA))
-                pixels = _frame(context, renderer, brushes, [], aspect=160 / 120,
-                                fov_deg=70.0, eye=eye, target=target)
-                assert renderer._env_cover_ready
-                # The floor in the middle of the view.
-                seen[label] = glh.luminance(glh.region(pixels, 0.3, 0.45, 0.7, 0.8)).mean()
-            finally:
-                renderer.cleanup()
     glh.reset_texture_cache()
-    assert seen["outside"] > 80.0, seen
-    assert seen["sealed"] < 25.0, seen                      # nothing leaks in
-    assert seen["window"] > seen["sealed"] * 2.0, seen
-    assert seen["window"] < seen["outside"], seen
+    seen = {}
+    with glh.GLTestContext(240, 150) as context:
+        renderer = glh.make_renderer(_config(), name="HD_High")
+        try:
+            renderer.set_background_image(PANORAMA)
+            # A fixed exposure: the room is compared with itself.
+            renderer.set_hd_sky(hd_graphics.sky_settings(
+                {"hd_grain": 0.0, "hd_sun": False}, PANORAMA))
+            renderer.environment.exposure = 1.0
+            renderer.SKY_LIGHT_INTERVAL = 0.0       # each change at once
+            for window in (True, False):
+                # From the far wall, looking down at the floor toward the window.
+                pixels = _frame(context, renderer, _daylight_room(window), [], aspect=1.6,
+                                fov_deg=80.0, eye=(-220.0, 180.0, 0.0),
+                                target=(200.0, 0.0, 0.0))
+                if os.environ.get("FIO_TEST_IMAGES"):
+                    from PIL import Image
+                    Image.fromarray(pixels).save(os.path.join(
+                        os.environ["FIO_TEST_IMAGES"], "daylight_%s.png" % window))
+                near = glh.luminance(glh.region(pixels, 0.35, 0.45, 0.65, 0.6)).mean()
+                far = glh.luminance(glh.region(pixels, 0.35, 0.85, 0.65, 0.98)).mean()
+                outside = _frame(context, renderer, _daylight_room(window), [], aspect=1.6,
+                                 fov_deg=80.0, eye=(900.0, 300.0, 0.0),
+                                 target=(500.0, 0.0, 0.0))
+                ground = glh.luminance(glh.region(outside, 0.3, 0.6, 0.7, 0.95)).mean()
+                seen[window] = (near, far, ground)
+            assert renderer._env_skylight_ready
+            assert renderer.sun_shadow_stats.get("sky light", 0) >= 2
+        finally:
+            renderer.cleanup()
+    glh.reset_texture_cache()
+    (near, far, ground), (dark_near, dark_far, dark_ground) = seen[True], seen[False]
+    assert near > 40.0 and near > far * 1.3, seen          # daylight, fading into the room
+    assert far > dark_far + 8.0, seen                      # ... and reaching its far side
+    assert max(dark_near, dark_far) < near * 0.25, seen    # walled up: dark
+    assert ground > 60.0 and abs(ground - dark_ground) < 3.0, seen
 
 
 def test_exposure_follows_the_view_from_under_a_roof_to_under_the_sky():
@@ -202,6 +300,8 @@ def test_the_host_swaps_classic_and_hd_high_live(fio_session):
     session = fio_session(level_data(brushes=room(size=2048.0, height=512.0) + [crate],
                                      things=[spawn, lamp]))
     session.view.sysmon.set_active(False)
+    # Whichever renderer the shipped settings start with, begin from Classic.
+    assert session.view.switch_renderer("Forward")
     session.publish()
     session.paint()
     before = session.paint()
@@ -431,7 +531,7 @@ def test_every_stock_map_draws_with_hd_high(tmp_path):
     output = result.stdout + result.stderr
     assert result.returncode == 0, output[-3000:]
     assert "Traceback" not in output, output[output.index("Traceback"):][:3000]
-    for sign in ("[Environment] disabled", "sun shadows off", "sky cover off",
+    for sign in ("[Environment] disabled", "sun shadows off", "sky light off",
                  "Shader Error", "failed to start"):
         assert sign not in output, sign
     with open(tmp_path / "manifest.json") as handle:

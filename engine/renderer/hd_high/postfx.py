@@ -31,22 +31,25 @@ from engine import hd_graphics
 from engine.renderer.hd_high import surface
 from engine.renderer.hd_high.environment import FULLSCREEN_VERT, _Program
 
-#: Levels of the bloom chain; the first is a quarter of the frame's size.
-BLOOM_LEVELS = 4
+BLOOM_LEVELS = 6
 
 _VIEW_POS_GLSL = """
 uniform mat4 uProjection;
 uniform mat4 uInvProjection;
 uniform sampler2D uDepth;
-// View-space position from depth, straight from the projection's terms
-// (no inverse matrix per sample: the passes take dozens of these a pixel).
+// A perspective projection's own terms (PostFXMixin._postfx_matrices): the
+// view position of a depth sample in a few multiplies. These shaders take
+// one for every tap, and a matrix product and a divide each was most of
+// what the ambient occlusion pass cost.
+uniform highp vec4 uUnprojectA;    // xy: 2 / P00, 2 / P11; zw: (P20 - 1) / P00, (P21 - 1) / P11
+uniform highp vec3 uUnprojectB;    // x P22, y P32, z 1 when the projection is a plain perspective
 highp vec3 fioViewPos(highp vec2 uv, highp float depth) {
-    highp float z = -uProjection[3][2] / (depth * 2.0 - 1.0 + uProjection[2][2]);
-    highp vec2 ndc = uv * 2.0 - 1.0 + vec2(uProjection[2][0], uProjection[2][1]);
-    return vec3(ndc * vec2(-z / uProjection[0][0], -z / uProjection[1][1]), z);
-}
-highp float fioViewZ(highp vec2 uv) {
-    return -uProjection[3][2] / (textureLod(uDepth, uv, 0.0).r * 2.0 - 1.0 + uProjection[2][2]);
+    if (uUnprojectB.z > 0.5) {
+        highp float z = -uUnprojectB.y / (depth * 2.0 - 1.0 + uUnprojectB.x);
+        return vec3((uv * uUnprojectA.xy + uUnprojectA.zw) * -z, z);
+    }
+    highp vec4 p = uInvProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    return p.xyz / p.w;
 }
 highp vec3 fioViewAt(highp vec2 uv) {
     return fioViewPos(uv, textureLod(uDepth, uv, 0.0).r);
@@ -68,7 +71,8 @@ uniform int uTaps;         // samples (the quality tier's), at most 16
 """ + _VIEW_POS_GLSL + """
 void main() {
     highp float depth = textureLod(uDepth, vUV, 0.0).r;
-    if (depth >= 0.999999) { FragColor = vec4(1.0); return; }
+    // Green: how far the pixel is (the blur weighs by it), the sky farthest.
+    if (depth >= 0.999999) { FragColor = vec4(1.0, 60000.0, 0.0, 1.0); return; }
     highp vec3 p = fioViewPos(vUV, depth);
     // The surface normal from the depth buffer: the shorter of the two
     // differences on each axis, so an edge does not bend it.
@@ -81,7 +85,7 @@ void main() {
     vec3 n = normalize(cross(dx, dy));
     float radius = uParams.x;
     float reach = min(uParams.w * radius / max(-p.z, 1.0), 96.0);   // in pixels
-    if (reach < 1.5) { FragColor = vec4(1.0); return; }
+    if (reach < 1.5) { FragColor = vec4(1.0, min(-p.z, 60000.0), 0.0, 1.0); return; }
     float spin = fioDither(gl_FragCoord.xy) * 6.2831853;
     float total = 0.0;
     int TAPS = clamp(uTaps, 4, 16);
@@ -100,6 +104,35 @@ void main() {
     float ao = max(0.0, 1.0 - total * uParams.z * 5.0 / (r6 * float(TAPS)));
     // Fade out where the depth buffer is too coarse to trust.
     ao = mix(ao, 1.0, smoothstep(2500.0, 5000.0, -p.z));
+    FragColor = vec4(ao, min(-p.z, 60000.0), 0.0, 1.0);
+}
+"""
+
+#: Depth-aware 3x3 blur of the occlusion: removes the per-pixel rotation's
+#: noise without bleeding across edges. The occlusion pass left each texel's
+#: distance beside its occlusion, so a tap is one fetch.
+AO_BLUR_FRAG = """#version 330 core
+precision highp float;
+layout(location = 0) out vec4 FragColor;
+in vec2 vUV;
+uniform sampler2D uAO;     // r occlusion, g distance
+void main() {
+    ivec2 here = ivec2(gl_FragCoord.xy);
+    ivec2 last = textureSize(uAO, 0) - 1;
+    vec2 centre = texelFetch(uAO, here, 0).rg;
+    if (centre.g >= 59999.0) { FragColor = vec4(1.0); return; }      // the sky
+    float total = centre.r;
+    float weight = 1.0;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            if (x == 0 && y == 0) continue;
+            vec2 tap = texelFetch(uAO, clamp(here + ivec2(x, y), ivec2(0), last), 0).rg;
+            float w = 1.0 / (1.0 + abs(tap.g - centre.g) * 0.25);
+            total += tap.r * w;
+            weight += w;
+        }
+    }
+    float ao = total / weight;
     FragColor = vec4(ao, ao, ao, 1.0);
 }
 """
@@ -118,7 +151,6 @@ uniform mat4 uInvView;
 uniform vec4 uParams;      // occlusion strength, reflections on, env top mip, colour top mip
 uniform vec4 uParams2;     // x the environment map is a probe's whole sphere, y march steps, z gain on the environment map
 uniform vec3 uIndoor;      // what a reflection sees where the sky cannot be seen at all
-uniform vec2 uAOTexel;     // one occlusion texel, in uv
 uniform vec3 uFallback;    // what a reflection sees where the frame has no answer and the sky is hidden
 """ + surface.ENV_GLSL + _VIEW_POS_GLSL + """
 // The frame's colour where the reflected ray meets it (rgb, linear) and a
@@ -158,7 +190,9 @@ vec4 fioTrace(highp vec3 origin, highp vec3 dir, float rough) {
                            * (1.0 - smoothstep(uParams2.y - 10.0, uParams2.y, float(i)));
                 // A rougher surface reflects a wider cone: a blurrier level
                 // of the frame, the farther the hit the blurrier.
-                return vec4(fioToLinear(textureLod(uColor, huv, 0.0).rgb), fade);
+                float cone = rough * rough * hi * uProjection[1][1] / max(-origin.z - dir.z * hi, 1.0);
+                float lod = clamp(log2(1.0 + cone * 600.0), 0.0, uParams.w);
+                return vec4(fioToLinear(textureLod(uColor, huv, lod).rgb), fade);
             }
         }
         prev = s;
@@ -169,61 +203,46 @@ vec4 fioTrace(highp vec3 origin, highp vec3 dir, float rough) {
 }
 void main() {
     vec4 colour = textureLod(uColor, vUV, 0.0);
-    highp float depth = textureLod(uDepth, vUV, 0.0).r;
-    if (depth >= 0.999999) { FragColor = colour; return; }
+    float ao = mix(1.0, textureLod(uAO, vUV, 0.0).r, uParams.x);
+    // Only a surface smooth enough to show a picture is marked (alpha) for
+    // a reflection from here; a rougher one took the environment's when it
+    // was shaded (surface.fioShade). Everything else -- most of most frames
+    // -- is the occlusion alone, or nothing at all.
+    bool reflects = colour.a < 0.97 && uParams.y > 0.5;
+    if (!reflects && ao > 0.996) { FragColor = colour; return; }
     vec3 lin = fioToLinear(colour.rgb);
-    // The occlusion is half the frame's size and dithered: four bilinear
-    // taps a texel apart take in its 4x4 pattern, each counted by how close
-    // its depth is to this pixel's, so the blur does not cross an edge.
-    float ao = 1.0;
-    if (uParams.x > 0.0) {
-        highp float centre = -uProjection[3][2] / (depth * 2.0 - 1.0 + uProjection[2][2]);
-        float total = 0.0;
-        float weight = 0.0;
-        for (int i = 0; i < 4; i++) {
-            vec2 uv = vUV + vec2(i == 0 || i == 2 ? -1.0 : 1.0, i < 2 ? -1.0 : 1.0) * uAOTexel;
-            float w = 1.0 / (1.0 + abs(fioViewZ(uv) - centre) * 0.25);
-            total += textureLod(uAO, uv, 0.0).r * w;
-            weight += w;
-        }
-        ao = mix(1.0, total / max(weight, 1e-4), uParams.x);
-    }
     // Occlusion is of the sky's light; what the sun lights directly keeps
     // most of its brightness.
     float luma = dot(lin, vec3(0.2126, 0.7152, 0.0722));
-    lin *= mix(ao, 1.0, smoothstep(0.5, 2.5, luma) * 0.65);
-    if (colour.a < 0.97 && uParams.y > 0.5) {
-        vec4 data = textureLod(uData, vUV, 0.0);
-        float rough = data.a;
-        // A rough, non-metal surface reflects a few percent of a blur of its
-        // surroundings: not worth an environment lookup and a trace. Most
-        // of most frames stops here.
-        if (rough >= 0.5 && colour.a < 0.2) {
-            FragColor = vec4(fioEncode(lin), colour.a);
-            return;
-        }
-        highp vec3 p = fioViewPos(vUV, depth);
-        vec3 toPoint = normalize(p);
-        vec3 n = normalize(mat3(uView) * fioUnpackNormal(data.xy));
-        vec3 r = reflect(toPoint, n);
-        vec3 world = mat3(uInvView) * r;
-        float nov = max(dot(n, -toPoint), 1e-3);
-        vec3 brdf = fioEnvBRDF(vec3(colour.a), rough, nov);
-        vec3 seen = mix(uFallback,
-                        textureLod(uEnvMap, fioEnvUV(world), rough * uParams.z).rgb * uParams2.z,
-                        uParams2.x > 0.5 ? 1.0 : smoothstep(-0.05, 0.45, world.y));
-        // data.z: how much of the sky the surface can see at all.
-        if (uParams2.x < 0.5) seen = mix(uIndoor, seen, data.z);
-        // Traced only for surfaces smooth enough to show a picture: on a
-        // rougher one (most generated maps) neighbouring pixels' rays part
-        // company and the hits and misses between them read as sparkle.
-        if (rough < 0.5 && max(brdf.r, max(brdf.g, brdf.b)) > 0.006) {
-            vec4 hit = fioTrace(p + n * max(0.25, -p.z * 0.002), r, rough);
-            seen = mix(seen, min(hit.rgb, vec3(6.0)),
-                       hit.a * (1.0 - smoothstep(0.22, 0.5, rough)));
-        }
-        lin += seen * brdf * mix(1.0, ao, 0.7);
+    float keep = mix(ao, 1.0, smoothstep(0.5, 2.5, luma) * 0.65);
+    if (!reflects) {
+        // The colour is gamma-encoded: scaled in place.
+        FragColor = vec4(colour.rgb * pow(keep, 1.0 / 2.2), colour.a);
+        return;
     }
+    lin *= keep;
+    highp float depth = textureLod(uDepth, vUV, 0.0).r;
+    if (depth >= 0.999999) { FragColor = colour; return; }
+    vec4 data = textureLod(uData, vUV, 0.0);
+    float rough = data.a;
+    highp vec3 p = fioViewPos(vUV, depth);
+    vec3 toPoint = normalize(p);
+    vec3 n = normalize(mat3(uView) * fioUnpackNormal(data.xy));
+    vec3 r = reflect(toPoint, n);
+    vec3 world = mat3(uInvView) * r;
+    float nov = max(dot(n, -toPoint), 1e-3);
+    vec3 brdf = fioEnvBRDF(vec3(colour.a), rough, nov);
+    vec3 seen = mix(uFallback,
+                    textureLod(uEnvMap, fioEnvUV(world), rough * uParams.z).rgb * uParams2.z,
+                    uParams2.x > 0.5 ? 1.0 : smoothstep(-0.05, 0.45, world.y));
+    // data.z: how much of the sky's light reaches the surface at all.
+    if (uParams2.x < 0.5) seen = mix(uIndoor, seen, data.z);
+    if (max(brdf.r, max(brdf.g, brdf.b)) > 0.006) {
+        vec4 hit = fioTrace(p + n * max(0.25, -p.z * 0.002), r, rough);
+        seen = mix(seen, min(hit.rgb, vec3(6.0)),
+                   hit.a * (1.0 - smoothstep(0.22, 0.5, rough)));
+    }
+    lin += seen * brdf * mix(1.0, ao, 0.7);
     FragColor = vec4(fioEncode(lin), colour.a);
 }
 """
@@ -253,12 +272,12 @@ vec3 fioTap(vec2 uv) {
 void main() {
     vec2 t = uTexel;
     if (uParams.x > 0.5) {
-        // The first step, from the full frame to a quarter of its size: four
-        // bilinear taps take in every one of the sixteen texels under the
-        // pixel (and decode and threshold four times, not thirteen).
-        vec3 first = fioTap(vUV + t * vec2(-1.0, -1.0)) + fioTap(vUV + t * vec2(1.0, -1.0))
-                   + fioTap(vUV + t * vec2(-1.0, 1.0)) + fioTap(vUV + t * vec2(1.0, 1.0));
-        FragColor = vec4(max(first * 0.25, vec3(0.0)), 1.0);
+        // The first level reads the whole frame and decodes every tap: five
+        // taps (each the mean of four texels) instead of thirteen. The
+        // levels below, a fraction of the size, keep the wide filter.
+        vec3 sum = fioTap(vUV) * 4.0 + fioTap(vUV + t) + fioTap(vUV - t)
+                 + fioTap(vUV + vec2(t.x, -t.y)) + fioTap(vUV + vec2(-t.x, t.y));
+        FragColor = vec4(max(sum * 0.125, vec3(0.0)), 1.0);
         return;
     }
     vec3 a = fioTap(vUV + t * vec2(-2.0, 2.0));
@@ -331,8 +350,8 @@ void main() {
 }
 """
 
-#: Anti-aliasing, bloom, shafts, exposure, tone mapping, grade, vignette and
-#: grain, in one pass, straight into the framebuffer the view asked for.
+#: Bloom, shafts, exposure, tone mapping, grade, vignette and grain;
+#: display-encoded, with luma in alpha for the anti-aliasing pass.
 COMPOSE_FRAG = """#version 330 core
 precision highp float;
 layout(location = 0) out vec4 FragColor;
@@ -345,8 +364,6 @@ uniform vec4 uParams;      // exposure, bloom, saturation, contrast
 uniform vec4 uParams2;     // vignette, grain, shafts on, time
 uniform vec3 uTint;
 uniform vec3 uSunColor;
-uniform vec4 uTexel;       // one pixel in uv (x, y), luma scale (the encoded exposure), anti-aliasing on
-uniform highp sampler2D uDepth;    // the frame's depth, handed on to the view's framebuffer
 """ + surface.ENV_GLSL + """
 // Extended Reinhard: straight through the shadows and mid-tones, rolling
 // off toward white (hd_graphics.tone; hdr.py inverts it for the classic
@@ -354,43 +371,15 @@ uniform highp sampler2D uDepth;    // the frame's depth, handed on to the view's
 vec3 fioTone(vec3 x) {
     return clamp(x * (1.0 + x / 16.0000) / (1.0 + x), 0.0, 1.0);
 }
-// FXAA (Lottes), the compact form, on the frame as it is stored: blur along
-// the edge the local luma gradient finds. Done here, in the pass that
-// tone-maps, so that anti-aliasing costs a few taps and not a pass and a
-// target of its own. Luma is of the exposed colour held to the display's
-// range, so the edges it sees are the ones that will show.
-float fioLuma(vec3 c) { return dot(min(c * uTexel.z, vec3(1.0)), vec3(0.299, 0.587, 0.114)); }
-vec3 fioAntiAliased() {
-    vec3 centre = textureLod(uColor, vUV, 0.0).rgb;
-    if (uTexel.w < 0.5) return centre;
-    float lumaNW = fioLuma(textureLod(uColor, vUV + vec2(-1.0, -1.0) * uTexel.xy, 0.0).rgb);
-    float lumaNE = fioLuma(textureLod(uColor, vUV + vec2(1.0, -1.0) * uTexel.xy, 0.0).rgb);
-    float lumaSW = fioLuma(textureLod(uColor, vUV + vec2(-1.0, 1.0) * uTexel.xy, 0.0).rgb);
-    float lumaSE = fioLuma(textureLod(uColor, vUV + vec2(1.0, 1.0) * uTexel.xy, 0.0).rgb);
-    float lumaM = fioLuma(centre);
-    float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
-    float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
-    if (lumaMax - lumaMin < max(0.0312, lumaMax * 0.125)) return centre;
-    vec2 dir = vec2(-((lumaNW + lumaNE) - (lumaSW + lumaSE)),
-                    (lumaNW + lumaSW) - (lumaNE + lumaSE));
-    float reduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * 0.03125, 0.0078125);
-    dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + reduce), vec2(-8.0), vec2(8.0)) * uTexel.xy;
-    vec3 a = 0.5 * (textureLod(uColor, vUV + dir * (1.0 / 3.0 - 0.5), 0.0).rgb
-                  + textureLod(uColor, vUV + dir * (2.0 / 3.0 - 0.5), 0.0).rgb);
-    vec3 b = a * 0.5 + 0.25 * (textureLod(uColor, vUV - dir * 0.5, 0.0).rgb
-                             + textureLod(uColor, vUV + dir * 0.5, 0.0).rgb);
-    float lumaB = fioLuma(b);
-    return (lumaB < lumaMin || lumaB > lumaMax) ? a : b;
-}
 void main() {
-    vec3 colour = fioToLinear(fioAntiAliased());
+    vec3 colour = fioToLinear(textureLod(uColor, vUV, 0.0).rgb);
     colour += textureLod(uBloom, vUV, 0.0).rgb * uParams.y;
     if (uParams2.z > 0.5) colour += uSunColor * textureLod(uShafts, vUV, 0.0).r;
     colour *= uTint * uParams.x;
     colour = fioTone(colour);
     // Grade on the display-referred image: contrast about mid grey, then
     // saturation about luma.
-    colour = sqrt(colour);
+    colour = pow(colour, vec3(1.0 / 2.2));
     colour = clamp((colour - 0.5) * uParams.w + 0.5, 0.0, 1.0);
     float luma = dot(colour, vec3(0.299, 0.587, 0.114));
     colour = clamp(mix(vec3(luma), colour, uParams.z), 0.0, 1.0);
@@ -399,12 +388,46 @@ void main() {
     float grain = textureLod(uNoise, gl_FragCoord.xy / 256.0 + vec2(uParams2.w * 7.31, uParams2.w * 3.17), 0.0).r - 0.5;
     colour += grain * uParams2.y * (1.0 - luma * 0.6);
     colour = clamp(colour, 0.0, 1.0);
-    FragColor = vec4(colour, 1.0);
-    // What the view draws next (its own overlays) is depth-tested against
-    // the world: this pass writes the frame's depth along with its colour.
-    gl_FragDepth = textureLod(uDepth, vUV, 0.0).r;
+    FragColor = vec4(colour, dot(colour, vec3(0.299, 0.587, 0.114)));
 }
 """
+
+#: FXAA (Lottes), the compact form: blur along the edge the local luma
+#: gradient finds.
+FXAA_FRAG = """#version 330 core
+precision highp float;
+layout(location = 0) out vec4 FragColor;
+in vec2 vUV;
+uniform sampler2D uSource;
+uniform vec2 uTexel;
+uniform int uEnabled;
+void main() {
+    vec4 centre = textureLod(uSource, vUV, 0.0);
+    if (uEnabled == 0) { FragColor = vec4(centre.rgb, 1.0); return; }
+    float lumaNW = textureLod(uSource, vUV + vec2(-1.0, -1.0) * uTexel, 0.0).a;
+    float lumaNE = textureLod(uSource, vUV + vec2(1.0, -1.0) * uTexel, 0.0).a;
+    float lumaSW = textureLod(uSource, vUV + vec2(-1.0, 1.0) * uTexel, 0.0).a;
+    float lumaSE = textureLod(uSource, vUV + vec2(1.0, 1.0) * uTexel, 0.0).a;
+    float lumaM = centre.a;
+    float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+    float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+    if (lumaMax - lumaMin < max(0.0312, lumaMax * 0.125)) {
+        FragColor = vec4(centre.rgb, 1.0);
+        return;
+    }
+    vec2 dir = vec2(-((lumaNW + lumaNE) - (lumaSW + lumaSE)),
+                    (lumaNW + lumaSW) - (lumaNE + lumaSE));
+    float reduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * 0.03125, 0.0078125);
+    float scale = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+    dir = clamp(dir * scale, vec2(-8.0), vec2(8.0)) * uTexel;
+    vec4 a = 0.5 * (textureLod(uSource, vUV + dir * (1.0 / 3.0 - 0.5), 0.0)
+                  + textureLod(uSource, vUV + dir * (2.0 / 3.0 - 0.5), 0.0));
+    vec4 b = a * 0.5 + 0.25 * (textureLod(uSource, vUV - dir * 0.5, 0.0)
+                             + textureLod(uSource, vUV + dir * 0.5, 0.0));
+    FragColor = vec4((b.a < lumaMin || b.a > lumaMax) ? a.rgb : b.rgb, 1.0);
+}
+"""
+
 
 def query_result(query):
     """A query's 64-bit result (waits for it). PyOpenGL's own wrapper has no
@@ -502,9 +525,6 @@ class PostFXMixin:
         self._postfx_textures = {}
         self._postfx_fbos = {}
         self._postfx_bloom = []          # [(texture, fbo, width, height)]
-        #: The scene's colour now: the 'colour' target, or 'resolved' once
-        #: occlusion and reflections have gone onto it.
-        self._postfx_colour = 0
         self._postfx_target = None       # (fbo, viewport, scissor on)
         self._postfx_resolved = False
 
@@ -532,21 +552,28 @@ class PostFXMixin:
     def _postfx_allocate(self, width, height):
         self._postfx_release_targets()
         tex, fbo = self._postfx_textures, self._postfx_fbos
-        tex['colour'] = _texture(gl.GL_RGBA16F, width, height, gl.GL_RGBA, gl.GL_FLOAT)
-        # Normal (two numbers), sky visibility, roughness: 8 bits each is
-        # enough for what reads them, at half a float target's memory.
-        tex['data'] = _texture(gl.GL_RGBA8, width, height, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE,
+        tex['colour'] = _texture(gl.GL_RGBA16F, width, height, gl.GL_RGBA, gl.GL_FLOAT,
+                                 mipmaps=True)
+        tex['data'] = _texture(gl.GL_RGBA16F, width, height, gl.GL_RGBA, gl.GL_FLOAT,
                                linear=False)
         tex['depth'] = _texture(gl.GL_DEPTH24_STENCIL8, width, height,
                                 gl.GL_DEPTH_STENCIL, gl.GL_UNSIGNED_INT_24_8, linear=False)
         fbo['scene'] = _framebuffer(tex['colour'], tex['data'], depth_stencil=tex['depth'])
-        tex['resolved'] = _texture(gl.GL_RGBA16F, width, height, gl.GL_RGBA, gl.GL_FLOAT)
+        # The resolve pass draws into this one, and the two then change
+        # places (no copy back): the same kind of texture as the colour.
+        tex['resolved'] = _texture(gl.GL_RGBA16F, width, height, gl.GL_RGBA, gl.GL_FLOAT,
+                                   mipmaps=True)
         fbo['resolved'] = _framebuffer(tex['resolved'])
         half_w, half_h = max(1, width // 2), max(1, height // 2)
-        for name in ('ao', 'shafts'):
+        # Occlusion with each texel's distance beside it, for the blur.
+        tex['ao'] = _texture(gl.GL_RG16F, half_w, half_h, gl.GL_RG, gl.GL_FLOAT, linear=False)
+        fbo['ao'] = _framebuffer(tex['ao'])
+        for name in ('ao_blur', 'shafts'):
             tex[name] = _texture(gl.GL_R8, half_w, half_h, gl.GL_RED, gl.GL_UNSIGNED_BYTE)
             fbo[name] = _framebuffer(tex[name])
-        w, h = max(2, width // 2), max(2, height // 2)
+        tex['ldr'] = _texture(gl.GL_RGBA8, width, height, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE)
+        fbo['ldr'] = _framebuffer(tex['ldr'])
+        w, h = width, height
         for _level in range(BLOOM_LEVELS):
             w, h = max(1, w // 2), max(1, h // 2)
             texture = _texture(gl.GL_R11F_G11F_B10F, w, h, gl.GL_RGB, gl.GL_FLOAT)
@@ -554,7 +581,6 @@ class PostFXMixin:
             if w == 1 and h == 1:
                 break
         self._postfx_size = (width, height)
-        self._postfx_colour = tex['colour']
 
     # ------------------------------------------------------------------
     # The frame
@@ -572,11 +598,6 @@ class PostFXMixin:
             self._postfx_allocate(width, height)
         self._postfx_target = (target, viewport, scissor)
         self._postfx_resolved = False
-        if self._postfx_colour != self._postfx_textures['colour']:
-            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._postfx_fbos['scene'])
-            gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
-                                      gl.GL_TEXTURE_2D, self._postfx_textures['colour'], 0)
-            self._postfx_colour = self._postfx_textures['colour']
         if self._hd_marks is not None:
             self._hd_marks = {}
             self._hd_mark('begin')
@@ -607,6 +628,19 @@ class PostFXMixin:
                               glm.value_ptr(projection))
         gl.glUniformMatrix4fv(program['uInvProjection'], 1, gl.GL_FALSE,
                               glm.value_ptr(inverse))
+        # A plain perspective (no shear between x, y and w, which a portal's
+        # oblique plane or an orthographic view would have): its terms.
+        p = projection
+        plain = (abs(p[2][3] + 1.0) < 1e-6 and abs(p[3][3]) < 1e-9
+                 and abs(p[0][0]) > 1e-9 and abs(p[1][1]) > 1e-9
+                 and max(abs(p[0][1]), abs(p[1][0]), abs(p[3][0]), abs(p[3][1]),
+                         abs(p[0][2]), abs(p[1][2]), abs(p[0][3]), abs(p[1][3])) < 1e-9)
+        if plain:
+            gl.glUniform4f(program['uUnprojectA'], 2.0 / p[0][0], 2.0 / p[1][1],
+                           (p[2][0] - 1.0) / p[0][0], (p[2][1] - 1.0) / p[1][1])
+            gl.glUniform3f(program['uUnprojectB'], p[2][2], p[3][2], 1.0)
+        else:
+            gl.glUniform3f(program['uUnprojectB'], 0.0, 0.0, 0.0)
 
     def _postfx_resolve(self, projection, view):
         """Ambient occlusion and reflections onto the opaque frame, before
@@ -644,7 +678,17 @@ class PostFXMixin:
             gl.glUniform2f(program['uPixel'], 1.0 / width, 1.0 / height)
             gl.glUniform1i(program['uTaps'], int(env.ao_taps))
             self._env_fullscreen()
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['ao_blur'])
+            program = self._postfx_program('ao_blur', AO_BLUR_FRAG)
+            gl.glUseProgram(program.id)
+            self._postfx_bind(program, 'uAO', 1, tex['ao'])
+            self._env_fullscreen()
         self._hd_mark('ambient occlusion')
+        if reflect:
+            # Blurrier levels of the frame, for rough reflections.
+            gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tex['colour'])
+            gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['resolved'])
         gl.glViewport(0, 0, width, height)
         program = self._postfx_program('resolve', RESOLVE_FRAG)
@@ -657,8 +701,7 @@ class PostFXMixin:
         self._postfx_bind(program, 'uDepth', 0, tex['depth'])
         self._postfx_bind(program, 'uColor', 1, tex['colour'])
         self._postfx_bind(program, 'uData', 2, tex['data'])
-        self._postfx_bind(program, 'uAO', 3, tex['ao'])
-        gl.glUniform2f(program['uAOTexel'], 1.0 / half_w, 1.0 / half_h)
+        self._postfx_bind(program, 'uAO', 3, tex['ao_blur'])
         self._postfx_bind(program, 'uEnvMap', surface.ENV_MAP_UNIT,
                           self._env_reflection_texture())
         levels = math.floor(math.log2(max(width, height)))
@@ -670,20 +713,17 @@ class PostFXMixin:
                        float(max(8, min(48, int(env.ssr_steps)))),
                        self._env_reflection_gain(), 0.0)
         gl.glUniform3f(program['uIndoor'], *self._env_indoor_colour)
-        # Under the horizon of a sky there are walls: a dimmer version of
-        # its side light. Indoors the environment map is that colour already.
-        side = self._env_ambient[1]
-        if env.sky_mode == 'none':
-            side = tuple(c / 0.45 for c in self._env_ground)
-        gl.glUniform3f(program['uFallback'], side[0] * 0.45, side[1] * 0.45, side[2] * 0.45)
+        gl.glUniform3f(program['uFallback'], *self._env_reflect_fallback())
         self._env_fullscreen()
-        # The result becomes the scene target's colour for what is blended
-        # over it (no copy back: the attachment is swapped, and put back
-        # when the next frame begins).
-        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['scene'])
+        # The result becomes the scene target's colour (whose depth the
+        # blended passes test) and the old colour the next frame's result:
+        # the two textures change places, and nothing is copied.
+        tex['colour'], tex['resolved'] = tex['resolved'], tex['colour']
         gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
                                   gl.GL_TEXTURE_2D, tex['resolved'], 0)
-        self._postfx_colour = tex['resolved']
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['scene'])
+        gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
+                                  gl.GL_TEXTURE_2D, tex['colour'], 0)
         self._postfx_restore_units()
         gl.glUseProgram(0)
         self._current_shader = None
@@ -749,66 +789,10 @@ class PostFXMixin:
         width, height = self._postfx_size
         target, viewport, scissor = self._postfx_target
         self._postfx_pass_state()
-        # Bloom: down the chain, then back up, each level added to the next
-        # (not at all for a map that asks for none).
-        colour = self._postfx_colour
-        if env.bloom > 0.0:
-            self._postfx_bloom_chain(exposure)
-        self._hd_mark('bloom')
-        # The sun's shafts.
-        sun = self._postfx_sun_on_screen(projection, view) if env.sun_shafts > 0.0 else None
-        shafts = sun is not None and sun[1] > 0.0
-        if shafts:
-            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['shafts'])
-            gl.glViewport(0, 0, max(1, width // 2), max(1, height // 2))
-            program = self._postfx_program('shafts', SHAFTS_FRAG)
-            gl.glUseProgram(program.id)
-            self._postfx_bind(program, 'uDepth', 0, tex['depth'])
-            gl.glUniform4f(program['uSun'], sun[0][0], sun[0][1],
-                           env.sun_shafts * sun[1], width / float(height))
-            self._env_fullscreen()
-        self._hd_mark('sun shafts')
-        # Anti-alias, tone map and grade, into the framebuffer the view asked for.
-        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
-        gl.glViewport(*viewport)
-        program = self._postfx_program('compose', COMPOSE_FRAG)
-        gl.glUseProgram(program.id)
-        self._postfx_bind(program, 'uColor', 0, colour)
-        self._postfx_bind(program, 'uBloom', 1, self._postfx_bloom[0][0])
-        self._postfx_bind(program, 'uShafts', 2, tex['shafts'])
-        self._postfx_bind(program, 'uNoise', surface.NOISE_UNIT, self._env_noise())
-        gl.glUniform4f(program['uParams'], exposure, env.bloom, env.saturation, env.contrast)
-        gl.glUniform4f(program['uParams2'], env.vignette, env.grain, 1.0 if shafts else 0.0,
-                       self._env_time % 64.0)
-        gl.glUniform3f(program['uTint'], *env.tint)
-        gl.glUniform3f(program['uSunColor'], *self._env_sun_rgb)
-        gl.glUniform4f(program['uTexel'], 1.0 / width, 1.0 / height,
-                       math.sqrt(max(exposure, 1e-6)), 1.0 if env.fxaa else 0.0)
-        self._postfx_bind(program, 'uDepth', 3, tex['depth'])
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_ALWAYS)
-        gl.glDepthMask(gl.GL_TRUE)
-        self._env_fullscreen()
-        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
-        self._postfx_restore_units()
-        gl.glUseProgram(0)
-        self._current_shader = None
-        if scissor:
-            gl.glEnable(gl.GL_SCISSOR_TEST)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LESS)
-        if self._hd_marks is not None:
-            self._hd_mark('compose')
-            self._hd_mark_frames.append(self._hd_marks)
-            self._hd_marks = {}
-
-    def _postfx_bloom_chain(self, exposure):
-        env = self.environment
-        width, height = self._postfx_size
+        # Bloom: down the chain, then back up, each level added to the next.
         down = self._postfx_program('bloom_down', BLOOM_DOWN_FRAG)
         gl.glUseProgram(down.id)
-        source, source_w, source_h = self._postfx_colour, width, height
+        source, source_w, source_h = tex['colour'], width, height
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindTexture(gl.GL_TEXTURE_2D, source)
         gl.glUniform1i(down['uSource'], 0)
@@ -838,6 +822,69 @@ class PostFXMixin:
             self._env_fullscreen()
         gl.glDisable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        self._hd_mark('bloom')
+        # The sun's shafts.
+        sun = self._postfx_sun_on_screen(projection, view) if env.sun_shafts > 0.0 else None
+        shafts = sun is not None and sun[1] > 0.0
+        if shafts:
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['shafts'])
+            gl.glViewport(0, 0, max(1, width // 2), max(1, height // 2))
+            program = self._postfx_program('shafts', SHAFTS_FRAG)
+            gl.glUseProgram(program.id)
+            self._postfx_bind(program, 'uDepth', 0, tex['depth'])
+            gl.glUniform4f(program['uSun'], sun[0][0], sun[0][1],
+                           env.sun_shafts * sun[1], width / float(height))
+            self._env_fullscreen()
+        self._hd_mark('sun shafts')
+        # Tone map and grade.
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['ldr'])
+        gl.glViewport(0, 0, width, height)
+        program = self._postfx_program('compose', COMPOSE_FRAG)
+        gl.glUseProgram(program.id)
+        self._postfx_bind(program, 'uColor', 0, tex['colour'])
+        self._postfx_bind(program, 'uBloom', 1, self._postfx_bloom[0][0])
+        self._postfx_bind(program, 'uShafts', 2, tex['shafts'])
+        self._postfx_bind(program, 'uNoise', surface.NOISE_UNIT, self._env_noise())
+        gl.glUniform4f(program['uParams'], exposure, env.bloom, env.saturation, env.contrast)
+        gl.glUniform4f(program['uParams2'], env.vignette, env.grain, 1.0 if shafts else 0.0,
+                       self._env_time % 64.0)
+        gl.glUniform3f(program['uTint'], *env.tint)
+        gl.glUniform3f(program['uSunColor'], *self._env_sun_rgb)
+        self._env_fullscreen()
+        # Anti-alias into the framebuffer the view asked for.
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
+        gl.glViewport(*viewport)
+        program = self._postfx_program('fxaa', FXAA_FRAG)
+        gl.glUseProgram(program.id)
+        self._postfx_bind(program, 'uSource', 0, tex['ldr'])
+        gl.glUniform2f(program['uTexel'], 1.0 / width, 1.0 / height)
+        gl.glUniform1i(program['uEnabled'], 1 if env.fxaa else 0)
+        self._env_fullscreen()
+        # What the view draws next (its own overlays) is depth-tested
+        # against the world: give its framebuffer the frame's depth.
+        try:
+            gl.glBindFramebuffer(gl.GL_READ_FRAMEBUFFER, fbo['scene'])
+            gl.glBindFramebuffer(gl.GL_DRAW_FRAMEBUFFER, target)
+            gl.glBlitFramebuffer(0, 0, width, height, viewport[0], viewport[1],
+                                 viewport[0] + width, viewport[1] + height,
+                                 gl.GL_DEPTH_BUFFER_BIT, gl.GL_NEAREST)
+        except Exception:
+            pass
+        while gl.glGetError() != gl.GL_NO_ERROR:
+            pass
+        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
+        self._postfx_restore_units()
+        gl.glUseProgram(0)
+        self._current_shader = None
+        if scissor:
+            gl.glEnable(gl.GL_SCISSOR_TEST)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthFunc(gl.GL_LESS)
+        if self._hd_marks is not None:
+            self._hd_mark('compose')
+            self._hd_mark_frames.append(self._hd_marks)
+            self._hd_marks = {}
 
     def _cleanup_postfx(self):
         self._postfx_release_targets()

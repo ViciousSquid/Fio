@@ -17,8 +17,8 @@ and the shaders the driver holds; this is the rest of the lock:
 * none of those files mentions HD_High, and building and drawing with
   Classic never imports it, never looks for a material companion map and
   never calls the material generator;
-* Classic is the default renderer, in the registry and in the shipped
-  settings, and the only one a low-power machine is given;
+* Classic is the registry's default renderer, what a missing setting means,
+  and the only one a low-power machine is given;
 * what the OBJ loader now reads for HD_High (``Ke`` / ``Pr`` / ``Pm``)
   reaches nothing Classic draws a model with.
 """
@@ -76,9 +76,12 @@ def test_classic_is_the_default_renderer():
     assert hd_graphics.DEFAULT_RENDERER == "Classic"
     assert hd_graphics.renderer_from(None) == "Classic"
     assert hd_graphics.renderer_from(configparser.ConfigParser()) == "Classic"
+    # Which of the two the shipped settings.ini starts with is the project's
+    # choice; it names one of them, and Classic is what any missing or
+    # unreadable setting means.
     shipped = configparser.ConfigParser()
     shipped.read(repo_path("settings.ini"))
-    assert hd_graphics.renderer_from(shipped) == "Classic"
+    assert hd_graphics.renderer_from(shipped) in hd_graphics.RENDERERS
     # A low-power machine is given Classic whatever is asked.
     asked = configparser.ConfigParser()
     asked.add_section("Renderer")

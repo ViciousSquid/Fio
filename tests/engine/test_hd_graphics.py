@@ -102,7 +102,7 @@ def test_fields_default_to_levitates_and_bad_values_are_refused():
                            "hd_sun_color": "#ffffff"}, "")
     assert bad["sun_elevation"] == 42.0 and bad["bloom"] == 0.10
     assert bad["contrast"] == hd.FIELD_BY_KEY["hd_contrast"].high
-    assert bad["tint"] == pytest.approx((1.0, (128 / 255) ** hd.GAMMA, 0.0))
+    assert bad["tint"] == pytest.approx((1.0, (128 / 255) ** 2.2, 0.0))
     assert bad["sun_color"] == pytest.approx((1.0, 1.0, 1.0))
 
 
@@ -185,7 +185,7 @@ def test_a_panoramas_sky_light_is_measured_from_its_pixels():
     assert side == pytest.approx((0.5, 0.5, 0.5), abs=0.06)
     assert mean == pytest.approx((0.5, 0.5, 0.5), abs=0.03)
     grey = np.full((height, width, 3), 128, dtype=np.uint8)
-    assert hd.panorama_irradiance(grey)[0] == pytest.approx(((128 / 255) ** hd.GAMMA,) * 3, abs=1e-3)
+    assert hd.panorama_irradiance(grey)[0] == pytest.approx(((128 / 255) ** 2.2,) * 3, abs=1e-3)
 
 
 def test_the_procedural_sky_is_measured_on_the_cpu():
@@ -211,7 +211,7 @@ def test_classic_colours_survive_the_tone_curve():
     for exposure in (0.3, 1.0, 2.5):
         for colour in ((0.2, 0.5, 0.8), (0.05, 0.05, 0.05), (0.9, 0.3, 0.1)):
             scene = hdr.display_to_scene(colour, exposure)
-            shown = [hd.tone(c * exposure) ** (1 / hd.GAMMA) for c in scene]
+            shown = [hd.tone(c * exposure) ** (1 / 2.2) for c in scene]
             assert shown == pytest.approx(colour, abs=2e-3)
 
 

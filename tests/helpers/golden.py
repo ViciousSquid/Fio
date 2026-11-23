@@ -105,6 +105,9 @@ def capture_frames(app, names=None, size=SIZE, renderer=None, sky=None):
             random.seed(1234)
             np.random.seed(1234)
             settings = None
+            # Always named: the shipped settings.ini may ask for either
+            # renderer, and the stored set is Classic's.
+            renderer = renderer or "Classic"
             if renderer:
                 # The editor reads its settings when the window is built.
                 import configparser

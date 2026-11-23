@@ -32,7 +32,8 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 from engine import hd_graphics
 from engine.constants import RENDER_MODE_LIT
 from engine.renderer.core.uniform_rows import uniform_rows
-from engine.renderer.hd_high import hdr, surface
+from engine.renderer.hd_high import hdr, skylight, surface
+from engine.renderer.hd_high.lighting import point_shadow_source
 
 ENV_MAP_SIZE = (512, 256)
 #: Frames between redraws of a procedural sky's environment map while its
@@ -381,15 +382,14 @@ class EnvironmentMixin:
         self._env_shadow_static_tex = 0
         self._env_shadow_static_sig = None
         self._env_shadow_dynamic_sig = None
-        # The sky cover map: the static casters seen from straight above.
-        self._env_cover_tex = 0
-        self._env_cover_fbo = 0
-        self._env_cover_size = 0
-        self._env_cover_sig = None
-        self._env_cover_ready = False
-        self._env_cover_matrices = []
-        self._env_cover_span = 1.0
-        self._env_cover_depths = []
+        # The sky light volume (skylight.py): the texture, the grid it was
+        # built for, what it was built from, and when.
+        self._env_skylight_tex = 0
+        self._env_skylight_grid = None
+        self._env_skylight_sig = None
+        self._env_skylight_ready = False
+        self._env_skylight_built = 0.0
+        self._env_skylight_blank = 0
         #: What a reflection finds where no sky can be seen (linear).
         self._env_indoor_colour = (0.0, 0.0, 0.0)
         # Exposure follows where the view is: under the sky or under a roof.
@@ -481,6 +481,10 @@ class EnvironmentMixin:
         For the programs that are compiled without the shader loader."""
         if not self.hd or not self.surface_shading:
             return source
+        # Every point shadow map through one sampler (lighting.py): with a
+        # cube sampler per slot the lit programs need more than the 16 a
+        # fragment shader is guaranteed.
+        source = point_shadow_source(source)
         if 'FioLightBlock' not in source:
             # Not yet through engine.shaders.light_ubo_source, which must
             # come after: it rewrites the light loops these paths add.
@@ -584,9 +588,7 @@ class EnvironmentMixin:
                 value = 0.0
             while gl.glGetError() != gl.GL_NO_ERROR:
                 pass
-            # 4x: most of the gain at a grazing angle for a fraction of
-            # 16x's samples, on three textures a surface.
-            self._env_anisotropy = max(0.0, min(4.0, value))
+            self._env_anisotropy = max(0.0, min(16.0, value))
         return self._env_anisotropy
 
     def _env_noise(self):
@@ -672,7 +674,7 @@ class EnvironmentMixin:
         clear = [float(v) for v in gl.glGetFloatv(gl.GL_COLOR_CLEAR_VALUE)]
         self._env_clear_colour = clear
         scene = hdr.display_to_scene(clear[:3], self._env_base_exposure)
-        gl.glClearColor(*[max(c, 0.0) ** (1.0 / hd_graphics.GAMMA) for c in scene], clear[3])
+        gl.glClearColor(*[max(c, 0.0) ** (1.0 / 2.2) for c in scene], clear[3])
         return True
 
     def _env_end_portal(self):
@@ -707,7 +709,7 @@ class EnvironmentMixin:
         key = (len(slots), float(np.round(params[:, 1].sum(), 1)))
         if key != self._env_lamps_key:
             self._env_lamps_key = key
-            colours = np.power(np.clip(table.light_color[slots], 0.0, None), hd_graphics.GAMMA)
+            colours = np.power(np.clip(table.light_color[slots], 0.0, None), 2.2)
             self._env_lamp_light = hd_graphics.lamp_light(
                 (float(p[0]), float(p[1]), c) for p, c in zip(params, colours))
         return self._env_lamp_light
@@ -843,6 +845,15 @@ class EnvironmentMixin:
         blocked = ((leave >= np.maximum(enter, 0.0)) & (leave > 0.0)).any(axis=1)
         return float(1.0 - blocked.mean())
 
+    def _env_reflect_fallback(self):
+        """What a reflection finds under the horizon of a sky, where walls
+        would be: a dimmer version of the sky's side light. Indoors the
+        environment map is that colour already."""
+        side = self._env_ambient[1]
+        if self.environment.sky_mode == hd_graphics.SKY_NONE:
+            return tuple(self._env_ground)
+        return (side[0] * 0.45, side[1] * 0.45, side[2] * 0.45)
+
     def _env_reflection_gain(self):
         """What the reflection fallback's texels are multiplied by. A probe
         is a display picture of classic Fio's: a mid-grey of it reflects as
@@ -866,14 +877,14 @@ class EnvironmentMixin:
             self.environment.shadow_strength = 0.0
             self._env_shadow_ready = False
         try:
-            self._env_sky_cover(config, camera_pos)
+            self._env_sky_light(config, camera_pos)
         except Exception as exc:
-            print(f"[Environment] sky cover off: {exc}")
-            self._env_cover_ready = False
+            print(f"[Environment] sky light off: {exc}")
+            self._env_skylight_ready = False
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.SUN_SHADOW_UNIT)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_shadow_tex)
-        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.SKY_COVER_UNIT)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._env_cover_tex)
+        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.SKY_LIGHT_UNIT)
+        gl.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_tex_or_blank())
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.ENV_MAP_UNIT)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_reflection_texture())
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.NOISE_UNIT)
@@ -1362,25 +1373,34 @@ class EnvironmentMixin:
         # Whole units, so a caster's float jitter does not redraw a map.
         return table, static, moving, np.floor(low), np.ceil(high)
 
-    #: The sky cover map: one layer per sky direction (surface.SKY_DIRECTIONS),
-    #: each this many texels square. Its filter reaches SKY_COVER_REACH world
-    #: units around a point, which is first moved SKY_COVER_OFFSET off its
-    #: surface: both under a thin wall's thickness, so the filter never
-    #: reaches across a wall and daylight does not leak into the room behind.
-    SKY_COVER_SIZE = 1024
-    SKY_COVER_REACH = 12.0
-    SKY_COVER_OFFSET = 14.0
+    def _env_skylight_tex_or_blank(self):
+        """The sky light volume, or a one-cell open one while there is none
+        (a sampler must have a complete texture of its own kind)."""
+        if self._env_skylight_tex:
+            return self._env_skylight_tex
+        if not self._env_skylight_blank:
+            self._env_skylight_blank = int(gl.glGenTextures(1))
+            gl.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_blank)
+            for name in (gl.GL_TEXTURE_MIN_FILTER, gl.GL_TEXTURE_MAG_FILTER):
+                gl.glTexParameteri(gl.GL_TEXTURE_3D, name, gl.GL_NEAREST)
+            gl.glTexImage3D(gl.GL_TEXTURE_3D, 0, gl.GL_RG16, 1, 1, 1, 0, gl.GL_RG,
+                            gl.GL_UNSIGNED_SHORT, np.full((1, 1, 1, 2), 65535, dtype=np.uint16))
+            gl.glBindTexture(gl.GL_TEXTURE_3D, 0)
+        return self._env_skylight_blank
 
-    def _env_sky_cover(self, config, camera_pos):
-        """Keep the sky cover map: the map's standing shadow casters seen
-        from each direction the sky is asked in -- straight above, and four
-        slanted directions -- as depth. The surface programs read from it
-        how much of the sky each point can see (surface.fioSkyVisible), so
-        sky light reaches a courtyard, comes in at a window along the
-        slanted directions, and stops at a roof or a wall. Redrawn only
-        when one of those casters changes; a map with no sky has none."""
+    #: While the map is being edited the volume is rebuilt at most this
+    #: often (seconds): a brush being dragged changes the casters every
+    #: frame, and a rebuild is tens of milliseconds of NumPy.
+    SKY_LIGHT_INTERVAL = 0.25
+
+    def _env_sky_light(self, config, camera_pos):
+        """Keep the sky light volume (skylight.py): how much daylight
+        reaches each part of the map -- all of it under the open sky, what
+        spreads in through the openings indoors. The surface programs read
+        it (surface.fioSkyVisible). Rebuilt only when one of the map's
+        standing shadow casters changes; a map with no sky has none."""
         env = self.environment
-        self._env_cover_ready = False
+        self._env_skylight_ready = False
         if env.sky_mode == hd_graphics.SKY_NONE:
             return
         found = self._env_casters(config)
@@ -1389,113 +1409,52 @@ class EnvironmentMixin:
         table, static, _moving, low, high = found
         if not len(static):
             return
-        reach = float(env.shadow_range)
-        follow = (max(high[0] - low[0], high[2] - low[2]) > 2.0 * reach
-                  and camera_pos is not None)
-        if follow:
-            step = 2.0 * reach * self.SHADOW_FOLLOW_STEP
-            cx, _cy, cz = self._camera_xyz(camera_pos)
-            cx = math.floor(cx / step + 0.5) * step
-            cz = math.floor(cz / step + 0.5) * step
-            low, high = low.copy(), high.copy()
-            low[0], high[0] = cx - reach - step, cx + reach + step
-            low[2], high[2] = cz - reach - step, cz + reach + step
-            middle = (low + high) * 0.5
-            where = (float(middle[0]), float(middle[1]), float(middle[2]),
-                     float(np.linalg.norm((high - low)[[0, 2]])) * 0.5 + 1024.0)
+        camera = self._camera_xyz(camera_pos) if camera_pos is not None else None
+        grid = skylight.grid_for(low, high, camera)
+        if grid.follows:
+            extent = grid.extent
+            where = (grid.origin[0] + extent[0] * 0.5, grid.origin[1] + extent[1] * 0.5,
+                     grid.origin[2] + extent[2] * 0.5,
+                     math.sqrt(extent[0] ** 2 + extent[1] ** 2 + extent[2] ** 2) * 0.5 + 1024.0)
         else:
             where = (0.0, 0.0, 0.0, 1.0e9)
-        slots, keys = self._kept_casters_in_reach('sky cover', table, static, *where)
+        slots, keys = self._kept_casters_in_reach('sky light', table, static, *where)
         if not len(slots):
             return
-        # One orthographic view of the casters' box from each sky direction.
-        corners = np.array([[x, y, z, 1.0] for x in (low[0], high[0])
-                            for y in (low[1] - 32.0, high[1] + 32.0)
-                            for z in (low[2], high[2])])
-        middle = glm.vec3(*((low + high) * 0.5))
-        matrices, spans, depths = [], [], []
-        for direction in surface.SKY_DIRECTIONS:
-            towards = glm.vec3(*direction)
-            up = glm.vec3(0.0, 0.0, -1.0) if abs(towards.y) > 0.99 else glm.vec3(0.0, 1.0, 0.0)
-            look = glm.lookAt(middle + towards * 1000.0, middle, up)
-            in_view = corners @ np.array(look.to_list(), dtype=np.float64)
-            lo, hi = in_view[:, :3].min(axis=0), in_view[:, :3].max(axis=0)
-            span = max(hi[0] - lo[0], hi[1] - lo[1]) + 64.0
-            mid_x, mid_y = (lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5
-            projection = glm.ortho(mid_x - span * 0.5, mid_x + span * 0.5,
-                                   mid_y - span * 0.5, mid_y + span * 0.5,
-                                   -hi[2] - 16.0, -lo[2] + 16.0)
-            matrices.append(projection * look)
-            spans.append(float(span))
-            depths.append(float(hi[2] - lo[2] + 32.0))
-        self._env_cover_matrices = matrices
-        self._env_cover_span = max(spans)
-        self._env_cover_depths = depths
-        size = self.SKY_COVER_SIZE
-        layers = len(surface.SKY_DIRECTIONS)
-        if not self._env_cover_tex:
-            self._env_cover_tex = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._env_cover_tex)
-            gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_DEPTH_COMPONENT24, size, size,
-                            layers, 0, gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
-            for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
-                                (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
-                                (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_BORDER),
-                                (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_BORDER),
-                                (gl.GL_TEXTURE_COMPARE_MODE, gl.GL_COMPARE_REF_TO_TEXTURE),
-                                (gl.GL_TEXTURE_COMPARE_FUNC, gl.GL_LEQUAL)):
-                gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, name, value)
-            gl.glTexParameterfv(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_BORDER_COLOR,
-                                (1.0, 1.0, 1.0, 1.0))
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
-            self._env_cover_fbo = int(gl.glGenFramebuffers(1))
-            self._env_cover_size = size
-            self._env_cover_sig = None
-        self._env_cover_ready = True
-        signature = (tuple(round(float(v), 1) for v in low), tuple(round(float(v), 1) for v in high))
-        previous = self._env_cover_sig
-        if (previous is not None and previous[0] == signature
-                and (previous[1] is keys or previous[1] == keys)):
-            return
-        self._env_cover_sig = (signature, keys)
-        plain, instanced = self._env_depth_programs()
-        previous_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
-        previous_viewport = [int(v) for v in gl.glGetIntegerv(gl.GL_VIEWPORT)]
-        scissor = bool(gl.glIsEnabled(gl.GL_SCISSOR_TEST))
-        cull = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
-        try:
-            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._env_cover_fbo)
-            gl.glDrawBuffer(gl.GL_NONE)
-            gl.glReadBuffer(gl.GL_NONE)
-            gl.glViewport(0, 0, size, size)
-            gl.glDisable(gl.GL_SCISSOR_TEST)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glEnable(gl.GL_DEPTH_TEST)
-            gl.glDepthMask(gl.GL_TRUE)
-            gl.glDepthFunc(gl.GL_LESS)
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-            gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
-            for layer, matrix in enumerate(matrices):
-                gl.glFramebufferTextureLayer(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
-                                             self._env_cover_tex, 0, layer)
-                gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
-                self._env_draw_brush_casters(table, slots, plain, instanced,
-                                             glm.value_ptr(matrix), ('shadow', 'sky cover'))
-            self.sun_shadow_stats['cover'] = self.sun_shadow_stats.get('cover', 0) + 1
-        finally:
-            gl.glBindVertexArray(0)
-            gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
-            gl.glCullFace(gl.GL_BACK)
-            if cull:
-                gl.glEnable(gl.GL_CULL_FACE)
+        previous = self._env_skylight_sig
+        current = (previous is not None and previous[0] == grid.key
+                   and (previous[1] is keys or previous[1] == keys))
+        if not current:
+            now = time.perf_counter()
+            if (self._env_skylight_tex and self._env_skylight_grid is not None
+                    and now - self._env_skylight_built < self.SKY_LIGHT_INTERVAL):
+                # Just rebuilt: the one there serves until the interval is up.
+                self._env_skylight_ready = True
+                return
+            light, solid = skylight.build(table, slots, grid)
+            texels = skylight.texels(light, solid)
+            if not self._env_skylight_tex:
+                self._env_skylight_tex = int(gl.glGenTextures(1))
+                gl.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_tex)
+                for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
+                                    (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
+                                    (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
+                                    (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE),
+                                    (gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)):
+                    gl.glTexParameteri(gl.GL_TEXTURE_3D, name, value)
             else:
-                gl.glDisable(gl.GL_CULL_FACE)
-            gl.glUseProgram(0)
-            self._current_shader = None
-            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, previous_fbo)
-            gl.glViewport(*previous_viewport)
-            if scissor:
-                gl.glEnable(gl.GL_SCISSOR_TEST)
+                gl.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_tex)
+            gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+            nx, ny, nz = grid.shape
+            gl.glTexImage3D(gl.GL_TEXTURE_3D, 0, gl.GL_RG16, nx, ny, nz, 0,
+                            gl.GL_RG, gl.GL_UNSIGNED_SHORT, texels)
+            gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+            gl.glBindTexture(gl.GL_TEXTURE_3D, 0)
+            self._env_skylight_grid = grid
+            self._env_skylight_sig = (grid.key, keys)
+            self._env_skylight_built = now
+            self.sun_shadow_stats['sky light'] = self.sun_shadow_stats.get('sky light', 0) + 1
+        self._env_skylight_ready = True
 
     def _env_sun_shadows(self, config, camera_pos):
         """Bring the sun's shadow map up to date.
@@ -1715,7 +1674,8 @@ class EnvironmentMixin:
             gl.glUniform1i(mode_loc, mode)
         frame = (self._env_map_key, self._env_shadow_ready, self._env_reflect_key,
                  self._env_probe_reflections, self._env_base_exposure,
-                 self._env_cover_ready, self._env_cover_sig)
+                 self._env_skylight_ready, self._env_skylight_sig,
+                 self._env_indoor_colour, self._env_reflect_fallback())
         if state is None or state[1] != frame:
             ambient = self._env_ambient
             gl.glUniform3f(uniforms['uSunDir'], *self._env_sun_dir)
@@ -1732,23 +1692,20 @@ class EnvironmentMixin:
             # colour from there: it gets the sky's horizon light instead.
             gl.glUniform4f(uniforms['uEnvParams2'], 1.0 if probe else 0.0,
                            1.0 if probe else 0.0, self._env_reflection_gain(), 0.0)
-            cover = self._env_cover_ready
-            if cover:
-                packed = np.array([m.to_list() for m in self._env_cover_matrices],
-                                  dtype=np.float32)
-                gl.glUniformMatrix4fv(uniforms['uSkyMatrix[0]'], len(self._env_cover_matrices),
-                                      gl.GL_FALSE, packed)
-                # Back faces are what each layer holds, so a face turned away
-                # from its direction sits on its stored depth: pushed a
-                # little further on, it is under cover as it should be.
-                gl.glUniform1fv(uniforms['uSkyBias[0]'], len(self._env_cover_depths),
-                                np.array([4.0 / max(d, 1.0) for d in self._env_cover_depths],
-                                         dtype=np.float32))
-            gl.glUniform4f(uniforms['uSkyCoverParams'],
-                           self.SKY_COVER_REACH / max(self._env_cover_span, 1.0),
-                           0.0,
-                           1.0 if cover else 0.0, self.SKY_COVER_OFFSET)
+            grid = self._env_skylight_grid if self._env_skylight_ready else None
+            if grid is None:
+                gl.glUniform4f(uniforms['uSkyLightScale'], 1.0, 1.0, 1.0, 0.0)
+            else:
+                extent = grid.extent
+                # A point is first moved this far off its surface, into the
+                # room it faces.
+                gl.glUniform4f(uniforms['uSkyLightOrigin'], grid.origin[0], grid.origin[1],
+                               grid.origin[2], grid.cell * skylight.SURFACE_OFFSET)
+                gl.glUniform4f(uniforms['uSkyLightScale'], 1.0 / extent[0], 1.0 / extent[1],
+                               1.0 / extent[2], 2.0 if grid.follows else 1.0)
             gl.glUniform3f(uniforms['uHazeColor'], *self._env_ambient[1])
+            gl.glUniform3f(uniforms['uReflectIndoor'], *self._env_indoor_colour)
+            gl.glUniform3f(uniforms['uReflectFallback'], *self._env_reflect_fallback())
             fog = self._env_fog
             if fog is None:
                 gl.glUniform4f(uniforms['uHdrFog'], 0.0, 0.0, 0.0, 0.0)
@@ -1901,14 +1858,16 @@ class EnvironmentMixin:
         pixels = width * height
         half = max(1, width // 2) * max(1, height // 2)
         bloom = sum(w * h * 4 for _t, _f, w, h in self._postfx_bloom)
-        frame = (pixels * 8               # colour, RGBA16F
-                 + pixels * 4             # normal, sky visibility, roughness
+        frame = (pixels * 8 * 4 // 3      # colour, RGBA16F with mips
+                 + pixels * 8             # normal, sky light, roughness
                  + pixels * 4             # depth and stencil
                  + pixels * 8             # resolved
-                 + half * 2) if pixels else 0
+                 + pixels * 4             # display
+                 + half * 3) if pixels else 0
         shadow = 2 * self._env_shadow_size ** 2 * 4 if self._env_shadow_tex else 0
-        cover = (self._env_cover_size ** 2 * 4 * len(surface.SKY_DIRECTIONS)
-                 if self._env_cover_tex else 0)
+        grid = self._env_skylight_grid
+        cover = (grid.shape[0] * grid.shape[1] * grid.shape[2] * 4
+                 if self._env_skylight_tex and grid is not None else 0)
         env = ENV_MAP_SIZE[0] * ENV_MAP_SIZE[1] * 8 * 4 // 3 if self._env_map else 0
         if self._env_reflect_map:
             env += env // 4
@@ -1923,7 +1882,7 @@ class EnvironmentMixin:
                 maps += int(w) * int(h) * 4 * 4 // 3
         gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
         return {'frame targets': frame, 'bloom': bloom, 'sun shadow maps': shadow,
-                'sky cover map': cover, 'environment maps': env, 'material maps': maps}
+                'sky light volume': cover, 'environment maps': env, 'material maps': maps}
 
     def _bind_terrain_layers(self, terrain_gl):
         """The terrain layers' normal maps (the companions of its sand,
@@ -2048,13 +2007,7 @@ class EnvironmentMixin:
                     emission = float(values.get('emission', 1.0))
                 except (TypeError, ValueError):
                     parallax, emission = 0.0, 1.0
-                # Relief (parallax) follows a height someone made. A height
-                # the generator guessed from a picture is good enough to
-                # bend the light (the normal map) but not to move the
-                # surface: it smears at a grazing angle, and its dozen
-                # samples a pixel are the dearest thing in the shader.
-                if not has_height or (isinstance(values.get('generated'), dict)
-                                      and not values.get('parallax_generated')):
+                if not has_height:
                     parallax = 0.0
         if not (normal and material):
             # Made from the picture itself, by the generator, on another thread.
@@ -2150,7 +2103,8 @@ class EnvironmentMixin:
         self._cleanup_postfx()
         textures = [t for t in (self._env_shadow_tex, self._env_shadow_static_tex,
                                 self._env_noise_tex, self._env_map,
-                                self._env_reflect_map, self._env_cover_tex,
+                                self._env_reflect_map, self._env_skylight_tex,
+                                self._env_skylight_blank,
                                 self._env_grid_tex) if t]
         self._env_grid_tex = 0
         self._env_grid_key = None
@@ -2161,9 +2115,10 @@ class EnvironmentMixin:
         if textures:
             gl.glDeleteTextures(textures)
         framebuffers = [f for f in (self._env_shadow_fbo, self._env_shadow_static_fbo,
-                                    self._env_map_fbo, self._env_cover_fbo) if f]
-        self._env_cover_tex = self._env_cover_fbo = 0
-        self._env_cover_sig = None
+                                    self._env_map_fbo) if f]
+        self._env_skylight_tex = self._env_skylight_blank = 0
+        self._env_skylight_sig = None
+        self._env_skylight_grid = None
         if self._hdr_ubo:
             gl.glDeleteBuffers(1, [self._hdr_ubo])
             self._hdr_ubo = 0
