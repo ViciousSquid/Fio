@@ -260,3 +260,38 @@ label.close()
 '''], cwd=Path(__file__).resolve().parents[2], env=dict(os.environ, QT_QPA_PLATFORM='offscreen'),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_reapplying_the_font_size_clears_theme_fonts_restored_by_a_stylesheet(qt_app):
+    """Setting the size again replaces per-class theme fonts, size unchanged.
+
+    Qt gives QLabel, QPushButton, the item views and more their own font from
+    the platform theme, and puts those back whenever a style is installed --
+    which QApplication.setStyleSheet does. main.py and the UI audit set the
+    stylesheet after the startup font, so the following call with the same
+    size must still clear them: skipping it because the application font was
+    unchanged left macOS on .AppleSystemUIFont 13pt across the editor (the
+    native UI parity check). The planted 13pt fonts stand in for the theme's,
+    which the offscreen platform does not have.
+    """
+    from editor.desktop_style import set_editor_font_size
+    set_editor_font_size(qt_app, 11)
+    editor_font = qt_app.font()
+    assert editor_font.family() == UI_FONT and editor_font.pointSize() == 11
+    system = QFont('DejaVu Sans', 13)
+    for name in ('QLabel', 'QPushButton', 'QAbstractItemView'):
+        qt_app.setFont(system, name)
+    assert qt_app.font('QLabel') == system
+    try:
+        set_editor_font_size(qt_app, 11)
+        for name in ('QLabel', 'QPushButton', 'QAbstractItemView'):
+            assert qt_app.font(name) == editor_font, name
+        label = QLabel('Label text')
+        try:
+            assert label.font().family() == UI_FONT
+            assert label.font().pointSize() == 11
+        finally:
+            label.deleteLater()
+    finally:
+        qt_app.setFont(editor_font)
+        set_editor_font_size(qt_app, 11)
