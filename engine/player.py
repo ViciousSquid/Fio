@@ -226,6 +226,33 @@ def _model_triangle_contact_normal(displacement, distance, face_normal,
     return (n[0] / length, n[1] / length, n[2] / length)
 
 
+def _ground_slide_normal(contact_normal, face_normal):
+    """The normal a swept capsule slides along after a touch.
+
+    A ground-like touch -- the contact normal within walking slope of up,
+    which is what the ground check already counts as standing -- slides as
+    ground: along a walkable triangle's own face, or straight up off the top
+    edge of a wall or riser. Sliding along the closest-point normal instead
+    tilted it back toward the player at a stair's nose, turning walking speed
+    into a hop (200 units a second forward became 22 upward) that left the
+    player airborne for two ticks at every step of a model staircase.
+    Steeper contacts keep their own normal: a capsule still rolls off a ledge
+    and still meets the top of a step too high to climb.
+    """
+    if contact_normal[1] < PM_GROUND_NORMAL:
+        return contact_normal
+    fy = float(face_normal[1])
+    if abs(fy) < PM_GROUND_NORMAL:
+        return (0.0, 1.0, 0.0)
+    sign = 1.0 if fy > 0.0 else -1.0
+    fx, fz = float(face_normal[0]) * sign, float(face_normal[2]) * sign
+    fy = abs(fy)
+    length = math.sqrt(fx * fx + fy * fy + fz * fz)
+    if length <= 1e-10:
+        return contact_normal
+    return (fx / length, fy / length, fz / length)
+
+
 def _intersect_swept_sphere_triangle(sphere_pos, sphere_vel, radius, triangle,
                                     normal, capsule_centre=None):
     """Continuous two-sided sphere/triangle contact.
@@ -1926,7 +1953,8 @@ class Player:
                         )
                         if hit and (best is None or hit_time < best[0]):
                             best = (hit_time, (float(normal.x), float(normal.y),
-                                               float(normal.z)), brush)
+                                               float(normal.z)), brush,
+                                    face_normal)
 
             if best is None:
                 position = (position[0] + remaining[0],
@@ -1936,7 +1964,8 @@ class Player:
                 break
 
             hit_any = True
-            hit_time, normal, brush = best
+            hit_time, normal, brush, face_normal = best
+            normal = _ground_slide_normal(normal, face_normal)
             position = (position[0] + remaining[0] * hit_time + normal[0] * 1e-3,
                         position[1] + remaining[1] * hit_time + normal[1] * 1e-3,
                         position[2] + remaining[2] * hit_time + normal[2] * 1e-3)
@@ -1979,6 +2008,9 @@ class Player:
         best_brush = None
         best_normal = None
         best_footprint_top = None
+        # Treads that reach under the hull's edge but not under its centre:
+        # (normal_y, brush, normal, top), decided once the loop is done.
+        edge_treads = []
         support_snap_distance = max(
             0.25, float(self._mesh_support_snap_distance)
         )
@@ -2035,17 +2067,59 @@ class Player:
                         contact_normal = _oriented_triangle_normal(
                             face_normal, support_point, centre, velocity
                         )
-                        if contact_normal[1] > best_normal_y:
+                        if footprint_distance_sq > 1e-6:
+                            edge_treads.append(
+                                (contact_normal[1], brush, contact_normal, top))
+                        elif contact_normal[1] > best_normal_y:
                             best_normal_y = contact_normal[1]
                             best_brush = brush
                             best_normal = contact_normal
                             best_footprint_top = top
+        # A tread under only the edge of the hull holds the player on a
+        # staircase -- where there is a lower tread under its centre, within
+        # a step -- but not over a ledge: a player whose centre has gone past
+        # the edge of a deck, with nothing within a step below it, falls.
+        if edge_treads and self._model_mesh_ground_beneath(
+                model_meshes, centre[0], centre[2], feet_y):
+            for normal_y, brush, contact_normal, top in edge_treads:
+                if normal_y > best_normal_y:
+                    best_normal_y = normal_y
+                    best_brush = brush
+                    best_normal = contact_normal
+                    best_footprint_top = top
         # Snap only downward/inward motion onto the actual accepted surface.
         # Positive separating velocity is left untouched so jumping still detaches.
         if (best_footprint_top is not None and velocity[1] <= 1e-3
                 and feet_y < best_footprint_top):
             self.pos.y = best_footprint_top + float(self._half.y)
         return (best_brush, best_normal) if best_brush is not None else None
+
+    def _model_mesh_ground_beneath(self, model_meshes, x, z, feet_y):
+        """Whether a walkable model triangle lies under (x, z) within a step
+        below *feet_y* (or just above it)."""
+        low = feet_y - float(self.step_height) - 1e-3
+        high = feet_y + 0.25
+        for _brush, triangles, bounds in model_meshes:
+            if bounds:
+                mn, mx = bounds
+                if (x < mn[0] or x > mx[0] or z < mn[2] or z > mx[2]
+                        or mx[1] < low or mn[1] > high):
+                    continue
+            for tri, face_normal in triangles:
+                if abs(float(face_normal[1])) < PM_GROUND_NORMAL:
+                    continue
+                v0, v1, v2 = tri
+                if (max(v0[1], v1[1], v2[1]) < low
+                        or min(v0[1], v1[1], v2[1]) > high
+                        or x < min(v0[0], v1[0], v2[0])
+                        or x > max(v0[0], v1[0], v2[0])
+                        or z < min(v0[2], v1[2], v2[2])
+                        or z > max(v0[2], v1[2], v2[2])):
+                    continue
+                top, distance_sq = _closest_point_on_triangle_xz(x, z, tri)
+                if distance_sq <= 1e-6 and low <= top <= high:
+                    return True
+        return False
 
     def _model_mesh_max_penetration(self, model_meshes, offsets, radius):
         """Maximum sphere/triangle penetration at the current capsule position."""
