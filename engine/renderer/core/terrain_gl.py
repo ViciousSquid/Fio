@@ -762,7 +762,7 @@ class TerrainGL:
 
     def render(self, frame, projection, view, camera_pos, frustum_planes=None,
                active_lights_count=0, shadow_cubemaps=None, shadow_unit_base=4,
-               env_uniforms=None):
+               env_uniforms=None, shadow_filter=None):
         """Draw the published *frame* with the current GL context."""
         self.visible_chunks = 0
         self.culled_chunks = 0
@@ -773,13 +773,13 @@ class TerrainGL:
         try:
             self._render(projection, view, camera_pos, frustum_planes,
                          active_lights_count, shadow_cubemaps, shadow_unit_base,
-                         env_uniforms)
+                         env_uniforms, shadow_filter)
         finally:
             self.frame = None
 
     def _render(self, projection, view, camera_pos, frustum_planes,
                 active_lights_count, shadow_cubemaps, shadow_unit_base,
-                env_uniforms):
+                env_uniforms, shadow_filter=None):
         frame = self.frame
         if not self.shader_program:
             self._init_shader()
@@ -807,7 +807,7 @@ class TerrainGL:
         # raise GL_INVALID_OPERATION.
         names = self.UNIFORM_NAMES + tuple(frame.appearance) + tuple(env_uniforms or ())
         names += tuple(f'shadowMaps[{i}]' for i in range(shaders.MAX_SHADOW_LIGHTS))
-        names += ('fioCookies',)
+        names += ('fioCookies', 'uShadowFilter[0]')
         for name in names:
             if name not in u:
                 u[name] = gl.glGetUniformLocation(prog, name)
@@ -876,6 +876,14 @@ class TerrainGL:
             gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
             gl.glUniform1i(loc, shadow_unit_base + i)
         gl.glActiveTexture(gl.GL_TEXTURE0)
+        # Each shadow slot's filter, from the Light that owns it (0: the
+        # shader's default), as the other lit passes have it.
+        loc = u.get('uShadowFilter[0]', -1)
+        if loc is not None and loc != -1:
+            values = (shadow_filter if shadow_filter is not None
+                      else np.zeros((shaders.MAX_SHADOW_LIGHTS, 2), dtype=np.float32))
+            gl.glUniform2fv(loc, shaders.MAX_SHADOW_LIGHTS,
+                            np.ascontiguousarray(values, dtype=np.float32))
         # The light-cookie array (engine.light_cookies) on its own unit, for
         # the same reason; the renderer binds the array there when a light
         # has a cookie, and nothing is sampled when none has.

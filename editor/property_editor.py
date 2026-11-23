@@ -4695,18 +4695,54 @@ class PropertyEditor(QWidget):
                 self.add_cookie_texture_widget(form, thing, str(value or ''))
                 continue
 
-            # Light shadow-map size.
+            # Light shadow-map size: 0 is the renderer's ([Renderer]
+            # shadow_map_size), shown as "Default".
             if isinstance(thing, Light) and key == 'shadow_map_size':
                 spin = QSpinBox()
-                spin.setRange(64, 4096)
-                spin.setSingleStep(64)
-                spin.setValue(int(value or 512))
-
+                spin.setRange(0, 4096)
+                spin.setSingleStep(128)
+                spin.setSpecialValueText("Default (settings)")
+                try:
+                    spin.setValue(max(0, int(float(value or 0))))
+                except (TypeError, ValueError):
+                    spin.setValue(0)
+                spin.setToolTip(
+                    "Shadow-map resolution per cube face for this light.\n"
+                    "Default uses [Renderer] shadow_map_size in settings.ini.\n"
+                    "Higher is sharper and costs 6 x size x size depth texels.")
                 spin.valueChanged.connect(
                     lambda v: self.update_object_prop('shadow_map_size', v)
                 )
 
                 form.addRow(QLabel("Shadow Map Size:"), spin)
+                continue
+
+            # Light shadow filter: edge softness and acne bias.
+            if isinstance(thing, Light) and key in ('shadow_softness', 'shadow_bias'):
+                from engine.shaders import SHADOW_BIAS_DEFAULT, SHADOW_SOFTNESS_DEFAULT
+                softness = key == 'shadow_softness'
+                default = SHADOW_SOFTNESS_DEFAULT if softness else SHADOW_BIAS_DEFAULT
+                spin = QDoubleSpinBox()
+                spin.setDecimals(2)
+                spin.setRange(0.05, 16.0)
+                spin.setSingleStep(0.25 if softness else 0.1)
+                try:
+                    spin.setValue(float(value) if float(value) > 0 else default)
+                except (TypeError, ValueError):
+                    spin.setValue(default)
+                spin.setToolTip(
+                    "Shadow edge softness: the blur radius in shadow-map pixels.\n"
+                    "Lower is sharper (and shows the map's pixels); higher is softer.\n"
+                    "Default %.2f." % SHADOW_SOFTNESS_DEFAULT
+                    if softness else
+                    "Multiplier on the shadow's depth bias.\n"
+                    "Raise it if lit surfaces show speckled self-shadowing (acne);\n"
+                    "lower it if thin objects near a surface lose their shadow.\n"
+                    "Default %.2f." % SHADOW_BIAS_DEFAULT)
+                spin.valueChanged.connect(
+                    lambda v, k=key: self.update_object_prop(k, v)
+                )
+                form.addRow(QLabel("Shadow Softness:" if softness else "Shadow Bias:"), spin)
                 continue
 
             # Speaker sound file.

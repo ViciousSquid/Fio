@@ -127,6 +127,12 @@ def detect_low_power_arm():
 # ==============================================================================
 MAX_SHADOW_LIGHTS = 8
 
+#: A shadow-casting Light's filter when it does not set its own
+#: (``shadow_softness``, ``shadow_bias``): the PCF disk radius in cube-map
+#: texels, and the multiplier on the acne-preventing depth bias.
+SHADOW_SOFTNESS_DEFAULT = 1.25
+SHADOW_BIAS_DEFAULT = 1.0
+
 # ==============================================================================
 # DYNAMIC LIGHT CAPACITY
 # ------------------------------------------------------------------------------
@@ -375,6 +381,16 @@ highp float _shadowCubeTexels(int idx) {
     return float(textureSize(shadowMaps[7], 0).x);
 }
 
+// Each shadow slot's filter, from the Light that owns it: x = softness (the
+// PCF disk radius in cube-map texels), y = bias multiplier. 0 stands for the
+// default, so a program nobody has given values to still filters sensibly.
+uniform vec2 uShadowFilter[MAX_SHADOW_LIGHTS];
+vec2 _shadowFilter(int idx) {
+    vec2 f = uShadowFilter[idx];
+    return vec2(f.x > 0.0 ? f.x : """ + repr(SHADOW_SOFTNESS_DEFAULT) + """,
+                f.y > 0.0 ? f.y : """ + repr(SHADOW_BIAS_DEFAULT) + """);
+}
+
 // idx          : which cube-map (0..7), or <0 for a non-shadow-casting light
 // fragToLight  : lightPos - fragmentWorldPos (world space)
 // farPlane     : the light radius used when the cube-map was rendered
@@ -396,13 +412,15 @@ float calcPointShadow(int idx, highp vec3 fragToLight, highp float farPlane, flo
     // 2048-unit light at any resolution, ~20 world units wide, which smeared
     // a catwalk's bars into a faint grey and dropped thin ones altogether.
     highp float texel = currentDepth * 2.0 / _shadowCubeTexels(idx);
-    highp float diskRadius = texel * 1.25;
+    vec2 shadowFilter = _shadowFilter(idx);
+    highp float diskRadius = texel * shadowFilter.x;
     // Bias covers the depth spread across one texel and the PCF disk on a
     // surface sloped away from the light (the tangent of its angle, capped),
-    // so lit surfaces don't self-shadow ("shadow acne").
+    // so lit surfaces don't self-shadow ("shadow acne"), scaled by the
+    // light's bias multiplier.
     highp float slope = clamp(sqrt(max(1.0 - ndotl * ndotl, 0.0)) / max(ndotl, 0.1),
                               0.0, 10.0);
-    highp float bias = diskRadius + (texel + diskRadius) * (1.0 + slope);
+    highp float bias = (diskRadius + (texel + diskRadius) * (1.0 + slope)) * shadowFilter.y;
     vec3 sampleDirs[20] = vec3[](
         vec3( 1, 1, 1), vec3( 1,-1, 1), vec3(-1,-1, 1), vec3(-1, 1, 1),
         vec3( 1, 1,-1), vec3( 1,-1,-1), vec3(-1,-1,-1), vec3(-1, 1,-1),

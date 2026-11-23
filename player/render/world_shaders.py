@@ -1,7 +1,8 @@
 """Desktop lighting and shadow formulas, with an ES-compatible atlas lookup."""
 import re
 from engine.shaders import (DEFAULT_SHADERS, SHADOW_GLSL, MAX_SHADOW_LIGHTS, MAX_LIGHTS,
-                            MAX_LIGHTS_PLAYER, light_ubo_source)
+                            MAX_LIGHTS_PLAYER, SHADOW_BIAS_DEFAULT,
+                            SHADOW_SOFTNESS_DEFAULT, light_ubo_source)
 from player.gles_shaders import translate
 
 VERTEX = """#version 300 es
@@ -42,6 +43,8 @@ highp float _sampleShadowCube(int idx, highp vec3 delta) {
     return texture(shadowAtlas,uv).r;
 }
 highp float _shadowCubeTexels(int idx) { return shadowTileSize; }
+// The player keeps the default filter; per-light values are the desktop's.
+vec2 _shadowFilter(int idx) { return vec2(""" + repr(SHADOW_SOFTNESS_DEFAULT) + """, """ + repr(SHADOW_BIAS_DEFAULT) + """); }
 """
 _shadow = _ATLAS_SAMPLE + SHADOW_GLSL[SHADOW_GLSL.index('// idx'):]
 _fragment = DEFAULT_SHADERS['textured.frag'].replace(SHADOW_GLSL, _shadow)
@@ -91,7 +94,7 @@ def fragment(quality):
                                 f'return shadow / {quality.shadow_samples}.0;')
         # Include two shadow texels in the mobile bias: its smaller atlas must
         # still reject grazing-angle self-shadowing after depth quantisation.
-        anchor = 'highp float bias = diskRadius + '
+        anchor = 'highp float bias = '
         assert anchor in source, "the shared shadow bias changed shape"
         source = source.replace(anchor, anchor + '2.0 * farPlane / shadowTileSize + ')
     if quality.lights_per_batch < MAX_LIGHTS_PLAYER:

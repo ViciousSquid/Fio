@@ -14,6 +14,7 @@ import importlib
 
 from engine.change_journal import TrackedAttribute, TrackedPosition, touch
 from engine.constants import PLAYER_HULL_SIZE
+from engine.shaders import SHADOW_BIAS_DEFAULT, SHADOW_SOFTNESS_DEFAULT
 from engine.portal_transform import (
     basis_from_rotation as _portal_basis_from_rotation,
     map_point as _portal_map_point,
@@ -557,6 +558,8 @@ class Light(Thing):
     'show_radius',
     'casts_shadows',
     'shadow_map_size',
+    'shadow_softness',
+    'shadow_bias',
     'cookie_enabled',
     'cookie_texture',
     'cookie_shadow_floor',
@@ -571,6 +574,12 @@ class Light(Thing):
         self.properties.setdefault('state', 'on')
         self.properties.setdefault('show_radius', False)
         self.properties.setdefault('casts_shadows', False)
+        # The shadow's map resolution per cube face (0: [Renderer]
+        # shadow_map_size), its edge softness (PCF disk radius in shadow-map
+        # texels) and the multiplier on its acne-preventing depth bias.
+        self.properties.setdefault('shadow_map_size', 0)
+        self.properties.setdefault('shadow_softness', SHADOW_SOFTNESS_DEFAULT)
+        self.properties.setdefault('shadow_bias', SHADOW_BIAS_DEFAULT)
         # Projected image (engine.light_cookies): explicit opt-in, and
         # independent of casts_shadows. With both, the image stays visible in
         # the light's own shadow at cookie_shadow_floor brightness.

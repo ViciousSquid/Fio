@@ -528,6 +528,20 @@ def _light_float(thing, key, default):
         return float(default)
 
 
+def _light_shadow_filter(thing):
+    """A Light's ``(shadow_softness, shadow_bias, shadow_map_size)`` for the
+    ``light_shadow`` column: each clamped to a sane range, and 0 -- the
+    renderer's default -- when unset, non-positive or not a number."""
+    def value(key, low, high):
+        v = _light_float(thing, key, 0.0)
+        if not math.isfinite(v) or v <= 0.0:
+            return 0.0
+        return min(max(v, low), high)
+    return (value('shadow_softness', 0.05, 16.0),
+            value('shadow_bias', 0.05, 16.0),
+            value('shadow_map_size', 64.0, 4096.0))
+
+
 def _light_bool(thing, key, default=False):
     value = _light_props(thing).get(key, default)
     if isinstance(value, str):
@@ -671,6 +685,9 @@ _COLUMNS = (
     ('light_params', (2,), np.float32, 0.0),
     ('light_enabled', (), bool, False),
     ('light_casts_shadows', (), bool, False),
+    #: A shadow-casting Light's (softness, bias, shadow map size); 0 in any
+    #: of them means the default (engine.shaders / [Renderer] shadow_map_size).
+    ('light_shadow', (3,), np.float32, 0.0),
     #: Where a row's light stands relative to its entity: zero for all but an
     #: emissive decal, whose light is just off the surface it is painted on.
     #: Folded into ``pos`` wherever that is written (the row draws nothing
@@ -1414,6 +1431,7 @@ class EntityTable:
             self.light_enabled[rows] = on
             self.light_size[rows] = sizes
             self.light_casts_shadows[rows] = False
+            self.light_shadow[rows] = 0.0
             self.light_cookie[rows] = 0
             self.hidden[rows] = False
             self.class_bits[rows] = 0
@@ -1703,6 +1721,7 @@ class EntityTable:
                 props, 'light_enabled', True
             )
             self.light_casts_shadows[slot] = False
+            self.light_shadow[slot] = 0.0
             self.light_cookie[slot] = 0
         else:
             if (self._effect_published is not None
@@ -1762,6 +1781,7 @@ class EntityTable:
             # A hidden decal paints nothing, in the editor too: nor does it glow.
             self.light_enabled[slot] = not self.hidden[slot]
             self.light_casts_shadows[slot] = False
+            self.light_shadow[slot] = 0.0
             self.light_cookie[slot] = 0
         elif (self.class_bits[slot] & (ENT_LIGHT | ENT_EFFECT)) == ENT_LIGHT:
             self.light_color[slot] = _light_color_of(thing)
@@ -1770,6 +1790,7 @@ class EntityTable:
             self.light_enabled[slot] = _light_bool(thing, 'state', True)
             self.light_casts_shadows[slot] = _light_bool(
                 thing, 'casts_shadows', False)
+            self.light_shadow[slot] = _light_shadow_filter(thing)
             # Independent of shadows: a cookie light that casts them darkens
             # its image in its own shadow, down to this floor.
             self.light_cookie[slot] = cookie_of(_light_props(thing))
@@ -1782,6 +1803,7 @@ class EntityTable:
             self.light_params[slot] = 0.0
             self.light_enabled[slot] = False
             self.light_casts_shadows[slot] = False
+            self.light_shadow[slot] = 0.0
             self.light_cookie[slot] = 0
 
         if offset is not None:
