@@ -97,6 +97,27 @@ def test_a_capped_mover_still_collides_far_along_its_travel():
         "and it must not be 'found' where it is not")
 
 
+def test_the_player_s_collider_query_adds_what_is_off_range():
+    """An off-range brush may be anywhere, so the player's broad phase is
+    handed it wherever it asks -- once, after the cells' own brushes -- as
+    every other query of the grid adds it. (A carried model's collision,
+    which is in no mover list, is found only this way once it is off range:
+    engine.logic_groups.)"""
+    import glm
+    grid = SpatialGrid()
+    lift = _mover(1e9)
+    floor = box_brush("floor", (0, -8, 0), (2048, 16, 2048))
+    grid.populate([floor, lift])
+    assert id(lift) in bp.off_range
+
+    far = grid.get_potential_colliders(glm.vec3(5000, 0, 5000), glm.vec3(5010, 10, 5010))
+    assert [b is lift for b in far] == [True], "one cell, holding nothing but it"
+    home = grid.get_potential_colliders(glm.vec3(-10, 0, 290), glm.vec3(10, 10, 310))
+    assert sum(b is lift for b in home) == 1 and home[0] is floor
+    wide = grid.get_potential_colliders(glm.vec3(-600, 0, -600), glm.vec3(600, 10, 600))
+    assert sum(b is lift for b in wide) == 1
+
+
 @pytest.mark.parametrize("distance,direction", [
     (128.0, (0, 1, 0)), (128.0, (1, 0, 0)), (4096.0, (1, 0, 1)),
     (1e5, (1, 0, 0)), (1e6, (1, 0, 0)), (1e6, (0, 0, 1)), (-1e6, (1, 0, 0)),
