@@ -408,6 +408,24 @@ class OBJLoader:
                         mtl['ambient'] = colour
                     else:
                         mtl['specular'] = colour
+                elif keyword == 'Ke' and len(parts) >= 4:
+                    # Emission, as glTF's emissiveFactor is for a GLB -- but
+                    # classic Fio has always ignored an MTL's Ke, so it is
+                    # kept under a key only the HD renderer reads.
+                    try:
+                        mtl['hd_emissive'] = (float(parts[1]), float(parts[2]),
+                                              float(parts[3]))
+                    except ValueError:
+                        continue
+                elif keyword in ('Pr', 'Pm') and len(parts) > 1:
+                    # The PBR extension of MTL: roughness and metalness (HD only).
+                    try:
+                        amount = float(parts[1])
+                    except ValueError:
+                        continue
+                    if math.isfinite(amount):
+                        mtl['roughness' if keyword == 'Pr' else 'metallic'] = max(
+                            0.0, min(1.0, amount))
                 elif keyword in ('d', 'Tr') and len(parts) > 1:
                     try:
                         alpha = float(parts[1])

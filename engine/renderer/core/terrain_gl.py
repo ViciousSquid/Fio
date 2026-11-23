@@ -74,6 +74,10 @@ class TerrainGL:
         #: Programs compiled here (a renderer may hand in its own instead).
         self._own_programs = set()
         self._failed_programs = set()
+        #: An HD renderer's hooks for the programs compiled here: fragment
+        #: source -> source, and a linked program to finish (None at low).
+        self.hd_source = None
+        self.hd_ready = None
         self.grass_tex = self.rock_tex = self.sand_tex = self.snow_tex = 0
         self.grass_time = 0.0
         self._height_pages = []
@@ -124,9 +128,13 @@ class TerrainGL:
                              else 'terrain.frag')
             fragment_code = shaders.light_ubo_source(
                 shaders.DEFAULT_SHADERS[fragment_name])
+            if self.hd_source is not None:
+                fragment_code = self.hd_source(fragment_code)
             vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
             fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
             program = compileProgram(vertex_shader, fragment_shader, validate=False)
+            if program and self.hd_ready is not None:
+                self.hd_ready(program)
             if not program:
                 print("ERROR: Failed to compile terrain shader program!")
                 self._failed_programs.add(vertex_name)
@@ -160,10 +168,14 @@ class TerrainGL:
         try:
             vertex_code = shaders.DEFAULT_SHADERS['grass.vert']
             fragment_code = shaders.DEFAULT_SHADERS['grass.frag']
+            if self.hd_source is not None:
+                fragment_code = self.hd_source(fragment_code)
             vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
             fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
             self.grass_shader_program = compileProgram(
                 vertex_shader, fragment_shader, validate=False)
+            if self.grass_shader_program and self.hd_ready is not None:
+                self.hd_ready(self.grass_shader_program)
         except Exception as e:
             msg = str(e)
             if ("glCreateShader" in msg or "undefined alternate function" in msg

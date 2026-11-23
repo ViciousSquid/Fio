@@ -329,6 +329,9 @@ def light_ubo_source(source):
         result = _floor_cookie_shadows(result)
         result = re.sub(r"lights\[([^]]+)\]\.color\b",
                         r"fioLightColor(\1, " + fragment_position + ")", result)
+        # Found again: a light loop above main() (a helper function's) has
+        # just been rewritten, which moves main().
+        main = _MAIN_RE.search(result)
         result = (result[:main.end()]
                   + "\n    fioCookiePixel = max(length(dFdx(" + fragment_position + ")), "
                   "length(dFdy(" + fragment_position + ")));"

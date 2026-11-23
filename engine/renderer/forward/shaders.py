@@ -92,11 +92,13 @@ class ShadersMixin:
             # terrain
             try:
                 terrain_vs = compileShader(DEFAULT_SHADERS['terrain_indexed.vert'], gl.GL_VERTEX_SHADER)
-                terrain_fs = compileShader(
-                    shaders.light_ubo_source(DEFAULT_SHADERS['terrain_flat.frag']),
-                    gl.GL_FRAGMENT_SHADER,
-                )
+                terrain_source = shaders.light_ubo_source(DEFAULT_SHADERS['terrain_flat.frag'])
+                if self.hd:
+                    terrain_source = self._hd_fragment_source(terrain_source)
+                terrain_fs = compileShader(terrain_source, gl.GL_FRAGMENT_SHADER)
                 terrain_program = compileProgram(terrain_vs, terrain_fs, validate=False)
+                if self.hd:
+                    self._hd_program_ready(terrain_program)
                 self.shaders['terrain'] = terrain_program
                 self.uniforms['terrain'] = UniformCache(terrain_program)
                 self.uniforms['terrain'].preload([

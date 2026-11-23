@@ -352,6 +352,8 @@ class LightingMixin:
                            'terrain'):
             self._bind_shadow_maps(self.uniforms[shader_name])
             self._bind_light_cookies(self.uniforms[shader_name])
+            if self.hd:
+                self._bind_surface(shader_name)
 
     # --------------------------------------------------------------------------
     # Depth cube-map shadow mapping
