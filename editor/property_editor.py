@@ -4719,7 +4719,7 @@ class PropertyEditor(QWidget):
 
             # Light shadow filter: edge softness and acne bias.
             if isinstance(thing, Light) and key in ('shadow_softness', 'shadow_bias'):
-                from engine.shaders import SHADOW_BIAS_DEFAULT, SHADOW_SOFTNESS_DEFAULT
+                from engine.constants import SHADOW_BIAS_DEFAULT, SHADOW_SOFTNESS_DEFAULT
                 softness = key == 'shadow_softness'
                 default = SHADOW_SOFTNESS_DEFAULT if softness else SHADOW_BIAS_DEFAULT
                 spin = QDoubleSpinBox()

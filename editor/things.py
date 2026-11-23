@@ -13,8 +13,8 @@ import uuid
 import importlib
 
 from engine.change_journal import TrackedAttribute, TrackedPosition, touch
-from engine.constants import PLAYER_HULL_SIZE
-from engine.shaders import SHADOW_BIAS_DEFAULT, SHADOW_SOFTNESS_DEFAULT
+from engine.constants import (PLAYER_HULL_SIZE, SHADOW_BIAS_DEFAULT,
+                              SHADOW_SOFTNESS_DEFAULT)
 from engine.portal_transform import (
     basis_from_rotation as _portal_basis_from_rotation,
     map_point as _portal_map_point,

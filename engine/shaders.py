@@ -127,11 +127,8 @@ def detect_low_power_arm():
 # ==============================================================================
 MAX_SHADOW_LIGHTS = 8
 
-#: A shadow-casting Light's filter when it does not set its own
-#: (``shadow_softness``, ``shadow_bias``): the PCF disk radius in cube-map
-#: texels, and the multiplier on the acne-preventing depth bias.
-SHADOW_SOFTNESS_DEFAULT = 1.25
-SHADOW_BIAS_DEFAULT = 1.0
+# A shadow-casting Light's default filter (engine.constants).
+from engine.constants import SHADOW_BIAS_DEFAULT, SHADOW_SOFTNESS_DEFAULT  # noqa: E402
 
 # ==============================================================================
 # DYNAMIC LIGHT CAPACITY
