@@ -460,6 +460,12 @@ class Ui_MainWindow(object):
         MainWindow.properties_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         toggle_action = MainWindow.properties_dock.toggleViewAction()
         toggle_action.setText("Properties/Console")
+        # P shows or hides the Property editor's dock from anywhere, docks
+        # and floating windows included; a text field still takes a typed
+        # "p" (it claims printable keys first).
+        toggle_action.setShortcut('P')
+        toggle_action.setShortcutContext(Qt.ApplicationShortcut)
+        toggle_action.setToolTip('Show or hide the Property editor (P)')
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.properties_dock)
 
         # --- 3. Layout Adjustments ---
@@ -754,13 +760,13 @@ class Ui_MainWindow(object):
             MainWindow.toggle_system_monitor)
         MainWindow.debug_menu.addAction(MainWindow.system_monitor_action)
 
-        MainWindow.position_action = QAction('Position (P)', MainWindow)
-        MainWindow.position_action.setShortcut('P')
+        MainWindow.position_action = QAction('Position (Ctrl+P)', MainWindow)
+        MainWindow.position_action.setShortcut('Ctrl+P')
         # Anywhere in the application, docks and floating windows included; a
         # text field still takes a typed "p" (it claims printable keys first).
         MainWindow.position_action.setShortcutContext(Qt.ApplicationShortcut)
         MainWindow.position_action.setToolTip(
-            'Open the live camera-position window (P, or the console\'s pos)')
+            'Open the live camera-position window (Ctrl+P, or the console\'s pos)')
         MainWindow.position_action.triggered.connect(
             MainWindow.view_3d.show_pos_window)
         MainWindow.debug_menu.addAction(MainWindow.position_action)
