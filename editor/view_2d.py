@@ -1390,22 +1390,64 @@ class View2D(QWidget):
                 and min_y < visible_bounds.bottom() and visible_bounds.top() < max_y)
 
     def is_thing_visible(self, thing, visible_bounds, axis1_idx, axis2_idx):
-        """Check if a thing's position (plus its radius) is within the visible area."""
+        """Whether any of what a thing draws can be in the visible area.
+
+        Its origin, padded by the most it draws away from it: 32 pixels for
+        a sprite, its radius (world units) for a Light or Speaker, and the
+        reach of its model for a model -- whose origin is the point it
+        stands on. The pad used to be 32 *pixels* for everything (a radius
+        was divided by the zoom too), so zoomed in on the top of a model,
+        or on a radius circle, the origin left the view and the whole thing
+        vanished: the closer the zoom, the sooner.
+        """
         pos = thing.pos
         x = pos[axis1_idx]
         y = pos[axis2_idx]
 
-        # Include the radius if the thing has one (Light, Speaker, etc.)
-        radius = 0
+        margin = 32.0 / self.zoom_factor if self.zoom_factor > 0 else 32.0
+        # The radius a Light, Speaker etc. draws, in world units.
         if hasattr(thing, 'get_radius'):
-            radius = thing.get_radius()
-        # Also add a small fixed margin for sprites
-        margin = max(32.0, radius) / self.zoom_factor if self.zoom_factor > 0 else 32.0
+            try:
+                margin = max(margin, float(thing.get_radius() or 0.0))
+            except (TypeError, ValueError):
+                pass
         if isinstance(thing, PlayerStart):
             margin = max(margin, 64.0)  # full 100-unit sign, including its base
+        margin = max(margin, self._model_reach(thing))
 
         point_rect = QRectF(x - margin, y - margin, margin * 2, margin * 2)
         return visible_bounds.intersects(point_rect)
+
+    #: Models whose reach is remembered (each ``positions`` array is its
+    #: loaded model's, shared by every instance).
+    MODEL_REACH_CACHE = 256
+
+    def _model_reach(self, thing):
+        """How far (world units) a thing's drawn model reaches from its
+        origin in any direction; 0 when it draws no model wireframe."""
+        render_mode = str(thing.properties.get('render_mode', 'model')).lower()
+        if not entity_model_path(thing) or not (render_mode == 'model'
+                                                or isinstance(thing, PlayerStart)):
+            return 0.0
+        found = self._model_edges_for(thing)
+        placed = self._model_placement(thing) if found is not None else None
+        if placed is None:
+            return 0.0
+        positions = found[1]
+        cache = self.__dict__.setdefault('_model_reach_cache', {})
+        entry = cache.get(id(positions))
+        if entry is None or entry[0] is not positions:
+            pts = np.asarray(positions, dtype=float).reshape(-1, 3)
+            reach = float(np.sqrt((pts * pts).sum(axis=1).max())) if len(pts) else 0.0
+            if len(cache) >= self.MODEL_REACH_CACHE:
+                cache.clear()
+            entry = cache[id(positions)] = (positions, reach)
+        scale = placed[0]
+        try:
+            factor = max(abs(float(v)) for v in scale)
+        except TypeError:
+            factor = abs(float(scale))
+        return entry[1] * factor
 
     def get_axes(self):
         if self.view_type == 'top': return 'x', 'z'
