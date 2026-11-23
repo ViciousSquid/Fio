@@ -111,7 +111,7 @@ class ShadowAtlas:
                     model = glmath.translate(*(item['pos'][i]-origin[i] for i in range(3)))
                     static = not (item.get('is_mover') or item.get('is_door'))
                 else:
-                    model = glmath.entity_matrix(item.pos, item.properties)
+                    model = glmath.item_matrix(item)
             center, half = bounds[vao] if bounds is not None else (np.zeros(3), np.full(3, 1e12))
             center = model[:3,:3] @ center + model[:3,3]
             half = np.abs(model[:3,:3]) @ half
