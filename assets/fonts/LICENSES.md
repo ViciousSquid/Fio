@@ -15,9 +15,9 @@ licence from their authors.
 | Font | Author | Licence |
 |---|---|---|
 | Fio UI (derived from Selawik 1.01) | Microsoft Corporation | SIL Open Font License 1.1 — full text in `editor/Selawik-OFL.txt` |
-| IBM Plex Mono Regular, Bold | IBM Corp. | SIL Open Font License 1.1 — full text in `editor/IBMPlexMono-OFL.txt` |
+| Fio Mono Regular, Bold (derived from IBM Plex Mono; renamed, line metrics changed) | IBM Corp. | SIL Open Font License 1.1 — full text in `editor/IBMPlexMono-OFL.txt` |
 
-See `editor/README.md` for where each came from and how Fio UI was derived.
+See `editor/README.md` for where each came from and how Fio UI and Fio Mono were derived.
 
 ## HUD fonts (this folder)
 

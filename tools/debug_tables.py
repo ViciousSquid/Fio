@@ -232,7 +232,7 @@ class RawTable(QWidget):
         self.view.horizontalHeader().setStretchLastSection(True)
         self.selector = QComboBox()
         self.meta = QLabel()
-        self.meta.setFont(QFont("IBM Plex Mono", 9))
+        self.meta.setFont(QFont("Fio Mono", 9))
         self.selector.currentIndexChanged.connect(self._field_changed)
         top = QHBoxLayout()
         top.addWidget(QLabel(title))
@@ -319,7 +319,7 @@ class BarView(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
-        p.setFont(QFont("IBM Plex Mono", 9))
+        p.setFont(QFont("Fio Mono", 9))
         if not self.items:
             p.drawText(12, 24, "NO DATA")
             return
@@ -375,7 +375,7 @@ class DebugTablesWindow(QMainWindow):
         self.always_top.setChecked(True)
         self.always_top.toggled.connect(self._set_always_on_top)
         self.status = QLabel("DETACHED — waiting for published render state")
-        self.status.setFont(QFont("IBM Plex Mono", 9))
+        self.status.setFont(QFont("Fio Mono", 9))
 
         tabs = QTabWidget()
         self.dashboard = QTextBrowser()

@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBo
                              QMenu, QRadioButton, QSplitter, QTabWidget, QToolTip, QWidget)
 
 UI_FONT = "Fio UI"
-MONO_FONT = "IBM Plex Mono"
+MONO_FONT = "Fio Mono"
 ICON_DIRECTORY = Path(__file__).resolve().parents[1] / 'assets' / 'ui' / 'controls'
 
 

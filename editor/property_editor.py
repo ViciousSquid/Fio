@@ -306,7 +306,7 @@ class _Style:
               "QPushButton:hover { background-color: #7B4AB9; border: 2px solid #A875D6; } "
               "QPushButton:pressed { background-color: #5A2E96; }")
     ID_FIELD = ("QLineEdit { background-color: #6C3BAA; color: white; font-weight: bold; padding: 6px; "
-                "border: 2px solid #8B5AC2; border-radius: 3px; font-family: 'IBM Plex Mono'; } "
+                "border: 2px solid #8B5AC2; border-radius: 3px; font-family: 'Fio Mono'; } "
                 "QLineEdit:focus { border: 2px solid #A875D6; background-color: #7B4AB9; }")
 
     @staticmethod

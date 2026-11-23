@@ -201,7 +201,7 @@ class SceneHierarchy(QWidget):
                 border: none;
                 border-bottom: 1px solid #425F5D;
                 font-weight: bold;
-                font-family: 'IBM Plex Mono';
+                font-family: 'Fio Mono';
                 font-size: 13px;
             }
             QPushButton:hover {

@@ -1069,7 +1069,7 @@ class MainWindow(QMainWindow):
 
         self._play_console_input = CommandInput(self._play_console_frame)
         self._play_console_input.setPlaceholderText("Enter command...")
-        self._play_console_input.setFont(QFont("IBM Plex Mono", 12))
+        self._play_console_input.setFont(QFont("Fio Mono", 12))
         self._play_console_input.setStyleSheet("""
             QLineEdit {
                 background-color: rgba(30, 30, 30, 220);

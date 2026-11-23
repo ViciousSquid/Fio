@@ -882,7 +882,7 @@ class DebugConsole(QWidget):
         self.console.setReadOnly(True)
         # Output insertion schedules its own deferred scroll after QTextDocument
         # layout. Do not follow every range change: resizing must not move a reader.
-        self.console.setFont(QFont("IBM Plex Mono", self.font_size))
+        self.console.setFont(QFont("Fio Mono", self.font_size))
         self.console.setOpenLinks(False)
         self.console.anchorClicked.connect(self._on_anchor_clicked)
         # Toast cards: full colour when new, faint after TOAST_FADE_SECONDS,
@@ -1009,11 +1009,11 @@ class DebugConsole(QWidget):
         input_layout.setContentsMargins(0, 0, 0, 0)
 
         prompt_label = QLabel("]")
-        prompt_label.setStyleSheet('color: #F08000; font-weight: bold; font-family: "IBM Plex Mono"; font-size: 14px;')
+        prompt_label.setStyleSheet('color: #F08000; font-weight: bold; font-family: "Fio Mono"; font-size: 14px;')
 
         self.command_input = CommandInput()
         self.command_input.setPlaceholderText("Enter command...")
-        self.command_input.setFont(QFont("IBM Plex Mono", self.font_size))
+        self.command_input.setFont(QFont("Fio Mono", self.font_size))
         self.command_input.setStyleSheet("""
             QLineEdit {
                 background-color: #1a1a1a;
@@ -1084,8 +1084,8 @@ class DebugConsole(QWidget):
     def _apply_font_size(self):
         """Apply the current font size to the console and reload all HTML."""
         self._show_font_size()
-        self.console.setFont(QFont("IBM Plex Mono", self.font_size))
-        self.command_input.setFont(QFont("IBM Plex Mono", self.font_size))
+        self.console.setFont(QFont("Fio Mono", self.font_size))
+        self.command_input.setFont(QFont("Fio Mono", self.font_size))
         self._refresh_console()
 
     # ------------------------------------------------------------------
