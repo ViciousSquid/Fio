@@ -51,10 +51,23 @@ SURFACE_PROGRAMS = ('lit', 'textured', 'lit_instanced', 'textured_instanced',
 #: Sampler uniform -> unit, set once per program (a sampler2DShadow left on
 #: unit 0 beside the diffuse sampler2D is an invalid program state).
 TERRAIN_NORMAL_UNIT = 23       # .. 26: the terrain layers' normal maps
+LIGHT_GRID_UNIT = 27
+
+#: Forward+ (clustered forward shading, as Filament and Bevy do it): the
+#: frame's lamps are binned on the CPU into a grid of clusters
+#: (environment._env_light_grid) and a fragment loops over its cluster's
+#: lamps only. The clusters are boxes of the world, not of the view --
+#: LIGHT_GRID_CELLS square over the floor plan, LIGHT_GRID_LAYERS high -- so
+#: the lists change when the lamps do, not whenever the camera moves. A
+#: cluster lists at most LIGHT_GRID_DEPTH lamps (as indices into the light
+#: block, 255 ending the list).
+LIGHT_GRID_CELLS = 32
+LIGHT_GRID_LAYERS = 4
+LIGHT_GRID_DEPTH = 32
 SURFACE_SAMPLERS = (('uSunShadow', SUN_SHADOW_UNIT), ('uEnvMap', ENV_MAP_UNIT),
                     ('uNormalMap', NORMAL_MAP_UNIT),
                     ('uMaterialMap', MATERIAL_MAP_UNIT), ('uNoise', NOISE_UNIT),
-                    ('uSkyCover', SKY_COVER_UNIT))
+                    ('uSkyCover', SKY_COVER_UNIT), ('uLightGrid', LIGHT_GRID_UNIT))
 
 #: Value noise and the cloud layer, shared by the sky and by the cloud
 #: shadows the surfaces receive, so a shadow on the ground is under the cloud
@@ -155,6 +168,9 @@ uniform vec4 uEnvParams2;          // x the environment map is a probe's whole s
 uniform highp mat4 uSkyMatrix;     // world -> the sky cover map's clip space (looking straight down)
 uniform highp sampler2DShadow uSkyCover;
 uniform vec4 uSkyCoverParams;      // x filter radius (uv), y depth bias, z on, w normal offset (world)
+uniform highp usampler2D uLightGrid;   // Forward+: row = cluster, column k = the cluster's k-th lamp (255: no more)
+uniform vec4 uLightGridParams;     // x, z of the grid's corner, 1 / cell size, 1 while the grid is in use
+uniform vec2 uLightGridHeight;     // y of the grid's bottom, 1 / layer height
 uniform vec3 uHazeColor;
 uniform vec4 uHdrFog;              // the map's distance fog colour, in the frame's units; a 1 while it is on
 layout(location = 1) out vec4 FragData;
@@ -310,7 +326,28 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
             result += fioLight(n, v, fioSunDir, diffuse, f0, rough, fioSunColor) * lit
                     * mix(1.0, occlusion, 0.5);
     }
-    for (int i = 0; i < active_lights && i < FIO_MAX_LIGHTS; i++) {
+    // Forward+: with the light grid in use, only the lamps that reach this
+    // fragment's cell; otherwise every lamp of the frame, as classic does.
+    int fioLamps = active_lights < FIO_MAX_LIGHTS ? active_lights : FIO_MAX_LIGHTS;
+    bool fioGrid = uLightGridParams.w > 0.5;
+    int fioRow = 0;
+    if (fioGrid) {
+        highp vec2 cell = (FragPos.xz - uLightGridParams.xy) * uLightGridParams.z;
+        highp float layer = (FragPos.y - uLightGridHeight.x) * uLightGridHeight.y;
+        if (cell.x < 0.0 || cell.y < 0.0 || layer < 0.0 || cell.x >= FIO_GRID_CELLS.0
+                || cell.y >= FIO_GRID_CELLS.0 || layer >= FIO_GRID_LAYERS.0) {
+            fioLamps = 0;                   // beyond every lamp's reach
+        } else {
+            fioRow = (int(layer) * FIO_GRID_CELLS + int(cell.y)) * FIO_GRID_CELLS + int(cell.x);
+            fioLamps = FIO_GRID_DEPTH;
+        }
+    }
+    for (int k = 0; k < fioLamps; k++) {
+        int i = k;
+        if (fioGrid) {
+            i = int(texelFetch(uLightGrid, ivec2(k, fioRow), 0).r);
+            if (i >= active_lights) break;  // the end of the cell's list (255)
+        }
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distSq   = dot(toLight, toLight);
         highp float radiusSq = lights[i].radius * lights[i].radius;
@@ -527,8 +564,15 @@ def terrain_source(source):
     body = (head + SURFACE_GLSL
             + _TERRAIN_MAIN.replace('FIO_TERRAIN_COLOUR', colour)
             + "void fioLegacyMain() {" + source[main.end():]
-            + SURFACE_SHADE_GLSL.replace('FIO_MAX_LIGHTS', lights.group(1)))
+            + _shade_glsl(lights.group(1)))
     return _OUT_RE.sub("layout(location = 0) out vec4 FragColor;", body, count=1)
+
+
+def _shade_glsl(max_lights):
+    return (SURFACE_SHADE_GLSL.replace('FIO_MAX_LIGHTS', str(max_lights))
+            .replace('FIO_GRID_CELLS', str(LIGHT_GRID_CELLS))
+            .replace('FIO_GRID_LAYERS', str(LIGHT_GRID_LAYERS))
+            .replace('FIO_GRID_DEPTH', str(LIGHT_GRID_DEPTH)))
 
 
 _MAIN_RE = re.compile(r"void\s+main\s*\(\s*(?:void)?\s*\)\s*\{")
@@ -570,5 +614,5 @@ def surface_source(source):
     # fioLegacyMain) and fioShade -- the two functions with a light loop.
     body = (source[:main.start()] + SURFACE_GLSL + new_main
             + "void fioLegacyMain() {" + source[main.end():]
-            + SURFACE_SHADE_GLSL.replace('FIO_MAX_LIGHTS', lights.group(1)))
+            + _shade_glsl(lights.group(1)))
     return _OUT_RE.sub("layout(location = 0) out vec4 FragColor;", body, count=1)

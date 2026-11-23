@@ -437,6 +437,15 @@ class EnvironmentMixin:
         self._env_sun_dir = (0.0, 1.0, 0.0)
         self._env_sun_rgb = (1.0, 1.0, 1.0)
         self._env_anisotropy = None
+        # Forward+: the light grid (see _env_light_grid).
+        self._env_grid_tex = 0
+        self._env_grid_key = None
+        self._env_grid_params = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        self._env_grid_sent = {}
+        #: For the benchmark: grids built, whether one is in use, and the
+        #: lamps a cell lists (mean over the cells any lamp reaches, largest).
+        self.light_grid_stats = {'builds': 0, 'on': False, 'lamps': 0,
+                                 'mean_per_cell': 0.0, 'max_per_cell': 0}
         #: How many textures had their maps made at load (no files beside them).
         self.material_stats = {'generated': 0}
         #: GL diffuse texture -> (normal map, material map, parallax,
@@ -1742,6 +1751,7 @@ class EnvironmentMixin:
                            (env.wind[0] * t / cloud_size) % 256.0,
                            (env.wind[1] * t / cloud_size) % 256.0)
         self._env_surface_state[shader_name] = (mode, frame, self._env_frame)
+        self._env_light_grid(shader_name, uniforms)
         if shader_name in self._env_surface_default:
             # A model's own roughness and metalness, from its last draw.
             gl.glUniform4f(uniforms['uSurfaceDefault'], env.roughness, env.metalness, 0.0, 0.0)
@@ -1751,6 +1761,108 @@ class EnvironmentMixin:
         if self._env_material_bound.get(shader_name) is not None:
             gl.glUniform4f(uniforms['uMaterial'], 0.0, 0.0, 0.0, 0.0)
             self._env_material_bound[shader_name] = None
+
+    #: Forward+ pays when there are enough lamps that most of them cannot
+    #: reach a given fragment; under this many a fragment simply tests each.
+    FORWARD_PLUS_MIN_LIGHTS = 12
+
+    def _env_light_grid(self, shader_name, uniforms):
+        """Forward+ for the bound surface program: bring the light grid up
+        to date with the lamps now in the light block and tell the program
+        whether to use it.
+
+        The lamps (their place and reach, as just uploaded to the block)
+        are binned on the CPU into clusters -- boxes of the world, a grid
+        over the floor plan in a few layers of height: each lists the lamps
+        whose reach touches it, and a fragment loops over its cluster's
+        list instead of over every lamp in the frame. The
+        grid is rebuilt only when the block's lamps change, and is left out
+        where it would not pay: few lamps, or a cell more lamps reach than
+        a list holds (the plain loop then, which is always right)."""
+        location = uniforms['uLightGridParams']
+        if location == -1:
+            return
+        count = int(getattr(self, '_light_ubo_count', 0) or 0)
+        key = self._light_ubo_key
+        params = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        if count >= self.FORWARD_PLUS_MIN_LIGHTS and key:
+            if key != self._env_grid_key:
+                self._env_grid_key = key
+                self._env_grid_params = self._env_build_light_grid(count)
+            params = self._env_grid_params
+        if self._env_grid_sent.get(shader_name) != params:
+            gl.glUniform4f(location, *params[:4])
+            gl.glUniform2f(uniforms['uLightGridHeight'], params[4], params[5])
+            self._env_grid_sent[shader_name] = params
+        self.light_grid_stats['on'] = params[3] > 0.5
+
+    @staticmethod
+    def light_grid(positions, radii):
+        """Bin lamps (``(n, 3)`` positions, ``(n,)`` radii) into clusters:
+        ``(table, corner (x, y, z), cell size, layer height)``, or None when
+        a cluster is reached by more lamps than a list holds. *table* is
+        ``(layers * cells * cells, depth)`` uint8: each row a cluster's lamp
+        indices in ascending order, 255 after the last; a cluster's row is
+        ``(layer * cells + z) * cells + x``. Pure numpy; no GL."""
+        cells, layers = surface.LIGHT_GRID_CELLS, surface.LIGHT_GRID_LAYERS
+        depth = surface.LIGHT_GRID_DEPTH
+        positions = np.asarray(positions, dtype=np.float64)
+        radii = np.asarray(radii, dtype=np.float64)
+        low = (positions - radii[:, None]).min(axis=0)
+        high = (positions + radii[:, None]).max(axis=0)
+        # Square cells over the floor plan; the far edges fall inside.
+        size = max(high[0] - low[0], high[2] - low[2], 1.0) / cells * 1.0001
+        height = max(high[1] - low[1], 1.0) / layers * 1.0001
+
+        def touches(axis, count, step):
+            # A lamp reaches a slab when its box of reach overlaps it.
+            edges = np.arange(count + 1) * step + low[axis]
+            return ((edges[None, 1:] > (positions[:, axis] - radii)[:, None])
+                    & (edges[None, :-1] < (positions[:, axis] + radii)[:, None]))
+
+        reach = (touches(1, layers, height)[:, :, None, None]
+                 & touches(2, cells, size)[:, None, :, None]
+                 & touches(0, cells, size)[:, None, None, :])      # (lamp, y, z, x)
+        if int(reach.sum(axis=0).max()) > depth:
+            return None
+        table = np.full((layers * cells * cells, depth), 255, dtype=np.uint8)
+        lamp, y, z, x = np.nonzero(reach)
+        row = (y * cells + z) * cells + x
+        order = np.lexsort((lamp, row))
+        row, lamp = row[order], lamp[order]
+        starts = np.searchsorted(row, row, side='left')
+        table[row, np.arange(len(row)) - starts] = lamp
+        return table, (float(low[0]), float(low[1]), float(low[2])), size, height
+
+    def _env_build_light_grid(self, count):
+        """The grid for the first *count* lamps of the light block, as a
+        texture; returns the program's uLightGridParams."""
+        data = self._light_ubo_data[:count]
+        stats = self.light_grid_stats
+        stats['lamps'] = count
+        built = self.light_grid(data['position'][:, :3], data['params'][:, 1]) \
+            if count <= 255 else None
+        if built is None:
+            return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        table, corner, size, height = built
+        listed = (table != 255).sum(axis=1)
+        stats['builds'] += 1
+        stats['max_per_cell'] = int(listed.max())
+        stats['mean_per_cell'] = float(listed[listed > 0].mean()) if listed.any() else 0.0
+        if not self._env_grid_tex:
+            self._env_grid_tex = int(gl.glGenTextures(1))
+        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.LIGHT_GRID_UNIT)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_grid_tex)
+        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_R8UI, table.shape[1], table.shape[0], 0,
+                        gl.GL_RED_INTEGER, gl.GL_UNSIGNED_BYTE, table.tobytes())
+        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+        for name in (gl.GL_TEXTURE_MIN_FILTER, gl.GL_TEXTURE_MAG_FILTER):
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, name, gl.GL_NEAREST)
+        for name in (gl.GL_TEXTURE_WRAP_S, gl.GL_TEXTURE_WRAP_T):
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, name, gl.GL_CLAMP_TO_EDGE)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        return (corner[0], corner[2], 1.0 / size, 1.0, corner[1], 1.0 / height)
 
     def _bind_terrain_layers(self, terrain_gl):
         """The terrain layers' normal maps (the companions of its sand,
@@ -1971,7 +2083,11 @@ class EnvironmentMixin:
         self._cleanup_postfx()
         textures = [t for t in (self._env_shadow_tex, self._env_shadow_static_tex,
                                 self._env_noise_tex, self._env_map,
-                                self._env_reflect_map, self._env_cover_tex) if t]
+                                self._env_reflect_map, self._env_cover_tex,
+                                self._env_grid_tex) if t]
+        self._env_grid_tex = 0
+        self._env_grid_key = None
+        self._env_grid_sent = {}
         for maps in self._material_maps.values():
             if maps:
                 textures += [maps[0], maps[1]]

@@ -288,3 +288,106 @@ def test_a_texture_without_maps_gets_them_made_and_kept(monkeypatch, tmp_path):
     assert again.maps(name, wait=True) is not None
     assert [os.path.getmtime(cache / n) for n in made] == stamps
     del asset_bytes
+
+
+# -- Forward+ ---------------------------------------------------------------
+
+def _lamp_field(count):
+    """A wide floor under a grid of *count* small lamps."""
+    from editor.things import Light
+    from tests.helpers.worlds import box_brush, make_thing
+    side = int(np.ceil(np.sqrt(count)))
+    lamps = []
+    for index in range(count):
+        x = (index % side - (side - 1) / 2.0) * 420.0
+        z = (index // side - (side - 1) / 2.0) * 420.0
+        lamps.append(make_thing(
+            Light, "lamp%d" % index, (x, 140.0, z),
+            color=[255, 220 - (index * 37) % 120, 160 + (index * 53) % 90],
+            intensity=1.5, radius=520.0, state="on", casts_shadows=False))
+    return [box_brush("floor", (0, -16, 0), (4096, 32, 4096)),
+            box_brush("post", (40, 64, 60), (96, 128, 96))], lamps
+
+
+def test_the_light_grid_lists_exactly_the_lamps_that_reach_each_cluster():
+    from engine.renderer.hd_high import surface
+    from engine.renderer.hd_high.environment import EnvironmentMixin
+    rng = np.random.default_rng(11)
+    positions = rng.uniform(-3000.0, 3000.0, (40, 3))
+    positions[:, 1] = rng.uniform(0.0, 1600.0, 40)          # several storeys
+    radii = rng.uniform(150.0, 900.0, 40)
+    table, corner, size, height = EnvironmentMixin.light_grid(positions, radii)
+    cells, layers = surface.LIGHT_GRID_CELLS, surface.LIGHT_GRID_LAYERS
+    depth = surface.LIGHT_GRID_DEPTH
+    assert table.shape == (layers * cells * cells, depth) and table.dtype == np.uint8
+    steps = (size, height, size)
+    for row in range(layers * cells * cells):
+        listed = [int(i) for i in table[row] if i != 255]
+        assert listed == sorted(listed)
+        index = (row % cells, row // (cells * cells), (row // cells) % cells)   # x, y, z
+        box = [(corner[a] + index[a] * steps[a], corner[a] + (index[a] + 1) * steps[a])
+               for a in range(3)]
+        expected = [i for i in range(40) if all(
+            positions[i, a] + radii[i] > box[a][0] and positions[i, a] - radii[i] < box[a][1]
+            for a in range(3))]
+        assert listed == expected, row
+    # Every point a lamp can light lies in a cluster that lists the lamp.
+    for i in range(40):
+        for offset in ((0, 0, 0), (0.99, 0, 0), (-0.99, 0, 0), (0, 0.99, 0), (0, -0.99, 0),
+                       (0, 0, 0.99), (0, 0, -0.99)):
+            point = positions[i] + np.array(offset) * radii[i]
+            x, y, z = (int((point[a] - corner[a]) / steps[a]) for a in range(3))
+            assert i in table[(y * cells + z) * cells + x]
+    # Lamps on different storeys do not share a cluster.
+    stacked = np.array([[0.0, 0.0, 0.0], [0.0, 2000.0, 0.0]])
+    table, corner, size, height = EnvironmentMixin.light_grid(stacked, np.array([200.0, 200.0]))
+    assert not ((table == 0).any(axis=1) & (table == 1).any(axis=1)).any()
+    # More lamps on one spot than a list holds: no grid (the plain loop).
+    crowd = np.zeros((depth + 1, 3))
+    assert EnvironmentMixin.light_grid(crowd, np.full(depth + 1, 100.0)) is None
+
+
+def test_forward_plus_draws_the_picture_the_plain_loop_draws():
+    """Many lamps: the grid is in use, most lamps are skipped per fragment,
+    and not a pixel is lit differently from testing every lamp."""
+    brushes, lamps = _lamp_field(36)
+    pictures = {}
+    for label, minimum in (("grid", None), ("loop", 10 ** 6)):
+        glh.reset_texture_cache()
+        with glh.GLTestContext(200, 120) as context:
+            renderer = glh.make_renderer(_config(), name="HD_High")
+            try:
+                if minimum is not None:
+                    renderer.FORWARD_PLUS_MIN_LIGHTS = minimum
+                # No film grain: it moves with the clock.
+                from engine import hd_graphics
+                renderer.set_hd_sky(hd_graphics.sky_settings({"hd_grain": 0.0}, ""))
+                pictures[label] = _frame(context, renderer, brushes, lamps, aspect=200 / 120,
+                                         eye=(300.0, 520.0, 1500.0), target=(0.0, 0.0, 0.0))
+                stats = dict(renderer.light_grid_stats)
+            finally:
+                renderer.cleanup()
+        if label == "grid":
+            assert stats["on"] and stats["builds"] == 1 and stats["lamps"] == 36
+            assert stats["max_per_cell"] < 36 and stats["mean_per_cell"] < 12
+        else:
+            assert not stats["on"] and stats["builds"] == 0
+    glh.reset_texture_cache()
+    difference = np.abs(pictures["grid"].astype(np.int16)
+                        - pictures["loop"].astype(np.int16)).max()
+    assert not glh.is_blank(pictures["grid"])
+    assert difference <= 1, difference
+
+
+def test_a_few_lamps_do_not_build_a_grid():
+    brushes, lamps = _lamp_field(4)
+    glh.reset_texture_cache()
+    with glh.GLTestContext(96, 64) as context:
+        renderer = glh.make_renderer(_config(), name="HD_High")
+        try:
+            _frame(context, renderer, brushes, lamps, aspect=1.5)
+            assert not renderer.light_grid_stats["on"]
+            assert renderer.light_grid_stats["builds"] == 0 and renderer._env_grid_tex == 0
+        finally:
+            renderer.cleanup()
+    glh.reset_texture_cache()
