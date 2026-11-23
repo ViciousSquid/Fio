@@ -32,55 +32,38 @@ import re
 
 import numpy as np
 
+from engine import hd_graphics
+
 #: Uniform block binding point of ``FioHdr`` (the light block uses 0).
 HDR_BLOCK_BINDING = 3
 
 #: Display white is held a little under the curve's asymptote, where the
 #: inverse runs away: a white sprite stays white to within a few counts and
 #: does not turn into a light source for the bloom.
-_DISPLAY_CEILING = 0.92
-
-_ACES_IN = np.array([[0.59719, 0.35458, 0.04823],
-                     [0.07600, 0.90834, 0.01566],
-                     [0.02840, 0.13383, 0.83777]])
-_ACES_OUT = np.array([[1.60475, -0.53108, -0.07367],
-                      [-0.10208, 1.10813, -0.00605],
-                      [-0.00327, -0.07276, 1.07602]])
-
-
-def _glsl_mat3(matrix):
-    """Row-major numpy 3x3 as a GLSL (column-major) constructor."""
-    columns = np.asarray(matrix, dtype=np.float64).T.reshape(-1)
-    return "mat3(" + ", ".join("%.8f" % v for v in columns) + ")"
-
+_DISPLAY_CEILING = 0.97
 
 CLASSIC_GLSL = """
 // ---- classic programs in an HD frame (engine/renderer/hd_high/hdr.py) ----
 layout(std140) uniform FioHdr {
     vec4 fioHdr;       // x 1 in an HD frame, y 1 / base exposure, z base exposure, w unused
 };
-const mat3 FIO_ACES_IN = %(aces_in)s;
-const mat3 FIO_ACES_OUT = %(aces_out)s;
-const mat3 FIO_ACES_IN_INV = %(aces_in_inv)s;
-const mat3 FIO_ACES_OUT_INV = %(aces_out_inv)s;
+const float FIO_TONE_WHITE2 = %(white2).4f;
+// The compose pass's tone curve (extended Reinhard), per channel.
+vec3 fioTone(vec3 x) {
+    return clamp(x * (1.0 + x / FIO_TONE_WHITE2) / (1.0 + x), 0.0, 1.0);
+}
 // Display colour -> the gamma-encoded scene value the compose pass's tone
-// curve (ACES, at the base exposure) brings back to that colour.
+// curve (at the base exposure) brings back to that colour.
 vec3 fioDisplayToScene(vec3 c) {
-    vec3 y = FIO_ACES_OUT_INV * min(pow(max(c, vec3(0.0)), vec3(2.2)), vec3(%(ceiling).2f));
-    y = clamp(y, vec3(0.0), vec3(0.985));
-    vec3 a = vec3(1.0) - 0.983729 * y;
-    vec3 b = vec3(0.0245786) - 0.4329510 * y;
-    vec3 k = -(vec3(0.000090537) + 0.238081 * y);
-    vec3 v = (-b + sqrt(max(b * b - 4.0 * a * k, vec3(0.0)))) / (2.0 * a);
-    return pow(max(FIO_ACES_IN_INV * v, vec3(0.0)) * fioHdr.y, vec3(1.0 / 2.2));
+    vec3 f = min(pow(max(c, vec3(0.0)), vec3(2.2)), vec3(%(ceiling).2f));
+    vec3 b = vec3(1.0) - f;
+    vec3 x = (-b + sqrt(b * b + 4.0 * f / FIO_TONE_WHITE2)) * (FIO_TONE_WHITE2 * 0.5);
+    return pow(max(x, vec3(0.0)) * fioHdr.y, vec3(1.0 / 2.2));
 }
 // The reverse: a value read from the HD frame as the display colour it
 // will be shown as.
 vec3 fioSceneToDisplay(vec3 c) {
-    vec3 v = FIO_ACES_IN * (pow(max(c, vec3(0.0)), vec3(2.2)) * fioHdr.z);
-    vec3 a = v * (v + 0.0245786) - 0.000090537;
-    vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
-    return pow(clamp(FIO_ACES_OUT * (a / b), 0.0, 1.0), vec3(1.0 / 2.2));
+    return pow(fioTone(pow(max(c, vec3(0.0)), vec3(2.2)) * fioHdr.z), vec3(1.0 / 2.2));
 }
 vec4 fioSceneTex(sampler2D s, vec2 uv) {
     vec4 c = texture(s, uv);
@@ -90,10 +73,7 @@ vec4 fioSceneTexLod(sampler2D s, vec2 uv, float lod) {
     vec4 c = textureLod(s, uv, lod);
     return fioHdr.x > 0.5 ? vec4(fioSceneToDisplay(c.rgb), c.a) : c;
 }
-""" % dict(aces_in=_glsl_mat3(_ACES_IN), aces_out=_glsl_mat3(_ACES_OUT),
-           aces_in_inv=_glsl_mat3(np.linalg.inv(_ACES_IN)),
-           aces_out_inv=_glsl_mat3(np.linalg.inv(_ACES_OUT)),
-           ceiling=_DISPLAY_CEILING)
+""" % dict(white2=hd_graphics.TONE_WHITE ** 2, ceiling=_DISPLAY_CEILING)
 
 _MAIN_RE = re.compile(r"void\s+main\s*\(\s*(?:void)?\s*\)\s*\{")
 _OUT_RE = re.compile(r"^\s*(?:layout\s*\([^)]*\)\s*)?out\s+vec4\s+(\w+)\s*;", re.MULTILINE)
@@ -107,16 +87,14 @@ SCENE_SAMPLERS = ("sceneColor",)
 def display_to_scene(colour, base_exposure):
     """:data:`CLASSIC_GLSL`'s ``fioDisplayToScene`` on the CPU, returning
     *linear* scene rgb (for a colour handed to a surface program as a
-    uniform: fog, a flat environment)."""
-    c = np.minimum(np.clip(np.asarray(colour, dtype=np.float64), 0.0, None) ** 2.2,
+    uniform: fog, the clear colour)."""
+    white2 = hd_graphics.TONE_WHITE ** 2
+    f = np.minimum(np.clip(np.asarray(colour, dtype=np.float64), 0.0, None) ** 2.2,
                    _DISPLAY_CEILING)
-    y = np.clip(np.linalg.inv(_ACES_OUT) @ c, 0.0, 0.985)
-    a = 1.0 - 0.983729 * y
-    b = 0.0245786 - 0.4329510 * y
-    k = -(0.000090537 + 0.238081 * y)
-    v = (-b + np.sqrt(np.maximum(b * b - 4.0 * a * k, 0.0))) / (2.0 * a)
-    scene = np.clip(np.linalg.inv(_ACES_IN) @ v, 0.0, None) / max(float(base_exposure), 1e-6)
-    return tuple(float(x) for x in scene)
+    b = 1.0 - f
+    x = (-b + np.sqrt(b * b + 4.0 * f / white2)) * (white2 * 0.5)
+    scene = np.clip(x, 0.0, None) / max(float(base_exposure), 1e-6)
+    return tuple(float(v) for v in scene)
 
 
 def classic_source(source):

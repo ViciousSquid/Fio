@@ -342,6 +342,14 @@ def settings_key(settings):
 #: any gain gives the same frame; it only sets lamps against sun, sky and
 #: emissive surfaces.
 POINT_LIGHT_GAIN = 3.0
+#: A panorama is a display picture: its brightest cloud is 1. As a light it
+#: stands for daylight, which is far brighter than any lamp, so its linear
+#: colour is multiplied by this: an overcast panorama then lights an open
+#: floor about as strongly as a lamp at full level lights the wall beside
+#: it, a clear one more so, and a night sky hardly at all. Seen from a
+#: lamp-lit room the open part of the map is bright, and the exposure comes
+#: down as the view walks out into it.
+PANORAMA_SKY_GAIN = 8.0
 #: Emissive surfaces glow at this many times their colour, so that they stay
 #: brighter than the lit surfaces around them and feed the bloom.
 EMISSIVE_GAIN = 5.0
@@ -428,13 +436,21 @@ def luminance(colour):
     return 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2]
 
 
-def aces(x):
-    """The compose pass's tone curve (Hill's ACES fit) for a grey input."""
-    # A grey goes through the fit's two matrices unchanged to within a
-    # percent (their rows sum to ~1); the curve between them is what matters.
-    a = x * (x + 0.0245786) - 0.000090537
-    b = x * (0.983729 * x + 0.4329510) + 0.238081
-    return max(0.0, min(1.0, a / b))
+#: White point of the tone curve: the scene value that reaches display white.
+TONE_WHITE = 4.0
+
+
+def tone(x):
+    """The compose pass's tone curve (extended Reinhard) for one channel.
+
+    Levitate finished its frames with an ACES fit, whose toe pulls dark
+    values down hard. Fio's maps are lit low on purpose -- most of a
+    corridor sits in that toe -- and came out far darker than the classic
+    renderer shows them. This curve is a straight line through the shadows
+    and mid-tones (a dark wall stays as dark as it was lit, no darker) and
+    only rolls the highlights off toward :data:`TONE_WHITE`."""
+    x = max(0.0, float(x))
+    return min(1.0, x * (1.0 + x / (TONE_WHITE * TONE_WHITE)) / (1.0 + x))
 
 
 def scene_value_for(display_linear):
@@ -442,7 +458,7 @@ def scene_value_for(display_linear):
     low, high = 0.0, 64.0
     for _ in range(60):
         middle = (low + high) * 0.5
-        if aces(middle) < display_linear:
+        if tone(middle) < display_linear:
             low = middle
         else:
             high = middle

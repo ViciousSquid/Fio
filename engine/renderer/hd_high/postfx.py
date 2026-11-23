@@ -316,7 +316,7 @@ void main() {
 }
 """
 
-#: Bloom, shafts, exposure, ACES tone mapping, grade, vignette and grain;
+#: Bloom, shafts, exposure, tone mapping, grade, vignette and grain;
 #: display-encoded, with luma in alpha for the anti-aliasing pass.
 COMPOSE_FRAG = """#version 330 core
 precision highp float;
@@ -331,24 +331,18 @@ uniform vec4 uParams2;     // vignette, grain, shafts on, time
 uniform vec3 uTint;
 uniform vec3 uSunColor;
 """ + surface.ENV_GLSL + """
-vec3 fioAces(vec3 colour) {
-    const mat3 inputMat = mat3(0.59719, 0.07600, 0.02840,
-                               0.35458, 0.90834, 0.13383,
-                               0.04823, 0.01566, 0.83777);
-    const mat3 outputMat = mat3(1.60475, -0.10208, -0.00327,
-                                -0.53108, 1.10813, -0.07276,
-                                -0.07367, -0.00605, 1.07602);
-    vec3 v = inputMat * colour;
-    vec3 a = v * (v + 0.0245786) - 0.000090537;
-    vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
-    return clamp(outputMat * (a / b), 0.0, 1.0);
+// Extended Reinhard: straight through the shadows and mid-tones, rolling
+// off toward white (hd_graphics.tone; hdr.py inverts it for the classic
+// programs).
+vec3 fioTone(vec3 x) {
+    return clamp(x * (1.0 + x / 16.0000) / (1.0 + x), 0.0, 1.0);
 }
 void main() {
     vec3 colour = fioToLinear(textureLod(uColor, vUV, 0.0).rgb);
     colour += textureLod(uBloom, vUV, 0.0).rgb * uParams.y;
     if (uParams2.z > 0.5) colour += uSunColor * textureLod(uShafts, vUV, 0.0).r;
     colour *= uTint * uParams.x;
-    colour = fioAces(colour);
+    colour = fioTone(colour);
     // Grade on the display-referred image: contrast about mid grey, then
     // saturation about luma.
     colour = pow(colour, vec3(1.0 / 2.2));

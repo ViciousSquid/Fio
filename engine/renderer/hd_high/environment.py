@@ -752,13 +752,11 @@ class EnvironmentMixin:
         self._env_openness_frame += 1
         if self._env_openness is None or self._env_openness_frame >= self.OPENNESS_EVERY:
             self._env_openness_frame = 0
-            self._env_openness_target = self._env_sky_share(
-                config, self._camera_xyz(camera_pos))
-            if os.environ.get('FIO_HD_DEBUG'):
-                t = config.get('render_table'); sl = config.get('all_brush_slots')
-                print("[HD] share", self._env_openness_target, self._camera_xyz(camera_pos),
-                      None if sl is None else len(sl),
-                      len(self._kept_shadow_casters(t, sl)))
+            share = self._env_sky_share(config, self._camera_xyz(camera_pos))
+            if share is None:
+                # Nothing to stand under yet (the map is still arriving).
+                return 1.0 if self._env_openness is None else self._env_openness
+            self._env_openness_target = share
         if self._env_openness is None or self._env_openness_time is None:
             self._env_openness = self._env_openness_target      # a new view: at once
         else:
@@ -772,11 +770,12 @@ class EnvironmentMixin:
 
     def _env_sky_share(self, config, origin):
         """The share of :data:`_OPENNESS_RAYS` from *origin* that no
-        shadow-casting brush's box stands in the way of."""
+        shadow-casting brush's box stands in the way of; None while there
+        are no brushes at all to tell by."""
         table = config.get('render_table')
         all_slots = config.get('all_brush_slots')
-        if table is None or all_slots is None:
-            return 1.0
+        if table is None or all_slots is None or not len(all_slots):
+            return None
         casters = self._kept_shadow_casters(table, all_slots)
         if not len(casters):
             return 1.0
@@ -987,11 +986,12 @@ class EnvironmentMixin:
         if mode == hd_graphics.SKY_PROCEDURAL and changed:
             self._env_measure_procedural()
         elif mode == hd_graphics.SKY_PANORAMA:
-            gain = float(env.sky_intensity) * float(env.ambient_intensity)
+            sky_gain = float(env.sky_intensity) * hd_graphics.PANORAMA_SKY_GAIN
+            gain = sky_gain * float(env.ambient_intensity)
             up, side, down, _mean = self._env_panorama_light
             self._env_ambient = tuple(tuple(c * gain for c in colour)
                                       for colour in (up, side, down))
-            self._env_ground = tuple(c * float(env.sky_intensity) for c in down)
+            self._env_ground = tuple(c * sky_gain for c in down)
         elif mode == hd_graphics.SKY_NONE:
             # No sky light at all; what a reflection finds where it finds
             # nothing else is a dim grey of the map's own light.
@@ -1025,8 +1025,9 @@ class EnvironmentMixin:
                 program = self._env_program('sky', FULLSCREEN_VERT, SKY_FRAG)
                 gl.glUseProgram(program.id)
                 if mode == hd_graphics.SKY_PANORAMA:
-                    self._env_image_uniforms(program, panorama, float(env.sky_intensity),
-                                             flip=False)
+                    self._env_image_uniforms(
+                        program, panorama,
+                        float(env.sky_intensity) * hd_graphics.PANORAMA_SKY_GAIN, flip=False)
                 else:
                     self._env_sky_uniforms(program, 1, camera)
                 self._env_fullscreen()

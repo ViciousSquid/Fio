@@ -284,6 +284,12 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
     highp float eyeDist = length(toEye);
     vec3 v = toEye / max(eyeDist, 1e-4);
     rough = clamp(rough, 0.04, 1.0);
+    // A normal map finer than the pixels would sparkle under a lamp: widen
+    // the highlight by how much the normal varies across the pixel.
+    vec3 nx = dFdx(n);
+    vec3 ny = dFdy(n);
+    float spread = min(2.0 * 0.25 * (dot(nx, nx) + dot(ny, ny)), 0.36);
+    rough = sqrt(clamp(rough * rough + spread, 0.0, 1.0));
     vec3 f0 = mix(vec3(0.04), albedo, metal);
     vec3 diffuse = albedo * (1.0 - metal);
     float nov = max(dot(n, v), 1e-3);
