@@ -300,6 +300,8 @@ def test_the_host_swaps_classic_and_hd_high_live(fio_session):
     session = fio_session(level_data(brushes=room(size=2048.0, height=512.0) + [crate],
                                      things=[spawn, lamp]))
     session.view.sysmon.set_active(False)
+    # Whichever renderer the shipped settings start with: from Classic.
+    assert session.view.switch_renderer("Forward")
     session.publish()
     session.paint()
     before = session.paint()
