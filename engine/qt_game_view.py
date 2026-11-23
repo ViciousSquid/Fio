@@ -81,6 +81,7 @@ from .view_terrain_edit import ViewTerrainEdit
 from .view_components import ViewComponents
 from .view_picking import ViewPicking
 from .view_gizmo import ViewGizmo
+from . import view_light_volumes
 from .view_debug_draw import ViewDebugDraw
 from .terrain_frame import frustum_planes
 from .overlay_geometry import (
@@ -1777,6 +1778,8 @@ class QtGameView(QOpenGLWidget):
             )
 
         if not self.play_mode:
+            # Light volumes: their boxes and light sources (no sprite).
+            view_light_volumes.paint(self, painter)
             # Over the scene, under the floating windows: never hidden in
             # the object it moves.
             self.gizmo.paint(painter)

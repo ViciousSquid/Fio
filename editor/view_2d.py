@@ -9,7 +9,8 @@ from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor import model_wireframe
 from editor.things import (Thing, Light, PlayerStart, Speaker, ReflectionProbe, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
-                          LogicCamera, LogicSpawner, Portal, LogicState, Effect, Shake)
+                          LogicCamera, LogicSpawner, Portal, LogicState, Effect, Shake,
+                          LightVolume)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
 from engine import brush_placement
 from engine.constants import brush_aabb_bounds, PLAYER_HULL_SIZE
@@ -2585,6 +2586,10 @@ class View2D(QWidget):
             # Skip hidden things
             if self._hidden(thing):
                 continue
+            # A light volume has no icon: draw_light_volumes draws its box
+            # and its light source.
+            if isinstance(thing, LightVolume):
+                continue
             
             # CULL thing if not visible
             if not self.is_thing_visible(thing, visible_bounds, axis1_idx, axis2_idx):
@@ -3408,7 +3413,14 @@ class View2D(QWidget):
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(rect)
+            su, sv = lvh.source_point(thing, i1, i2)
+            source = self.world_to_screen(QPointF(su, sv))
+            radius = self.LIGHT_SOURCE_MARKER_PIXELS / 2.0
             if thing is not selected:
+                # The light source is what there is to click on.
+                painter.setPen(QPen(colour, 1))
+                painter.setBrush(QBrush(QColor(r, g, b, 90)))
+                painter.drawEllipse(source, radius * 0.75, radius * 0.75)
                 continue
             painter.setPen(QPen(QColor(255, 255, 255), 1))
             painter.setBrush(QBrush(QColor(255, 255, 255)))
@@ -3417,13 +3429,10 @@ class View2D(QWidget):
                 at = self.world_to_screen(QPointF(u, v))
                 painter.drawRect(QRectF(at.x() - size / 2, at.y() - size / 2, size, size))
             centre = self.world_to_screen(QPointF((u0 + u1) / 2.0, (v0 + v1) / 2.0))
-            su, sv = lvh.source_point(thing, i1, i2)
-            source = self.world_to_screen(QPointF(su, sv))
             painter.setPen(QPen(QColor(255, 220, 0), 1, Qt.DotLine))
             painter.drawLine(centre, source)
             painter.setPen(QPen(QColor(0, 0, 0), 1))
             painter.setBrush(QBrush(QColor(255, 220, 0)))
-            radius = self.LIGHT_SOURCE_MARKER_PIXELS / 2.0
             painter.drawEllipse(source, radius, radius)
             painter.drawLine(QPointF(source.x() - radius, source.y()),
                              QPointF(source.x() + radius, source.y()))
@@ -3432,17 +3441,36 @@ class View2D(QWidget):
 
     #: The light-source marker's size on screen, pixels.
     LIGHT_SOURCE_MARKER_PIXELS = 12
+    #: How near (pixels) a click must be to a light volume's outline.
+    LIGHT_VOLUME_PICK_PIXELS = 6
 
-    #: How far (pixels) the light source must be from the volume's icon for
-    #: a plain drag to take it; nearer, a plain drag moves the volume as any
-    #: entity's icon does, and Alt+drag takes the source.
-    LIGHT_SOURCE_ICON_CLEARANCE = 16
+    def _light_volume_hit_test(self, volume, screen_pos):
+        """Whether a click at *screen_pos* is on a light volume's outline
+        or its light-source marker in this view."""
+        from editor import light_volume_handles as lvh
+        idx = self._axis_indices()
+        if idx is None:
+            return False
+        i1, i2, _ = idx
+        su, sv = lvh.source_point(volume, i1, i2)
+        source = self.world_to_screen(QPointF(su, sv))
+        if (abs(source.x() - screen_pos.x()) <= self.LIGHT_SOURCE_MARKER_PIXELS * 0.75
+                and abs(source.y() - screen_pos.y()) <= self.LIGHT_SOURCE_MARKER_PIXELS * 0.75):
+            return True
+        u0, v0, u1, v1 = lvh.outline(volume, i1, i2)
+        rect = QRectF(self.world_to_screen(QPointF(u0, v0)),
+                      self.world_to_screen(QPointF(u1, v1))).normalized()
+        pad = self.LIGHT_VOLUME_PICK_PIXELS
+        outer = rect.adjusted(-pad, -pad, pad, pad)
+        inner = rect.adjusted(pad, pad, -pad, -pad)
+        return outer.contains(screen_pos) and not (
+            inner.isValid() and inner.contains(screen_pos))
+
 
     def _begin_light_volume_drag(self, screen_pos, modifiers=Qt.NoModifier):
         """A press on the selected light volume's source marker or a box
-        handle starts dragging it. The source wins where the two overlap --
-        unless it sits on the volume's icon (its default, at the centre),
-        where a plain drag moves the volume and Alt+drag the source."""
+        handle starts dragging it; the source wins where the two overlap.
+        (A light volume has no icon: what it shows is its box and source.)"""
         from editor import light_volume_handles as lvh
         volume = self._handle_light_volume()
         idx = self._axis_indices()
@@ -3452,15 +3480,8 @@ class View2D(QWidget):
         world = self.screen_to_world(QPointF(screen_pos))
         point = (world.x(), world.y())
         per_pixel = 1.0 / max(self.zoom_factor, 1e-9)
-        su, sv = lvh.source_point(volume, i1, i2)
-        source_screen = self.world_to_screen(QPointF(su, sv))
-        icon_screen = self.world_to_screen(QPointF(volume.pos[i1], volume.pos[i2]))
-        on_icon = ((source_screen - icon_screen).manhattanLength()
-                   < self.LIGHT_SOURCE_ICON_CLEARANCE)
-        take_source = bool(modifiers & Qt.AltModifier) or not on_icon
-        if take_source and lvh.source_at(
-                volume, i1, i2, point,
-                per_pixel * self.LIGHT_SOURCE_MARKER_PIXELS * 0.75):
+        if lvh.source_at(volume, i1, i2, point,
+                         per_pixel * self.LIGHT_SOURCE_MARKER_PIXELS * 0.75):
             self._light_volume_drag = {'volume': volume, 'mode': 'source',
                                        'saved': False}
             return True
@@ -4980,6 +5001,12 @@ class View2D(QWidget):
             # the tiny generic Thing-icon hitbox.
             if isinstance(thing, Portal):
                 is_hit = self._portal_gizmo_hit_test(thing, screen_pos, ax1, ax2)
+            elif isinstance(thing, LightVolume):
+                # Its outline or its light source; never its inside, so a
+                # brush within the box stays clickable.
+                is_hit = self._light_volume_hit_test(thing, screen_pos)
+                if not is_hit:
+                    continue        # not by its centre, as an icon would be
 
             # Standard Thing Hit Test
             elif entity_model_path(thing):

@@ -468,8 +468,16 @@ class ViewGizmo:
             else:
                 pos = np.asarray(obj.pos, dtype=float)
                 things.append((obj, pos, copy.deepcopy(obj.properties.get('scale'))))
-                lo, hi = np.minimum(lo, pos), np.maximum(hi, pos)
-        return {'brushes': brushes, 'things': things, 'extent': hi - lo}
+                if hasattr(obj, 'get_volume_size'):
+                    # A light volume: its box is what scaling resizes.
+                    half = np.asarray(obj.get_volume_size(), dtype=float) / 2
+                    lo, hi = np.minimum(lo, pos - half), np.maximum(hi, pos + half)
+                else:
+                    lo, hi = np.minimum(lo, pos), np.maximum(hi, pos)
+        sizes = {id(obj): list(obj.get_volume_size())
+                 for obj, _, _ in things if hasattr(obj, 'get_volume_size')}
+        return {'brushes': brushes, 'things': things, 'extent': hi - lo,
+                'volume_sizes': sizes}
 
     def _drag_scale(self, drag, x, y):
         cx, cy = drag['centre0_px']
@@ -492,7 +500,7 @@ class ViewGizmo:
         for k in axes:
             fk = f
             extent = float(snapshot['extent'][k])
-            if snap_on and snapshot['brushes'] and extent > 1e-6:
+            if snap_on and (snapshot['brushes'] or snapshot['volume_sizes']) and extent > 1e-6:
                 # Brushes stay on the grid: the selection's size along each
                 # scaled axis becomes a whole number of grid squares.
                 fk = max(grid, tg.snap(extent * f, grid)) / extent
@@ -522,6 +530,11 @@ class ViewGizmo:
         for obj, pos0, scale0 in snapshot['things']:
             obj.pos = (pivot + (pos0 - pivot) * f).tolist()
             props = obj.properties
+            if hasattr(obj, 'get_volume_size'):
+                size0 = snapshot['volume_sizes'][id(obj)]
+                props['volume_size'] = [max(obj.MIN_SIZE, size0[k] * float(f[k])) for k in range(3)]
+                touch(obj)
+                continue
             if props.get('model_path') and scale0 is not None:
                 local = tg.local_scale_factors(props.get('rotation') or (0, 0, 0), f)
                 if isinstance(scale0, (int, float)) and len(set(local)) == 1:
@@ -765,6 +778,9 @@ class ViewGizmo:
         """A dragged entity's box: a model's own bounds, turned and scaled
         as it is drawn; a small cube for anything else."""
         from engine.logic_collision import model_basis
+        if hasattr(thing, 'get_bounds') and hasattr(thing, 'get_volume_size'):
+            from engine.view_light_volumes import box_edges
+            return box_edges(thing)                 # a light volume: its box
         props = thing.properties
         pos = np.asarray(thing.pos, dtype=float)
         lo, hi = np.full(3, -8.0), np.full(3, 8.0)
@@ -873,7 +889,8 @@ def _snapshot(objects):
         else:
             props = obj.properties
             out.append((obj, (list(obj.pos), {k: copy.deepcopy(props[k])
-                                              for k in ('rotation', 'angle', 'scale')
+                                              for k in ('rotation', 'angle', 'scale',
+                                                        'volume_size', 'source_offset')
                                               if k in props})))
     return out
 

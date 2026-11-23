@@ -163,6 +163,18 @@ class ViewPicking:
         for thing in self.view.editor.state.things:
             if not component_edit.is_selectable(thing) or filters.hides_thing(thing):
                 continue
+            if hasattr(thing, 'get_source_position') and hasattr(thing, 'get_bounds'):
+                # A light volume is picked by its light-source marker, never
+                # by the inside of its box (what is in the box stays
+                # clickable).
+                from . import view_light_volumes
+                if view_light_volumes.source_hit(self.view, thing, mx, my):
+                    to_source = glm.vec3(*thing.get_source_position()) - ray_o
+                    t = max(0.0, glm.dot(to_source, ray_d) / glm.dot(ray_d, ray_d))
+                    hits.append((t, thing))
+                    if t < best_t:
+                        best_t, best_obj = t, thing
+                continue
             if getattr(thing, 'editor_model_bounds', None):
                 from engine.entity_models import editor_model_ray_distance
                 t = editor_model_ray_distance(thing, ray_o, ray_d)

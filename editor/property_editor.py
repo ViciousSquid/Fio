@@ -24,7 +24,8 @@ from engine.prop_entity import (MODEL_PRESETS, OIL_BARREL_VARIANTS, oil_barrel_v
                                  normalise_collect_type)
 from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
-                           LogicState, PlayerStart, LevelChanger, Decal, Shake)
+                           LogicState, PlayerStart, LevelChanger, Decal, Shake,
+                           LightVolume)
 from editor.terrain_selection import TerrainHandle
 from engine import player_starts as start_rules
 from editor import state_values as _sv
@@ -4645,7 +4646,7 @@ class PropertyEditor(QWidget):
                 continue
 
             # Light state.
-            if isinstance(thing, Light) and key == 'state':
+            if isinstance(thing, (Light, LightVolume)) and key == 'state':
                 cb = _make_checkbox(
                     "Enabled",
                     bool(value),
@@ -4697,7 +4698,7 @@ class PropertyEditor(QWidget):
 
             # Light shadow-map size: 0 is the renderer's ([Renderer]
             # shadow_map_size), shown as "Default".
-            if isinstance(thing, Light) and key == 'shadow_map_size':
+            if isinstance(thing, (Light, LightVolume)) and key == 'shadow_map_size':
                 spin = QSpinBox()
                 spin.setRange(0, 4096)
                 spin.setSingleStep(128)
@@ -4718,7 +4719,7 @@ class PropertyEditor(QWidget):
                 continue
 
             # Light shadow filter: edge softness and acne bias.
-            if isinstance(thing, Light) and key in ('shadow_softness', 'shadow_bias'):
+            if isinstance(thing, (Light, LightVolume)) and key in ('shadow_softness', 'shadow_bias'):
                 from engine.constants import SHADOW_BIAS_DEFAULT, SHADOW_SOFTNESS_DEFAULT
                 softness = key == 'shadow_softness'
                 default = SHADOW_SOFTNESS_DEFAULT if softness else SHADOW_BIAS_DEFAULT
@@ -4743,6 +4744,21 @@ class PropertyEditor(QWidget):
                     lambda v, k=key: self.update_object_prop(k, v)
                 )
                 form.addRow(QLabel("Shadow Softness:" if softness else "Shadow Bias:"), spin)
+                continue
+
+            # A light volume's box and light source: X, Y, Z fields.
+            if isinstance(thing, LightVolume) and key in ('volume_size', 'source_offset'):
+                current = (thing.get_volume_size() if key == 'volume_size'
+                           else thing.get_source_offset())
+                row, _inputs = self._vec3_row(
+                    [round(v, 3) for v in current],
+                    lambda v, k=key: self.update_object_prop(k, [float(c) for c in v]))
+                row.setToolTip(
+                    "The box that is lit: its width, height and depth, centred on\n"
+                    "the entity's position." if key == 'volume_size' else
+                    "Where the light (and its shadows) come from, relative to the\n"
+                    "box's centre. It may be outside the box.")
+                form.addRow(QLabel("Volume Size:" if key == 'volume_size' else "Light Source:"), row)
                 continue
 
             # Speaker sound file.

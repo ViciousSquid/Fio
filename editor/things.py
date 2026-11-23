@@ -639,8 +639,10 @@ class LightVolume(Thing):
                     As a Light's.
     casts_shadows, shadow_map_size, shadow_softness, shadow_bias
                     As a Light's, cast from the light source.
+
+    It has no icon: the views show its box and its light source.
     """
-    pixmap_path = "assets/sprites/light.png"
+    pixmap_path = None
     EDITOR_PRIMARY_PROPERTIES = (
         'volume_size',
         'source_offset',
