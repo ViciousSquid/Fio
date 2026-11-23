@@ -32,7 +32,7 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 from engine import hd_graphics
 from engine.constants import RENDER_MODE_LIT
 from engine.renderer.core.uniform_rows import uniform_rows
-from engine.renderer.forward import hdr, surface
+from engine.renderer.hd_high import hdr, surface
 
 ENV_MAP_SIZE = (512, 256)
 #: Frames between redraws of a procedural sky's environment map while its
@@ -341,18 +341,17 @@ def _set_anisotropy(amount):
 
 
 class EnvironmentMixin:
-    """ForwardRenderer's sun, sky and physically shaded surfaces."""
+    """HDHighRenderer's sun, sky and physically shaded surfaces."""
 
-    def _init_environment(self, tier=hd_graphics.LOW):
-        """State only: no GL object is made and no file is read here. With
-        *tier* ``low`` this is all of the HD renderer that ever runs."""
-        #: ``[Renderer] graphics`` as this renderer was built with it.
-        self.graphics = hd_graphics.normalise_tier(tier)
-        #: Whether the HD renderer is compiled in (any tier but ``low``).
-        #: Every hook in the frame tests this, or ``_env_active``, first.
-        self.hd = self.graphics != hd_graphics.LOW
-        #: False draws the editor view classically in an HD renderer (the
-        #: View menu's "HD preview"); Play always draws HD.
+    def _init_environment(self, tier=hd_graphics.HD_HIGH_QUALITY):
+        """State only: no GL object is made and no file is read here."""
+        #: The quality preset in use (hd_graphics.PRESETS).
+        self.graphics = hd_graphics.normalise_quality(tier)
+        #: This is the HD renderer (the host asks: a classic renderer has
+        #: no such attribute).
+        self.hd = True
+        #: False draws the editor view with the legacy shading this renderer
+        #: still carries (the View menu's "HD preview"); Play always draws HD.
         self.hd_preview = True
         #: The map's HD sky (hd_graphics.sky_settings), set by the host.
         self._hd_sky = hd_graphics.sky_settings({}, "")
@@ -506,19 +505,15 @@ class EnvironmentMixin:
     # The map's sky and the quality tier
     # ------------------------------------------------------------------
     def set_graphics(self, tier):
-        """Switch between HD tiers; applies to the next frame. Returns
-        whether the change could be made live: going to or from ``low``
-        needs a new renderer (the shaders are compiled with or without the
-        HD path)."""
-        tier = hd_graphics.normalise_tier(tier)
-        if (tier == hd_graphics.LOW) != (not self.hd):
+        """Switch quality preset (medium / high / ultra); applies to the
+        next frame. Returns whether *tier* names one."""
+        if str(tier or "").strip().lower() not in hd_graphics.PRESETS:
             return False
-        self.graphics = tier
+        self.graphics = hd_graphics.normalise_quality(tier)
         return True
 
     def set_hd_sky(self, settings):
-        """The map's HD sky: ``hd_graphics.sky_settings(...)``. Kept at low
-        too, where nothing reads it."""
+        """The map's HD sky: ``hd_graphics.sky_settings(...)``."""
         if settings is not None:
             self._hd_sky = settings
 

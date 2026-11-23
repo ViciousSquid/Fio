@@ -1,8 +1,8 @@
 """Golden frames of the stock maps, and the lit programs' final sources.
 
-The renderer's ``graphics = low`` tier is, by contract, the renderer Fio had
-before the HD tiers existed: the same pixels and the same shaders. This module
-draws what that contract is checked against:
+The Classic renderer (``engine/renderer/forward``) is, by contract, the
+renderer Fio had before HD_High existed beside it: the same pixels from the
+same shaders. This module draws what that contract is checked against:
 
 * :func:`capture_frames` -- each map in :data:`MAPS`, loaded by the real
   editor (``FioTestSession``: ``MainWindow``, the logic thread's projection,
@@ -14,7 +14,7 @@ draws what that contract is checked against:
   driver (``glGetShaderSource``), so a rewrite anywhere on the way is seen.
 
 ``tools/hd_golden.py`` stores both under ``tests/visual/golden/`` and
-``tests/visual/test_golden_low.py`` compares against them. Rasterisers differ
+``tests/visual/test_classic_golden.py`` compares against them. Rasterisers differ
 in their last bit, so the stored frames are only compared on the driver that
 drew them (the manifest names it); ``tools/hd_golden.py --base`` compares two
 checkouts on whatever driver is present.
@@ -66,13 +66,14 @@ def _default_camera(state):
             -120.0, -25.0)
 
 
-def capture_frames(app, names=None, size=SIZE, graphics=None, sky=None):
+def capture_frames(app, names=None, size=SIZE, renderer=None, sky=None):
     """``{"<map>/<shot>": (h, w, 3) uint8}`` for each map in *names* (default
     all of :data:`MAPS`). Needs a display with OpenGL.
 
-    *graphics* draws with that ``[Renderer] graphics`` tier in place of the
-    shipped default (low); *sky* (a dict of ``hd_*`` properties) is put on
-    each map's primary PlayerStart first -- for looking at the HD tiers, not
+    *renderer* starts the editor with that renderer (``"HD_High"``) in place
+    of the shipped default (Classic); *sky* (a dict of ``hd_*`` properties)
+    is put on each map's primary PlayerStart first -- for looking at
+    HD_High, not
     for the stored set."""
     import glm
     import numpy as np
@@ -104,7 +105,7 @@ def capture_frames(app, names=None, size=SIZE, graphics=None, sky=None):
             random.seed(1234)
             np.random.seed(1234)
             settings = None
-            if graphics:
+            if renderer:
                 # The editor reads its settings when the window is built.
                 import configparser
                 import tempfile
@@ -117,7 +118,7 @@ def capture_frames(app, names=None, size=SIZE, graphics=None, sky=None):
                 parser.read(settings)
                 if not parser.has_section("Renderer"):
                     parser.add_section("Renderer")
-                parser.set("Renderer", "graphics", graphics)
+                parser.set("Renderer", "renderer", renderer)
                 parser.set("Renderer", "lowpower_mode", "False")
                 with open(settings, "w") as out:
                     parser.write(out)
@@ -224,3 +225,26 @@ def driver_name():
         value = gl.glGetString(enum)
         return value.decode("utf-8", "replace") if value else "?"
     return "%s | %s" % (text(gl.GL_RENDERER), text(gl.GL_VERSION))
+
+
+#: The Classic renderer's source: its own package and the shared
+#: infrastructure it is built on.
+CLASSIC_SOURCE_DIRS = ("engine/renderer/forward", "engine/renderer/core")
+CLASSIC_SOURCE_FILES = ("engine/shaders.py",)
+
+
+def classic_source_digests():
+    """``{repo-relative path: sha256}`` of every Python file Classic is made
+    of (line endings normalised, so a checkout's setting does not matter)."""
+    digests = {}
+    paths = list(CLASSIC_SOURCE_FILES)
+    for directory in CLASSIC_SOURCE_DIRS:
+        for folder, _dirs, files in os.walk(os.path.join(REPO_ROOT, directory)):
+            for name in files:
+                if name.endswith(".py"):
+                    paths.append(os.path.relpath(os.path.join(folder, name), REPO_ROOT))
+    for path in sorted(p.replace(os.sep, "/") for p in paths):
+        with open(os.path.join(REPO_ROOT, path), "rb") as handle:
+            text = handle.read().replace(b"\r\n", b"\n")
+        digests[path] = hashlib.sha256(text).hexdigest()
+    return digests

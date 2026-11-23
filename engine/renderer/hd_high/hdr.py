@@ -55,7 +55,7 @@ def _glsl_mat3(matrix):
 
 
 CLASSIC_GLSL = """
-// ---- classic programs in an HD frame (engine/renderer/forward/hdr.py) ----
+// ---- classic programs in an HD frame (engine/renderer/hd_high/hdr.py) ----
 layout(std140) uniform FioHdr {
     vec4 fioHdr;       // x 1 in an HD frame, y 1 / base exposure, z base exposure, w unused
 };

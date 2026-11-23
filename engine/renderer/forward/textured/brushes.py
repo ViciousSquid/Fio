@@ -161,8 +161,6 @@ class TexturedMixin:
                     gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                     current_tex = tex_id
                     self.render_stats.batched_draws += 1
-                    if self._env_active:
-                        self._bind_material_maps('textured', tex_id)
                 row = int(rows[i])
                 if row != last_row:
                     upload_model(model_loc, row)
@@ -317,8 +315,6 @@ class TexturedMixin:
         faces, adjacent meshes in a page -- become one. The loop then binds a
         texture or a page when it changes and issues the group's single draw.
         """
-        if self._env_active:
-            current_tex = None      # this program has its own material state
         store = self._geo_store()
         arena = self._geo_runs()
         unique_handles, first_face = np.unique(handles, return_index=True)
@@ -361,8 +357,6 @@ class TexturedMixin:
             if tex_id != current_tex:
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 current_tex = tex_id
-                if self._env_active:
-                    self._bind_material_maps('geo_batched', tex_id)
             vao = group_vao[group]
             if vao != bound_vao:
                 gl.glBindVertexArray(vao)
@@ -395,8 +389,6 @@ class TexturedMixin:
         uniforms are uploaded from the arena's columns before its draw. Every
         value is read by index from columns; nothing is resolved here.
         """
-        if self._env_active:
-            current_tex = None      # this program has its own material state
         arena = self._geo_runs()
         first = arena.first[runs]
         count = arena.count[runs]
@@ -443,9 +435,6 @@ class TexturedMixin:
             if tex_id != current_tex:
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 current_tex = tex_id
-                if self._env_active:
-                    self._bind_material_maps(
-                        'geo_textured' if per_vertex else 'textured', tex_id)
             vao = group_vao[group]
             if vao != bound_vao:
                 gl.glBindVertexArray(vao)

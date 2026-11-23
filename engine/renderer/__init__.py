@@ -20,7 +20,7 @@ from .api import (
     contract_compatible, missing_members)
 from .registry import (
     RendererContractError, RendererInitError, DEFAULT_RENDERER, available_renderers, create_renderer, register_renderer,
-    renderer_factory)
+    renderer_factory, canonical_name)
 
 __all__ = [
     'Renderer', 'RENDERER_CONTRACT_VERSION', 'RENDERER_CONTRACT_VERSION_INFO',
@@ -28,5 +28,5 @@ __all__ = [
     'RendererInitError', 'RenderStats', 'SelectionOverlay', 'EffectBillboard',
     'FRAME_INPUT', 'WATER_QUALITIES',
     'DEFAULT_RENDERER', 'register_renderer', 'create_renderer',
-    'available_renderers', 'renderer_factory',
+    'available_renderers', 'renderer_factory', 'canonical_name',
 ]

@@ -679,14 +679,14 @@ class Ui_MainWindow(object):
         
         view_menu.addSeparator()
 
-        # Draw the editor's 3D view as the HD tiers draw Play, so the
-        # PlayerStart's HD Sky can be tuned in place. Only in an HD tier.
+        # Draw the editor's 3D view as HD_High draws Play, so the
+        # PlayerStart's HD Sky can be tuned in place. Only with HD_High.
         MainWindow.action_hd_preview = QAction('HD preview', MainWindow)
         MainWindow.action_hd_preview.setCheckable(True)
         MainWindow.action_hd_preview.setChecked(True)
         MainWindow.action_hd_preview.setToolTip(
-            'Draw the 3D view with the HD renderer (Settings > Display > Graphics: '
-            'Medium, High or Ultra). Play mode always follows the setting.')
+            'With the HD_High renderer (Settings > Display > Renderer): draw the '
+            'editor\'s 3D view in HD. Play mode is always drawn in HD.')
         MainWindow.action_hd_preview.triggered.connect(MainWindow.set_hd_preview)
         view_menu.addAction(MainWindow.action_hd_preview)
 

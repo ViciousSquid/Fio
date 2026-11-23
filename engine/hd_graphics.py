@@ -1,49 +1,84 @@
-"""Graphics quality tiers and a map's HD sky: plain data, no OpenGL.
+"""Which renderer draws Fio, and a map's HD sky: plain data, no OpenGL.
 
-``[Renderer] graphics`` in settings.ini picks a tier:
+Fio has two renderers, both reached through the renderer registry
+(``engine.renderer``) and swapped live:
 
-* ``low`` (the default) is classic Fio. None of the HD renderer runs: no
-  shader is rewritten, no HDR, shadow or environment target is made, no
-  companion texture is looked for.
-* ``medium``, ``high`` and ``ultra`` draw Lit frames with the HD renderer
-  (engine/renderer/forward/environment.py, surface.py, postfx.py); what each
-  switches on is :data:`PRESETS`, one table, so it is easy to retune.
+* **Classic** -- the original forward renderer (registry name ``Forward``).
+  The default. It knows nothing of anything in this module.
+* **HD_High** -- a separate renderer (``engine/renderer/hd_high``):
+  physically based surfaces, a sun and sky, HDR post-processing.
 
-Going between ``low`` and an HD tier needs a restart (the lit shaders are
-compiled once, with or without the physically based path); going between HD
-tiers applies to the next frame.
+``[Renderer] renderer`` in settings.ini names the one the editor starts with
+(:func:`renderer_from`); low-power ARM mode always starts Classic.
 
-What an HD frame looks like is map data: the ``hd_*`` properties of the
+What an HD_High frame looks like is map data: the ``hd_*`` properties of the
 map's primary PlayerStart (:data:`FIELDS`), resolved with the rules of its
 ``sky_image`` (the primary wins; a legacy value on another start is
 recovered; an edit clears the others). :func:`sky_settings` turns those
 properties into validated settings and :func:`apply` writes them, with a
-tier's preset, onto a renderer's ``Environment``.
+quality preset (:data:`PRESETS`), onto HD_High's ``Environment``. Classic
+keeps the properties with the map and never reads them.
 
 The frame's exposure is not authored. :func:`base_exposure` derives it from
-the light the map's sky, sun, ambient and lamps put on a typical surface, so
-that such a surface lands on mid grey; the PlayerStart's exposure
-compensation (in EV) is applied on top.
+the light the map's sky, sun, ambient and lamps put on a typical surface;
+the PlayerStart's exposure compensation (in EV) is applied on top.
 """
 
 from __future__ import annotations
 
 import math
 
-LOW = "low"
-TIERS = ("low", "medium", "high", "ultra")
-DEFAULT_TIER = LOW
-TIER_LABELS = {
-    "low": "Classic (the original Fio renderer)",
-    "medium": "Medium (HD: sun shadows, AO, bloom, FXAA)",
-    "high": "High (HD: + reflections, parallax, sun shafts, cloud shadows)",
-    "ultra": "Ultra (HD: everything, 4096 shadows)",
+#: The two renderers, by the names people use, and their registry names.
+CLASSIC = "Classic"
+HD_HIGH = "HD_High"
+RENDERERS = (CLASSIC, HD_HIGH)
+REGISTRY_NAME = {CLASSIC: "Forward", HD_HIGH: "HD_High"}
+RENDERER_LABELS = {
+    CLASSIC: "Classic (the original Fio renderer)",
+    HD_HIGH: "HD_High (physically based: sun, sky, HDR post-processing)",
 }
+DEFAULT_RENDERER = CLASSIC
 
-#: What each HD tier turns on. ``shadow_size`` is the sun's shadow map; the
-#: other numbers scale (0 switches off) the map's own value of that effect.
-#: ``ao_taps`` and ``ssr_steps`` are the sample counts of the ambient
-#: occlusion and reflection passes.
+
+def normalise_renderer(value, default=DEFAULT_RENDERER):
+    """``Classic`` or ``HD_High`` from a setting's text (any case; the
+    registry name ``Forward`` is Classic)."""
+    text = str(value or "").strip().lower().replace("-", "_")
+    if text in ("classic", "forward"):
+        return CLASSIC
+    if text in ("hd_high", "hd", "hdhigh"):
+        return HD_HIGH
+    return default
+
+
+def renderer_from(config, *, lowpower=False):
+    """The renderer ``[Renderer] renderer`` asks for. Low-power ARM mode
+    keeps its own reduced shaders, which HD_High cannot use: Classic."""
+    if lowpower or config is None:
+        return CLASSIC
+    try:
+        value = config.get("Renderer", "renderer", fallback=DEFAULT_RENDERER)
+    except Exception:
+        value = DEFAULT_RENDERER
+    return normalise_renderer(value)
+
+
+def display_name(registry_name):
+    """What a person calls the renderer registered as *registry_name*."""
+    for name, key in REGISTRY_NAME.items():
+        if key == registry_name or name == registry_name:
+            return name
+    return str(registry_name)
+
+
+#: HD_High's quality presets. ``high`` is the renderer as named; the others
+#: exist to measure against (tools/bench_hd.py) and to try on a slower or
+#: faster machine (the ``r_hdquality`` console command). ``shadow_size`` is
+#: the sun's shadow map; the other numbers scale (0 switches off) the map's
+#: own value of that effect; ``ao_taps`` and ``ssr_steps`` are the sample
+#: counts of the ambient occlusion and reflection passes.
+QUALITIES = ("medium", "high", "ultra")
+HD_HIGH_QUALITY = "high"
 PRESETS = {
     "medium": dict(shadow_size=1024, ambient_occlusion=1.0, bloom=1.0, fxaa=True,
                    reflections=False, parallax=0.0, sun_shafts=0.0, cloud_shadows=0.0,
@@ -57,29 +92,9 @@ PRESETS = {
 }
 
 
-def normalise_tier(value, default=DEFAULT_TIER):
-    """A tier name from a setting's text. ``classic`` is ``low``: HD off is
-    called Classic everywhere a person reads it."""
+def normalise_quality(value, default=HD_HIGH_QUALITY):
     value = str(value or "").strip().lower()
-    if value == "classic":
-        return LOW
-    return value if value in TIERS else default
-
-
-def tier_from(config, *, lowpower=False):
-    """The ``[Renderer] graphics`` tier of a ConfigParser (or None). Low-power
-    ARM mode keeps its own reduced shaders, so it is always ``low``."""
-    if lowpower or config is None:
-        return LOW
-    try:
-        value = config.get("Renderer", "graphics", fallback=DEFAULT_TIER)
-    except Exception:
-        value = DEFAULT_TIER
-    return normalise_tier(value)
-
-
-def is_hd(tier):
-    return normalise_tier(tier) != LOW
+    return value if value in PRESETS else default
 
 
 # ---------------------------------------------------------------------------
@@ -332,15 +347,11 @@ POINT_LIGHT_GAIN = 3.0
 EMISSIVE_GAIN = 5.0
 
 
-def apply(environment, settings, tier):
-    """Write *settings* (from :func:`sky_settings`) at quality *tier* onto a
-    renderer's ``Environment``. One assignment per field, so a frame in
+def apply(environment, settings, tier=HD_HIGH_QUALITY):
+    """Write *settings* (from :func:`sky_settings`) at quality preset *tier* onto
+    HD_High's ``Environment``. One assignment per field, so a frame in
     progress never sees half a look. Returns whether the environment is on."""
-    tier = normalise_tier(tier)
-    preset = PRESETS.get(tier)
-    if preset is None:
-        environment.enabled = False
-        return False
+    preset = PRESETS[normalise_quality(tier)]
     sky = settings["sky"]
     sun = bool(settings["sun"]) and sky != SKY_NONE
     procedural = sky == SKY_PROCEDURAL

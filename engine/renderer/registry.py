@@ -25,12 +25,26 @@ class RendererInitError(RuntimeError):
     included). The original exception is its ``__cause__``. Not a verdict
     on the contract."""
 
-#: The renderer the host starts with.
+#: The renderer the host starts with: Fio's original forward renderer, the
+#: one people call Classic.
 DEFAULT_RENDERER = "Forward"
+
+#: Other names a renderer answers to. "Classic" is what the forward renderer
+#: has been called since there was a second one.
+ALIASES = {"Classic": "Forward"}
 
 _factories = {
     "Forward": "engine.renderer.forward:ForwardRenderer",
+    # A separate renderer of its own package: physically based surfaces, a
+    # sun and sky, HDR post-processing (engine/renderer/hd_high).
+    "HD_High": "engine.renderer.hd_high:HDHighRenderer",
 }
+
+
+def canonical_name(name):
+    """The registry key *name* stands for (an alias resolved; anything else
+    as given)."""
+    return ALIASES.get(name, name)
 
 
 def register_renderer(name, factory):
@@ -46,6 +60,7 @@ def available_renderers():
 
 def renderer_factory(name):
     """The factory registered under *name*, or None."""
+    name = canonical_name(name)
     factory = _factories.get(name)
     if isinstance(factory, str):
         module_name, _, attr = factory.partition(':')
@@ -68,6 +83,7 @@ def create_renderer(name=DEFAULT_RENDERER, config=None):
     an object that does not satisfy the contract.
     """
     from .api import contract_compatible, missing_members
+    name = canonical_name(name)
     if name not in _factories:
         raise KeyError(f"no renderer registered as {name!r}")
     try:

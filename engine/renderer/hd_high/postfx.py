@@ -27,8 +27,8 @@ import OpenGL.GL as gl
 from OpenGL.raw.GL.VERSION.GL_1_1 import glTexImage2D as _raw_tex_image
 
 from engine import hd_graphics
-from engine.renderer.forward import surface
-from engine.renderer.forward.environment import FULLSCREEN_VERT, _Program
+from engine.renderer.hd_high import surface
+from engine.renderer.hd_high.environment import FULLSCREEN_VERT, _Program
 
 BLOOM_LEVELS = 6
 
@@ -436,7 +436,7 @@ def _framebuffer(*colours, depth_stencil=0):
 
 
 class PostFXMixin:
-    """ForwardRenderer's HDR target and post-processing chain."""
+    """HDHighRenderer's HDR target and post-processing chain."""
 
     #: Where the benchmark's timestamps are taken in an HD frame, in order.
     HD_MARKS = ('begin', 'sun shadows', 'scene', 'ambient occlusion', 'reflections',

@@ -1,10 +1,10 @@
-"""Visual tier: ``graphics = low`` is classic Fio, pixel for pixel.
+"""Visual tier: Classic draws what it always drew, pixel for pixel.
 
 The stored frames and fragment sources under ``tests/visual/golden/`` were
 drawn before any HD renderer code existed (tools/hd_golden.py --update, at the
-commit that added this test). The default tier must still draw exactly them:
-the stock maps from fixed cameras in the editor and in Play, and every
-program's final fragment source as the driver holds it.
+commit that added this test). The Classic renderer -- Fio's default -- must
+still draw exactly them: the stock maps from fixed cameras in the editor and
+in Play, and every program's final fragment source as the driver holds it.
 
 The capture runs in a process of its own (it needs ``PYTHONHASHSEED=0`` and
 the working directory of ``main.py``). Frames are compared on the driver that
@@ -23,7 +23,7 @@ from tests.helpers.paths import REPO_ROOT
 pytestmark = [pytest.mark.gl, pytest.mark.slow]
 
 
-def test_low_draws_the_stored_frames_from_the_stored_shaders():
+def test_classic_draws_the_stored_frames_from_the_stored_shaders():
     environment = dict(os.environ, PYTHONHASHSEED="0")
     environment.pop("QT_QPA_PLATFORM", None)
     result = subprocess.run(

@@ -638,8 +638,23 @@ class QtGameView(QOpenGLWidget):
         gl.glClearColor(*self.view_distance.fog_color, 1.0)
         self._log_gl_context()
         config = self.editor.config
+        # Classic unless settings.ini asks for HD_High ([Renderer] renderer).
+        # A renderer that cannot start here leaves Classic running.
+        wanted = self._configured_renderer(config)
         self._renderer_mode = DEFAULT_RENDERER
-        self.renderer = create_renderer(DEFAULT_RENDERER, config)
+        self.renderer = None
+        if wanted != DEFAULT_RENDERER:
+            try:
+                candidate = create_renderer(wanted, config)
+                if candidate.ready:
+                    self.renderer, self._renderer_mode = candidate, wanted
+                else:
+                    candidate.cleanup()
+            except Exception as exc:
+                print(f"[QtGameView] Renderer '{wanted}' failed to start ({exc}); "
+                      f"using {DEFAULT_RENDERER}.")
+        if self.renderer is None:
+            self.renderer = create_renderer(DEFAULT_RENDERER, config)
         if not self.renderer.ready:
             debug_log("Error", "3D view: the renderer's shaders did not build, so "
                                "the view stays empty; the error is in the "
@@ -2054,6 +2069,20 @@ class QtGameView(QOpenGLWidget):
         """
         if self.renderer:
             self.renderer.view_distance = self.view_distance
+
+    @staticmethod
+    def _configured_renderer(config):
+        """The registry name of the renderer settings.ini asks to start
+        with; Classic (the default renderer) on a low-power machine."""
+        from engine import hd_graphics
+        from engine import shaders as engine_shaders
+        try:
+            is_low_power, _ = engine_shaders.detect_low_power_arm()
+            lowpower = config.getboolean('Renderer', 'lowpower_mode', fallback=is_low_power)
+        except Exception:
+            lowpower = False
+        name = hd_graphics.REGISTRY_NAME[hd_graphics.renderer_from(config, lowpower=lowpower)]
+        return name if name in available_renderers() else DEFAULT_RENDERER
 
     @property
     def renderer_mode(self):

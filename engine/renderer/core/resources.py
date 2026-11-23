@@ -157,14 +157,10 @@ class ModelDrawGroup:
     name. Built by :meth:`ResourcesMixin._model_draw_groups`."""
 
     __slots__ = ('start', 'count', 'indexed', 'alpha', 'colour', 'textured',
-                 'texture', 'emissive', 'surface')
+                 'texture', 'emissive')
 
     def __init__(self, start, count, indexed, alpha, colour, textured, texture,
-                 emissive, surface=None):
-        #: ``(roughness, metalness)`` where the material gives them (a GLB's
-        #: PBR factors, an MTL's ``Pr`` / ``Pm``), for an HD frame; None
-        #: takes the environment's. Never read at ``graphics = low``.
-        self.surface = surface
+                 emissive):
         self.start = start
         self.count = count
         self.indexed = indexed
@@ -736,17 +732,6 @@ class ResourcesMixin:
             texture = material.get('texture')
             colour = material.get('color', [0.8, 0.8, 0.8])
             emissive = material.get('emissive', (0.0, 0.0, 0.0))
-            surface = None
-            if getattr(self, 'hd', False):
-                # HD only: an MTL's Ke is emission there and nowhere else
-                # (obj_loader keeps it apart from a GLB's emissive factor).
-                emissive = material.get('hd_emissive', emissive)
-                if 'roughness' in material or 'metallic' in material:
-                    try:
-                        surface = (float(material.get('roughness', 0.8)),
-                                   float(material.get('metallic', 0.0)))
-                    except (TypeError, ValueError):
-                        surface = None
             resolved.append(ModelDrawGroup(
                 int(group['start']), int(group['count']),
                 bool(group.get('indexed', False)) and has_ebo,
@@ -755,8 +740,7 @@ class ResourcesMixin:
                 bool(texture),
                 int(self._model_texture_id(texture, material, manual=False))
                 if texture else 0,
-                (float(emissive[0]), float(emissive[1]), float(emissive[2])),
-                surface))
+                (float(emissive[0]), float(emissive[1]), float(emissive[2]))))
         # Ink and edge geometry must establish depth before the acrylic
         # surfaces (a stable sort: authored order within each half).
         resolved.sort(key=lambda g: g.alpha < 1.0)

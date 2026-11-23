@@ -3,7 +3,7 @@
 ``lit.frag`` and ``textured.frag`` (engine.shaders) light a surface with a
 Lambert term per point light, in display space. That is the look every Fio
 map was built with, and it stays the default. A renderer whose
-:class:`~engine.renderer.forward.environment.Environment` is switched on
+:class:`~engine.renderer.hd_high.environment.Environment` is switched on
 shades the same surfaces physically instead:
 
 * albedo decoded to linear light, a GGX specular lobe and energy-conserving
@@ -133,7 +133,7 @@ vec3 fioEnvBRDF(vec3 f0, float rough, float nov) {
 """
 
 SURFACE_GLSL = """
-// ---- physically based surfaces (engine/renderer/forward/surface.py) ----
+// ---- physically based surfaces (engine/renderer/hd_high/surface.py) ----
 uniform int uSurfaceMode;          // 0 legacy, 1 opaque phase, 2 blended phase, 3 opaque in a portal's view
 uniform highp vec3 uSunDir;        // toward the sun
 uniform vec3 uSunColor;
@@ -267,6 +267,16 @@ highp vec2 fioParallax(highp vec2 uv, highp vec2 dx, highp vec2 dy, highp vec2 r
     float over = before - (depth - layer);
     return uv - delta * clamp(under / max(under + over, 1e-5), 0.0, 1.0);
 }
+// Light a surface. *src* is the surface's own opacity. Defined below main
+// (SURFACE_SHADE_GLSL): engine.shaders.light_ubo_source rewrites light loops
+// and then writes into main() at the place it found it first, so nothing
+// with a light loop may stand above main.
+void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occlusion,
+              vec3 emission, float src);
+void fioLegacyMain();
+"""
+
+SURFACE_SHADE_GLSL = """
 // Light a surface. *src* is the surface's own opacity.
 void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occlusion,
               vec3 emission, float src) {
@@ -450,8 +460,10 @@ def surface_source(source):
         return source
     new_main = (new_main.replace('FIO_SRC_ALPHA', '(' + opacity + fade + ')')
                 .replace('FIO_SRC_COLOUR', colour))
-    body = (source[:main.start()]
-            + SURFACE_GLSL.replace('FIO_MAX_LIGHTS', lights.group(1))
-            + "void fioLegacyMain() {" + source[main.end():])
-    body = _OUT_RE.sub("layout(location = 0) out vec4 FragColor;", body, count=1)
-    return body + new_main
+    # Above main: the shader's own declarations and helpers, the surface
+    # uniforms and helpers. Below it: the shader's own main (now
+    # fioLegacyMain) and fioShade -- the two functions with a light loop.
+    body = (source[:main.start()] + SURFACE_GLSL + new_main
+            + "void fioLegacyMain() {" + source[main.end():]
+            + SURFACE_SHADE_GLSL.replace('FIO_MAX_LIGHTS', lights.group(1)))
+    return _OUT_RE.sub("layout(location = 0) out vec4 FragColor;", body, count=1)

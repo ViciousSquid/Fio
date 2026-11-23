@@ -2608,7 +2608,6 @@ class MainWindow(QMainWindow):
         old_ui_scale = read_ui_scale_setting(self.config)
         old_font_size = self.config.getint('Display', 'font_size', fallback=10)
         old_show_caulk = self.config.getboolean('Display', 'show_caulk', fallback=True)
-        old_graphics = hd_graphics.tier_from(self.config)
         old_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
         
         # New: Autosave setting check
@@ -2665,8 +2664,7 @@ class MainWindow(QMainWindow):
             if read_ui_scale_setting(self.config) != old_ui_scale:
                 restart_required.append("UI scale")
 
-            if not self.apply_graphics_setting(old_graphics):
-                restart_required.append("Graphics quality (between Low and an HD tier)")
+            self.apply_renderer_setting()
                 
             new_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
             if old_big_toolbar_buttons != new_big_toolbar_buttons:
@@ -2679,26 +2677,24 @@ class MainWindow(QMainWindow):
                     "\n".join(f"• {setting}" for setting in restart_required) +
                     "\n\nPlease restart the application for the changes to take effect.")
 
-    def apply_graphics_setting(self, previous=None):
-        """Bring the 3D view's renderer to ``[Renderer] graphics``.
-
-        Between HD tiers this applies to the next frame. Between Low and an
-        HD tier it cannot: the lit shaders are compiled once, with or
-        without the HD path, so that needs a restart. Returns False in that
-        case (and leaves the renderer as it is)."""
-        wanted = hd_graphics.tier_from(self.config)
-        renderer = getattr(getattr(self, 'view_3d', None), 'renderer', None)
-        if renderer is None or not hasattr(renderer, 'set_graphics'):
-            return previous is None or hd_graphics.is_hd(previous) == hd_graphics.is_hd(wanted)
-        if getattr(renderer, 'lowpower_mode', False):
-            return True         # low-power mode is Low whatever is chosen
-        live = renderer.set_graphics(wanted)
-        self.view_3d.update()
-        return bool(live)
+    def apply_renderer_setting(self):
+        """Bring the 3D view to the renderer ``[Renderer] renderer`` names:
+        Classic or HD_High. Fio swaps renderers while it runs, in the editor
+        and in Play (QtGameView.switch_renderer), so nothing needs a
+        restart. Returns whether the wanted renderer is the active one."""
+        view = getattr(self, 'view_3d', None)
+        if view is None or getattr(view, 'renderer', None) is None:
+            return False
+        lowpower = bool(getattr(view.renderer, 'lowpower_mode', False))
+        wanted = hd_graphics.REGISTRY_NAME[
+            hd_graphics.renderer_from(self.config, lowpower=lowpower)]
+        if view.renderer_mode == wanted:
+            return True
+        return bool(view.switch_renderer(wanted))
 
     def set_hd_preview(self, shown):
-        """View > HD preview: draw the editor's 3D view with the HD renderer
-        (an HD tier only; Play mode always follows the setting)."""
+        """View > HD preview: whether HD_High draws the editor's 3D view in
+        HD (Play always is). Nothing to the classic renderer."""
         self.view_3d.hd_preview = bool(shown)
         self.view_3d.update()
 

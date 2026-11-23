@@ -43,8 +43,6 @@ from .solid_lit import SolidLitMixin
 from .wireframe import WireframeMixin
 from .overlay import OverlayMixin
 from .shaders import ShadersMixin
-from .environment import EnvironmentMixin
-from .postfx import PostFXMixin
 
 
 
@@ -65,8 +63,7 @@ def _forget_dead_tables(kept, ref_index):
 
 class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
                       PassesMixin, LightingMixin, PortalsMixin, InstancingMixin, DecalsMixin,
-                      OcclusionMixin, ShadersMixin, EnvironmentMixin, PostFXMixin,
-                      RendererCore):
+                      OcclusionMixin, ShadersMixin, RendererCore):
     """Fio's forward OpenGL 3.3 renderer, registered as ``"Forward"``.
 
     *config* is the application ConfigParser (or None). *texture_loader*
@@ -339,17 +336,8 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._portal_rim_proj_loc = None
         self._portal_rim_view_loc = None
         self._portal_rim_color_loc = None
-        # The HD renderer ([Renderer] graphics; engine/hd_graphics.py). At
-        # ``low`` this sets a few attributes and nothing else of it ever
-        # runs: the shaders below compile from the sources they always had.
-        from engine import hd_graphics
-        self._init_environment(hd_graphics.tier_from(settings, lowpower=self.lowpower_mode))
-        if self.hd:
-            self._install_surface_shading()
         # Compile common shaders (simple, sprite, depth_cube, water, glass, fog, terrain)
         self._compile_common_shaders()
-        if self.hd and not self._shader_init_failed:
-            self._configure_surface_programs()
 
         # EXPLOSION keeps its dedicated effect shader. FIRE is a plain animated
         # texture and is rendered through the normal instanced sprite shader.
@@ -491,10 +479,6 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
             gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
             self._background_cube_texture = self._build_sky_cube(texture)
             self._background_image_texture = texture
-            if self.hd:
-                # The sky light of an HD panorama sky, measured here on the
-                # CPU from the decoded image (nothing is read back later).
-                self._env_measure_panorama(rgba)
             return True
         except Exception as exc:
             if texture:
@@ -772,14 +756,10 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
             from OpenGL.GL.shaders import compileProgram, compileShader
             vertex = compileShader(
                 shaders.DEFAULT_SHADERS["void_background.vert"], gl.GL_VERTEX_SHADER)
-            background_source = shaders.DEFAULT_SHADERS["void_background.frag"]
-            if self.hd:
-                background_source = self._hd_fragment_source(background_source)
-            fragment = compileShader(background_source, gl.GL_FRAGMENT_SHADER)
+            fragment = compileShader(
+                shaders.DEFAULT_SHADERS["void_background.frag"], gl.GL_FRAGMENT_SHADER)
             self._background_image_program = compileProgram(
                 vertex, fragment, validate=False)
-            if self.hd:
-                self._hd_program_ready(self._background_image_program)
             self._background_image_vao = int(gl.glGenVertexArrays(1))
             program = self._background_image_program
             self._background_image_uniforms = (
@@ -858,11 +838,6 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         """
         if not self._probe_capture_pass and not self._portal_scene_pass:
             self._update_reflection_probes(config)
-        # An HD frame is drawn into an HDR target (postfx.py) and finished
-        # into the view's own framebuffer at the end. Never at low.
-        environment = (self.hd
-                       and self._env_wanted(config, config.get('render_mode', RENDER_MODE_LIT))
-                       and self._env_begin(config, camera_pos))
         if not self._portal_scene_pass:
             # The view's viewport and read framebuffer, asked once: the
             # passes read these instead of asking again. A portal view
@@ -897,18 +872,13 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
             look or current_mode not in (RENDER_MODE_LIT, RENDER_MODE_UNLIT)
             or (config.get('play_mode', False) and self._portal_gl_ready
                 and len(getattr(portal_table, 'portal_slots', ()))))
-        # A procedural HD sky is this renderer's own (environment.py); any
-        # other frame draws the panorama where and as it always has.
-        procedural_sky = environment and self._env_draws_sky()
-        if not sky_behind and not procedural_sky:
+        if not sky_behind:
             self._draw_background_image(projection, view)
         self._proj_ptr = glm.value_ptr(projection)
         self._view_ptr = glm.value_ptr(view)
         # Every fog calculation this frame measures from here. Cached because
         # the unlit passes (sprites) and the terrain are not handed a camera.
         self._frame_camera_pos = self._camera_xyz(camera_pos)
-        if procedural_sky and not sky_behind:
-            self._env_draw_sky(projection, view)
         self.render_stats.reset()
         # Set only by this frame's decal pass (and spent by the particles):
         # a portal view drawn before it must not read last frame's copy.
@@ -1062,8 +1032,6 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
             if len(shadow_slots):
                 self.render_shadow_maps(
                     (light_table, shadow_slots), config, camera_pos)
-        if environment:
-            self._env_light(config, camera_pos)
 
         if look:
             # Everything opaque up to draw_distance_pass is drawn for its depth
@@ -1148,10 +1116,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         if sky_behind:
             # Before the models: their clear materials blend over it without
             # writing depth (_model_material).
-            if procedural_sky:
-                self._env_draw_sky(projection, view, behind=True)
-            else:
-                self._draw_background_image(projection, view, behind=True)
+            self._draw_background_image(projection, view, behind=True)
         fading_model_slots = np.empty(0, dtype=np.int32)
         if len(numeric_model_slots):
             if not (self.shaders.get('lit_instanced')
@@ -1208,10 +1173,6 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
             self.draw_portal_wireframes(
                 projection, view, etable, drawn_rows(etable.portal_slots),
                 config.get('play_mode', False))
-        if environment:
-            # The opaque world is complete: occlusion and reflections onto
-            # it, before anything blended is drawn over.
-            self._postfx_resolve(projection, view)
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
         # The sprite renderer has one path: dense EntityTable columns -> GL
@@ -1279,13 +1240,10 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(0)
-        if environment:
-            self._postfx_end(projection, view)
 
     def cleanup(self):
         """Release ForwardRenderer's own GL resources, then RendererCore's."""
         self._cleanup_background_image()
-        self._cleanup_environment()
         self._cleanup_occlusion()
         if self._sprite_layers is not None:
             self._sprite_layers.cleanup()

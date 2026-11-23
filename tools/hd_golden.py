@@ -1,12 +1,16 @@
-"""Golden frames and shader sources of the classic (``graphics = low``) renderer.
+"""Golden frames, shader sources and source lock of the Classic renderer.
 
     xvfb-run -a python tools/hd_golden.py --check          # compare with the stored set
     xvfb-run -a python tools/hd_golden.py --update         # store a new set
     xvfb-run -a python tools/hd_golden.py --base ../fio-base [--out DIR]
+    python tools/hd_golden.py --lock-sources               # after a deliberate change to Classic
 
-``graphics = low`` is the renderer Fio had before the HD tiers: the same
-pixels from the same shaders. The stored set (``tests/visual/golden/``) was
-drawn by that renderer, before any HD code existed; ``--check`` draws the same
+Classic (``engine/renderer/forward``) is the renderer Fio had before HD_High
+existed beside it: the same pixels from the same shaders. The stored set
+(``tests/visual/golden/``) was drawn by it before any HD code existed, and
+``classic_sources.json`` there holds the digest of every file it is made of
+(tests/visual/test_classic_lock.py fails when one changes; ``--lock-sources``
+records a change that was meant). ``--check`` draws the same
 frames (tests/helpers/golden.py: stock maps, fixed cameras, stepped clock) and
 the lit programs' final fragment sources, and fails on any difference.
 
@@ -30,29 +34,27 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
 
-def _capture(tree, graphics):
+def _capture(tree, renderer):
     """Frames, shader sources and the driver's name, drawn by the checkout
     at *tree*."""
     os.chdir(tree)
     sys.path.insert(0, tree)
-    os.environ["FIO_GOLDEN_GRAPHICS"] = graphics
     from PyQt5.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from tests.helpers import golden
     from tests.helpers import gl as glh
-    frames = golden.capture_frames(app, graphics=None if graphics == "low" else graphics)
+    frames = golden.capture_frames(app, renderer=None if renderer == "Classic" else renderer)
     with glh.GLTestContext(16, 16):
         import configparser
         config = configparser.ConfigParser()
         config.add_section("Renderer")
         config.set("Renderer", "lowpower_mode", "False")
-        config.set("Renderer", "graphics", graphics)
-        renderer = glh.make_renderer(config)
+        built = glh.make_renderer(config, name={"Classic": "Forward"}.get(renderer, renderer))
         try:
-            sources = golden.capture_shader_sources(renderer)
+            sources = golden.capture_shader_sources(built)
             driver = golden.driver_name()
         finally:
-            renderer.cleanup()
+            built.cleanup()
     glh.reset_texture_cache()
     return frames, sources, driver
 
@@ -116,13 +118,24 @@ def main(argv=None):
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--update", action="store_true")
     mode.add_argument("--base", help="another checkout to compare this one with")
+    mode.add_argument("--lock-sources", action="store_true",
+                      help="record Classic's source digests as they are now")
     mode.add_argument("--dump", help=argparse.SUPPRESS)   # internal: capture to DIR
     parser.add_argument("--tree", default=ROOT, help=argparse.SUPPRESS)
-    parser.add_argument("--graphics", default="low",
-                        help="the [Renderer] graphics tier to draw (default low)")
+    parser.add_argument("--renderer", default="Classic",
+                        help="the renderer to draw with (default Classic)")
     parser.add_argument("--out", help="keep what was drawn here (PNG)")
     parser.add_argument("--golden", default=os.path.join(ROOT, "tests", "visual", "golden"))
     args = parser.parse_args(argv)
+
+    if args.lock_sources:
+        sys.path.insert(0, ROOT)
+        from tests.helpers import golden
+        digests = golden.classic_source_digests()
+        with open(os.path.join(args.golden, "classic_sources.json"), "w") as handle:
+            json.dump(digests, handle, indent=1, sort_keys=True)
+        print("locked %d Classic source files" % len(digests))
+        return 0
 
     if os.environ.get("PYTHONHASHSEED") != "0":
         environment = dict(os.environ, PYTHONHASHSEED="0")
@@ -131,7 +144,7 @@ def main(argv=None):
                                env=environment)
 
     if args.dump:
-        _save(args.dump, *_capture(os.path.abspath(args.tree), args.graphics))
+        _save(args.dump, *_capture(os.path.abspath(args.tree), args.renderer))
         return 0
 
     if args.base:
@@ -143,13 +156,13 @@ def main(argv=None):
                 # Each checkout in a process of its own: its own engine.
                 status = subprocess.call(
                     [sys.executable, os.path.abspath(__file__), "--dump", directory,
-                     "--tree", tree, "--graphics", args.graphics], cwd=tree)
+                     "--tree", tree, "--renderer", args.renderer], cwd=tree)
                 if status:
                     return status
                 captures.append(_load(directory))
         problems = compare(*captures)
     else:
-        actual = _capture(ROOT, args.graphics)
+        actual = _capture(ROOT, args.renderer)
         if args.out:
             _save(args.out, *actual)
         if args.update:
