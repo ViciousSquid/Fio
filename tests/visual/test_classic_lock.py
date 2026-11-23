@@ -89,6 +89,7 @@ def test_classic_is_the_default_renderer():
     assert hd_graphics.renderer_from(asked, lowpower=True) == "Classic"
 
 
+@pytest.mark.qt
 def test_an_mtls_ke_pr_pm_reach_nothing_classic_draws_with(tmp_path):
     from engine import obj_loader
     from engine.renderer.core.resources import ModelDrawGroup, ResourcesMixin
