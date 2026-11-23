@@ -133,22 +133,33 @@ class ViewPicking:
         best_obj, best_t = None, float('inf')
         self.last_pick_distance = None
         hits = []
+        # Brushes the camera is inside: looked through, reachable only by
+        # drill-select, after everything the ray actually enters.
+        around = []
         filters = self.view.editor.state.view_filters
+        ray_o_t = (float(ray_o.x), float(ray_o.y), float(ray_o.z))
+        ray_d_t = (float(ray_d.x), float(ray_d.y), float(ray_d.z))
         for brush in self.view.editor.state.brushes:
             if (brush.get('hidden', False) or brush.get('lock', False)
                     or filters.hides_brush(brush)):
                 continue
-            # The brush's own box (brush_placement): an angled brush's
-            # planes' bounds, tested in the frame its shape is authored in,
-            # so a moved or spinning brush is picked where it is drawn.
-            o, d = brush_placement.ray_to_shape(brush, ray_o, ray_d)
-            tmin = brush_placement.ray_box(
-                brush_placement.authored_box(brush), o, d)
-            if tmin is not None:
-                hits.append((tmin, brush))
-                if tmin < best_t:
-                    best_t = tmin
-                    best_obj = brush
+            # The surface the ray first *enters*, as the face pick does
+            # (get_brush_face_at_coords), in the frame the brush's shape is
+            # authored in so a moved or spinning brush is picked where it is
+            # drawn. A box the ray started inside used to be hit at 0, so a
+            # trigger, fog or water volume or room-sized brush around the
+            # camera won every click; and an angled brush was hit anywhere
+            # in its bounding box, so the air its sloped face cut away hid
+            # whatever was behind it.
+            tmin, inside = self._brush_ray_entry(brush, ray_o_t, ray_d_t)
+            if tmin is None:
+                if inside:
+                    around.append(brush)
+                continue
+            hits.append((tmin, brush))
+            if tmin < best_t:
+                best_t = tmin
+                best_obj = brush
         for thing in self.view.editor.state.things:
             if not component_edit.is_selectable(thing) or filters.hides_thing(thing):
                 continue
@@ -178,13 +189,33 @@ class ViewPicking:
             # Sorted by hit distance so the walk order is the same every time
             # the cursor is in the same place.
             hits.sort(key=lambda h: h[0])
-            candidates = [obj for _, obj in hits]
+            candidates = [obj for _, obj in hits] + around
             return component_edit.cycle_pick(candidates,
                                              self.view.editor.primary_selection())
         if best_obj is not None:
             #: How far along the ray the picked object is, in world units.
             self.last_pick_distance = float(best_t) * float(glm.length(ray_d))
         return best_obj
+
+    @staticmethod
+    def _brush_ray_entry(brush, ray_o, ray_d):
+        """``(t, inside)`` for a world ray against *brush*'s solid: *t* is
+        where the ray enters it (None if it never does), *inside* whether
+        the ray starts inside it instead."""
+        o, d, convex, box = brush_placement.ray_to_shape_parts(brush, ray_o, ray_d)
+        if convex is None:
+            t = brush_placement.ray_box_entry(box, o, d)
+            return t, t is None and brush_placement.ray_box(box, o, d) is not None
+        cx, cy, cz, hx, hy, hz = convex.shape_box
+        pad = _BOX_PAD
+        if brush_placement.ray_box((cx, cy, cz, hx + pad, hy + pad, hz + pad),
+                                   o, d) is None:
+            return None, False
+        hit = brush_geometry.ray_convex_face(convex, o, d, entering=True)
+        if hit is not None:
+            return hit[0], False
+        # No face entered but one left through: the ray starts inside.
+        return None, brush_geometry.ray_convex_face(convex, o, d) is not None
 
     def terrain_pick_distance(self, mx, my):
         """How far along the cursor's ray the terrain is, in world units, or

@@ -4651,6 +4651,9 @@ class MainWindow(QMainWindow):
         # ------------------------------------------------------------------
 
         # ESC: back out of whatever is in progress, innermost first
+        if event.key() == Qt.Key_Escape and self.view_3d.gizmo.dragging:
+            self.view_3d.gizmo.cancel()         # a gizmo drag, put back
+            return
         if event.key() == Qt.Key_Escape:
             if self.handle_escape():
                 return
@@ -4672,6 +4675,10 @@ class MainWindow(QMainWindow):
             self.set_component_mode({Qt.Key_V: MODE_VERTEX,
                                      Qt.Key_E: MODE_EDGE,
                                      Qt.Key_F: MODE_FACE}[event.key()])
+            return
+        # R: the 3D gizmo's next mode (Move -> Rotate -> Scale).
+        if not user_bound and event.key() == Qt.Key_R and not event.modifiers():
+            self.view_3d.gizmo.cycle_mode()
             return
         if not user_bound and event.key() == Qt.Key_Q and not event.modifiers():
             self.cycle_component_mode()
