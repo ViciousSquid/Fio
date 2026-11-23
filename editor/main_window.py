@@ -1643,6 +1643,10 @@ class MainWindow(QMainWindow):
             self._translate_object(new_obj, delta)
             clones.append(new_obj)
 
+        # The copies are not attached to the originals (brush_groups).
+        from editor import brush_groups
+        brush_groups.regroup_copies(clones, brush_groups.scene_objects(self.state))
+
         self.set_selected_objects(clones)
         self.show_toast("Cloned — move the cursor and click to place (Esc cancels)")
 
@@ -2768,6 +2772,11 @@ class MainWindow(QMainWindow):
                 self.state.things.append(pasted)
 
             pasted_objects.append(pasted)
+
+        # Pasted copies are not attached to the originals (brush_groups).
+        from editor import brush_groups
+        brush_groups.regroup_copies(pasted_objects,
+                                    brush_groups.scene_objects(self.state))
 
         self.set_selected_objects(pasted_objects)
         self.show_toast(
