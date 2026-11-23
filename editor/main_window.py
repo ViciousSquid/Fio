@@ -1822,8 +1822,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # Every model is a Prop, with a Prop's defaults: not solid and not
-        # carryable until the author turns either on.
+        # Every model is a Prop, placed as solid scenery: Solid on, Physics
+        # and Gravity off (engine.prop_entity.MODEL_PROP_DEFAULTS).
         new_model = Prop.for_model(filepath, pos=list(pos),
                                    properties={'rotation': rotation})
 

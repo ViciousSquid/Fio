@@ -138,15 +138,19 @@ PROP_DEFAULTS = {
     'scale': [1, 1, 1],
 }
 
-#: What a newly placed, generic model starts as. It is scenery (neither
-#: carryable nor solid), and uses its actual triangles for collision when the
-#: author enables solidity. Model-specific presets below override this:
-#: the Ball and Oil Barrel deliberately use their cheaper AABB.
-#: Existing map records do not pass through for_model(), so their historical
-#: AABB default is unchanged.
+#: What a newly placed, generic model starts as: solid scenery -- Solid on
+#: (colliding with its actual triangles), Physics off and Gravity off, so it
+#: stays exactly where it is put and the player cannot walk through it. Not
+#: carryable. Model-specific presets below override this: the Ball is a
+#: physics Prop with gravity, and the Ball and Oil Barrel deliberately use
+#: their cheaper AABB. Existing map records do not pass through
+#: for_model(), so what they saved is unchanged.
 MODEL_PROP_DEFAULTS = {
     'render_mode': 'model',
     'collision_shape': 'mesh',
+    'no_collision': False,
+    'physics_enabled': False,
+    'gravity': False,
 }
 
 #: What a map saved with the old ``Model`` entity meant by one: solid, and not
@@ -183,6 +187,7 @@ OIL_BARREL_SETTINGS = {
 BALL_SETTINGS = {
     'model_path': BALL_MODEL_PATH,
     'physics_enabled': True,
+    'gravity': True,
     'no_collision': False,
     'collision_shape': 'aabb',
     'carry_enabled': True,
@@ -376,10 +381,11 @@ class Prop(_ThingBase):
 
         The one way a model enters a world from the editor -- the Asset
         Browser and the 2D view's Add Model both come here -- so a model is
-        always a Prop, never a separate kind of entity. Like any Prop it is
-        neither carryable nor solid until the author says so -- unless the
-        model brings settings with it (:func:`model_settings`): a Ball is a
-        rolling physics Prop wherever it is placed from.
+        always a Prop, never a separate kind of entity. It starts as solid
+        scenery (:data:`MODEL_PROP_DEFAULTS`: Solid on, Physics and Gravity
+        off), not carryable -- unless the model brings settings with it
+        (:func:`model_settings`): a Ball is a rolling physics Prop wherever
+        it is placed from.
         """
         props = dict(MODEL_PROP_DEFAULTS)
         props.update(model_settings(model_path) or {})

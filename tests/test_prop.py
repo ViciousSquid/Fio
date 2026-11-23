@@ -133,7 +133,28 @@ def test_neither_asset_present_invents_nothing():
 
 
 def test_a_new_prop_is_neither_carryable_nor_solid():
-    """Both are opt-in, for a model Prop from the Asset Browser too."""
-    for prop in (Prop(), Prop.for_model('assets/models/Oil_Drum.obj')):
-        assert prop.properties['carry_enabled'] is False
-        assert prop.properties['no_collision'] is True
+    """A plain Prop (a billboard, from the entity list): both are opt-in."""
+    prop = Prop()
+    assert prop.properties['carry_enabled'] is False
+    assert prop.properties['no_collision'] is True
+
+
+@pytest.mark.parametrize("path", ['assets/models/Oil_Drum.obj',
+                                  'assets/models/catwalk_corner_right_160.obj',
+                                  'models/anything_else.obj'])
+def test_a_placed_model_is_solid_scenery(path):
+    """A model from the Asset Browser: Solid on, Physics off, Gravity off,
+    not carryable -- it stays where it is put and blocks the player."""
+    props = Prop.for_model(path).properties
+    assert props['no_collision'] is False
+    assert props['physics_enabled'] is False
+    assert props['gravity'] is False
+    assert props['carry_enabled'] is False
+
+
+def test_a_placed_ball_still_falls_and_rolls():
+    """The Ball brings its own settings: a physics Prop, with gravity."""
+    from engine.prop_entity import BALL_MODEL_PATH
+    props = Prop.for_model(BALL_MODEL_PATH).properties
+    assert props['physics_enabled'] is True and props['gravity'] is True
+    assert props['no_collision'] is False and props['rolls'] is True
