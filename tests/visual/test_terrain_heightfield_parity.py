@@ -494,9 +494,15 @@ def test_each_chunk_draws_with_its_own_height_grid_and_paint(context, monkeypatc
     held = terrain_draw.scene_gl(renderer)
     recorder = _RecordingGL(gl, held.uniforms["uPaintEnabled"],
                             held.uniforms["uPaintLayer"])
-    from engine.renderer.core import raw_calls
+    from engine.renderer.core import gl_state, raw_calls
     monkeypatch.setattr(terrain_gl_module, "gl", recorder)
     monkeypatch.setattr(raw_calls, "gl", recorder)     # the chunk draws go here
+    # Bindings and uniforms are set through core.gl_state, which sends on
+    # its own ``gl``; it is told to forget what programs hold, so the
+    # recorded frame sends every uniform it sets rather than skipping one
+    # an earlier frame left in place.
+    monkeypatch.setattr(gl_state, "gl", recorder)
+    gl_state.forget()
     with glh.wrapped_gl_calls():
         painted_frame = frame()                   # uploads, then draws
     monkeypatch.undo()

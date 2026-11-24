@@ -11,6 +11,7 @@ import pytest
 
 import OpenGL.GL as gl
 
+from engine.renderer.core import gl_state
 from engine.renderer.forward import lighting
 from tests.helpers import gl as glh
 
@@ -56,6 +57,8 @@ def test_lights_and_shadow_filter_are_sent_when_they_change(monkeypatch):
             projection, view, eye = glh.camera_matrices()
             counting = Counting()
             monkeypatch.setattr(lighting, "gl", counting)
+            # Uniforms are sent through core.gl_state, on its own ``gl``.
+            monkeypatch.setattr(gl_state, "gl", counting)
 
             first = _frame(context, renderer, config, projection, view, eye)
             assert counting.uploads >= 1 and counting.filters >= 1
