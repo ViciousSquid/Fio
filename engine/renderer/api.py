@@ -349,12 +349,29 @@ class Renderer(Protocol):
 class RendererOptions(Protocol):
     """What a renderer may offer beyond :class:`Renderer`.
 
-    The host looks each of these up by name and uses the ones that are
-    there; a renderer without one draws without that feature (``None``
-    under the name says the same). One that is there is held to its
-    declaration here, as the required members are. Every renderer built on
-    :class:`engine.renderer.core.RendererCore` has all three.
+    The host and the editor look each of these up by name and use the ones
+    that are there; a renderer without one draws without that feature
+    (``None`` under the name says the same), and the editor's control for
+    it says so. One that is there is held to its declaration here, as the
+    required members are. Nothing outside this class and :class:`Renderer`
+    is read from a renderer by the viewport, the editor or a plugin.
     """
+
+    # -- settings the editor shows or changes ----------------------------------
+    #: Whether this renderer has an HD look the editor view can be drawn
+    #: with or without (View > HD preview, the frame input's ``hd_preview``).
+    hd: bool
+    #: Whether this renderer was started for a low-power machine. The editor
+    #: reads it to choose which renderer the settings ask for there.
+    lowpower_mode: bool
+    #: Whether screen-space reflections (water, wet decals) are drawn. The
+    #: console's ``reflections`` sets it.
+    reflections_enabled: bool
+    #: How far from the camera wet decals reflect, in world units; 0 for
+    #: none. The console's ``decalfade`` sets it.
+    decal_reflection_fade: float
+
+    # -- drawing the host asks for when it is there -------------------------------
 
     def animate_textures(self, clock: float) -> None:
         """Show each animated (GIF) texture's frame for *clock* seconds of
@@ -533,12 +550,14 @@ def contract_violations(renderer: Any) -> list:
                      else _attribute_violation(name, attributes[name], value))
         if violation:
             violations.append(violation)
-    for name, declared in sorted(_declared_members(RendererOptions)[0].items()):
+    methods, attributes = _declared_members(RendererOptions)
+    for name in sorted(set(methods) | set(attributes)):
         value, error = _read(renderer, name)
         if error is not None:
             violations.append("%s raised %s: %s" % (name, type(error).__name__, error))
         elif value is not _ABSENT and value is not None:
-            violation = _method_violation(name, declared, value)
+            violation = (_method_violation(name, methods[name], value) if name in methods
+                         else _attribute_violation(name, attributes[name], value))
             if violation:
                 violations.append(violation)
     return violations

@@ -245,11 +245,61 @@ def _renderer_uses(path):
     return direct, probed
 
 
-def _optional_members():
+def _options(kind):
     tree = ast.parse((PACKAGE / "api.py").read_text(encoding="utf-8"))
     cls = next(n for n in tree.body
                if isinstance(n, ast.ClassDef) and n.name == "RendererOptions")
-    return {node.name for node in cls.body if isinstance(node, ast.FunctionDef)}
+    if kind is ast.FunctionDef:
+        return {node.name for node in cls.body if isinstance(node, ast.FunctionDef)}
+    return {node.target.id for node in cls.body if isinstance(node, ast.AnnAssign)}
+
+
+def _optional_members():
+    return _options(ast.FunctionDef)
+
+
+def _any_renderer_uses(path):
+    """The names *path* reads from, or sets on, anything it calls a renderer
+    (``renderer.<name>``, ``<x>.renderer.<name>``, and ``getattr`` /
+    ``hasattr`` / ``setattr`` of either)."""
+    def is_renderer(node):
+        return ((isinstance(node, ast.Name) and node.id == "renderer")
+                or (isinstance(node, ast.Attribute) and node.attr == "renderer"))
+    names = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Attribute) and is_renderer(node.value):
+            names.add(node.attr)
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id in ("getattr", "hasattr", "setattr") and len(node.args) >= 2
+              and is_renderer(node.args[0]) and isinstance(node.args[1], ast.Constant)):
+            names.add(node.args[1].value)
+    return names
+
+
+def test_nothing_outside_the_contract_is_read_from_a_renderer():
+    """The viewport, the editor and the plugins reach a renderer only through
+    ``Renderer`` and ``RendererOptions``. The editor read five attributes
+    neither declared (one of them, ``clear_color``, no renderer had: the
+    console command that set it changed nothing).
+
+    ``tools/`` is not held to this: its benchmarks build one named renderer
+    and measure its internals, which is what they are for."""
+    known = _protocol_members() | _options(ast.FunctionDef) | _options(ast.AnnAssign)
+    # Names of the package itself, reached as ``engine.renderer.<name>``.
+    package = {"core", "api", "registry", "forward", "hd_high"} | {
+        name for name in ast.literal_eval(next(
+            ast.unparse(node.value) for node in ast.parse(
+                (PACKAGE / "__init__.py").read_text(encoding="utf-8")).body
+            if isinstance(node, ast.Assign) and node.targets[0].id == "__all__"))}
+    outside = {}
+    for top in ("editor", "plugins", "engine"):
+        for path in sorted((ROOT / top).rglob("*.py")):
+            if PACKAGE in path.parents or "tests" in path.parts:
+                continue
+            for name in _any_renderer_uses(path) - known - package:
+                outside.setdefault(name, []).append(str(path.relative_to(ROOT)))
+    assert not outside, outside
+
 
 
 def test_the_host_uses_only_the_protocol():

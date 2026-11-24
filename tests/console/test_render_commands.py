@@ -134,3 +134,38 @@ def test_map_logic_cannot_swap_the_renderer(console, monkeypatch):
     handler.handle_command("r_renderer Forward", from_map=True)
     assert asked == []
     assert logged[-1][0] == "Error"
+
+
+def test_r_clearcolor_sets_the_background_a_renderer_clears_to(console):
+    """It wrote ``clear_color`` on the renderer, an attribute no renderer
+    has or reads, and reported success. The background is the view
+    distance's fog colour, which is in the renderer contract."""
+    handler, window, logged = console
+    view_distance = window.view_3d.view_distance
+    saved = tuple(view_distance.fog_color)
+    try:
+        handler.handle_command("r_clearcolor 0.25 0.5 0.75")
+        assert tuple(view_distance.fog_color) == pytest.approx((0.25, 0.5, 0.75))
+        assert not hasattr(window.view_3d.renderer, "clear_color")
+    finally:
+        view_distance.fog_color = saved
+
+
+def test_reflection_commands_say_so_when_a_renderer_has_no_reflections(console, monkeypatch):
+    """Both are optional settings (engine.renderer.RendererOptions): a
+    renderer without them is not given a stray attribute, or asked for one."""
+    handler, window, logged = console
+    stub = StubRenderer(None)
+    monkeypatch.setattr(window.view_3d, "renderer", stub)
+    handler.handle_command("reflections off")
+    handler.handle_command("decalfade")
+    handler.handle_command("decalfade 512")
+    assert not hasattr(stub, "reflections_enabled")
+    assert not hasattr(stub, "decal_reflection_fade")
+    assert [level for level, _message in logged[-3:]] == ["Info"] * 3
+    assert all("this renderer" in message for _level, message in logged[-3:])
+
+    stub.reflections_enabled, stub.decal_reflection_fade = True, 1536.0
+    handler.handle_command("reflections off")
+    handler.handle_command("decalfade 512")
+    assert stub.reflections_enabled is False and stub.decal_reflection_fade == 512.0

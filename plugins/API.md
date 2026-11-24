@@ -516,6 +516,12 @@ Either way the view keeps the renderer it has (`r_renderer` says why).
   the face under the cursor while another is selected.
   `draw_lens_water(drops, viewport)` -- water on the camera's lens.
   `RendererCore` implements all three; the host uses each one a renderer has.
+  Four optional settings the editor shows or changes, each of the type given
+  when present: `hd` (`bool`: it has an HD look, for View > HD preview),
+  `lowpower_mode` (`bool`), `reflections_enabled` (`bool`; the console's
+  `reflections`), `decal_reflection_fade` (`float`; `decalfade`). The
+  viewport, the editor and plugins read nothing from a renderer that is not
+  in `Renderer` or `RendererOptions`.
 - **post-scene drawing the viewport asks for:** `draw_billboards`,
   `draw_player_glasses`, `draw_bullet_marks`, `draw_component_overlay`, and
   three that take arrays the host builds with `engine.overlay_geometry`

@@ -322,7 +322,8 @@ def test_the_contract_lists_its_own_members():
 def test_the_optional_members_are_the_ones_declared():
     methods, attributes = boundary.api._declared_members(boundary.RendererOptions)
     assert set(methods) == {"animate_textures", "draw_face_hover", "draw_lens_water"}
-    assert not attributes
+    assert attributes == {"hd": bool, "lowpower_mode": bool,
+                          "reflections_enabled": bool, "decal_reflection_fade": float}
 
 
 def test_a_renderer_without_the_optional_members_conforms():
@@ -353,6 +354,31 @@ def test_a_renderer_with_the_optional_members_as_declared_conforms():
 ])
 def test_an_optional_member_that_is_there_is_held_to_its_declaration(
         refused, name, value, why):
+    made = conforming_renderer(**{name: value})
+    assert why in refused(made)
+    assert made.cleaned == 1
+
+
+def test_a_renderer_with_the_optional_settings_as_declared_conforms():
+    made = conforming_renderer(hd=True, lowpower_mode=False, reflections_enabled=True,
+                               decal_reflection_fade=1536.0)
+    assert boundary.contract_violations(made) == []
+    made.reflections_enabled = False
+    made.decal_reflection_fade = 0.0
+    assert boundary.contract_violations(made) == []
+
+
+@pytest.mark.parametrize("name, value, why", [
+    ("hd", 1, "hd must be bool, not 1 (int)"),
+    ("hd", "high", "hd must be bool, not 'high' (str)"),
+    ("lowpower_mode", "False", "lowpower_mode must be bool"),
+    ("reflections_enabled", 0, "reflections_enabled must be bool, not 0 (int)"),
+    ("decal_reflection_fade", "far", "decal_reflection_fade must be float, not 'far' (str)"),
+    ("decal_reflection_fade", 1536, "decal_reflection_fade must be float, not 1536 (int)"),
+    ("decal_reflection_fade", _raises(RuntimeError("no decals")),
+     "decal_reflection_fade raised RuntimeError: no decals"),
+])
+def test_an_optional_setting_that_is_there_is_held_to_its_type(refused, name, value, why):
     made = conforming_renderer(**{name: value})
     assert why in refused(made)
     assert made.cleaned == 1

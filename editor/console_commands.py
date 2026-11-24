@@ -139,7 +139,7 @@ class ConsoleCommandHandler:
             'r_shadows': self.cmd_render_shadows,
             'r_waterquality': self.cmd_water_quality,
             'r_vsync': self.cmd_render_vsync,
-            'r_clearcolor': self.cmd_render_clearcolor,
+            'r_clearcolor': self.cmd_fog_color,
             'r_info': self.cmd_render_info,
 
             # View distance & far-plane fog. These are the commands the I/O
@@ -1074,7 +1074,7 @@ class ConsoleCommandHandler:
             (('r_waterquality', 'waterquality'), "[cheap|expensive] — Debug cap: cheap forces all water "
                                                  "cheap; expensive lets each brush's High quality decide"),
             (('r_vsync', 'vsync'), '— Toggle VSync (saved to settings)'),
-            (('r_clearcolor',), 'r g b — Set background colour'),
+            (('r_clearcolor',), 'r g b — Set background colour (the fog colour: r_fogcolor)'),
         ]),
         ('View Distance &amp; Far-Plane Fog',
          '<i>Fog always reaches full opacity before the clip, so pulling the view '
@@ -1372,20 +1372,6 @@ class ConsoleCommandHandler:
         self.main_window.save_config()
 
         debug_log("Info", f"VSync: {'ON' if new_state else 'OFF'}")
-
-    def cmd_render_clearcolor(self, args):
-        renderer = self._get_renderer()
-        if not renderer:
-            return
-        try:
-            parts = [float(x) for x in args.split()]
-            if len(parts) == 3:
-                renderer.clear_color = [max(0.0, min(1.0, c)) for c in parts]
-                debug_log("Info", f"Clear color set to {renderer.clear_color}")
-            else:
-                debug_log("Error", "Usage: r_clearcolor r g b   (values 0.0 to 1.0)")
-        except Exception:
-            debug_log("Error", "Usage: r_clearcolor r g b")
 
     # ===================================================================
     # VIEW DISTANCE & FAR-PLANE FOG
@@ -2377,7 +2363,10 @@ class ConsoleCommandHandler:
             debug_log("Error", "reflections: no renderer yet")
             return
         arg = args.strip().lower() if args else "toggle"
-        current = bool(getattr(renderer, 'reflections_enabled', True))
+        current = getattr(renderer, 'reflections_enabled', None)
+        if current is None:             # optional (engine.renderer.RendererOptions)
+            debug_log("Info", "reflections: this renderer draws none to switch")
+            return
         if arg in ("on", "1", "true"):
             value = True
         elif arg in ("off", "0", "false"):
@@ -2401,10 +2390,13 @@ class ConsoleCommandHandler:
         if renderer is None:
             debug_log("Error", "decalfade: no renderer yet")
             return
+        fade = getattr(renderer, 'decal_reflection_fade', None)
+        if fade is None:                # optional (engine.renderer.RendererOptions)
+            debug_log("Info", "decalfade: this renderer draws no decal reflections")
+            return
         arg = args.strip()
         if not arg:
-            debug_log("Info", f"Decal reflection fade: "
-                              f"{float(renderer.decal_reflection_fade):g} units")
+            debug_log("Info", f"Decal reflection fade: {float(fade):g} units")
             return
         try:
             distance = float(arg)
