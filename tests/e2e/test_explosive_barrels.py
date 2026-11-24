@@ -392,10 +392,12 @@ def test_out_of_range_blast_settings_are_clamped(fio_session, clock):
     number is the default, one past its maximum is the maximum."""
     from engine.explosions import BLAST_MAXIMUMS, EXPLOSIVE_DEFAULTS
     session = _play(fio_session, clock, [
-        _barrel("b1", 0.0, 0.0, explosion_radius="inf", explosion_force=1e12,
-                explosion_damage=float("inf")),
+        _barrel("b1", 0.0, 0.0, explosion_radius="inf", explosion_force=1e12),
         _barrel("b2", 150.0, 0.0)])
     runtime = session.logic.explosion_runtime
+    # A map holding an infinity is refused on load (level_validation); one
+    # can still arrive while the session runs, as a console setprop sets it.
+    _named(session, "b1").properties["explosion_damage"] = float("inf")
     runtime.explode_prop(_named(session, "b1"))         # used to raise OverflowError
     fireball = _named(session, "b1_explosion")
     assert fireball.properties["explosion_radius"] == EXPLOSIVE_DEFAULTS["explosion_radius"]
