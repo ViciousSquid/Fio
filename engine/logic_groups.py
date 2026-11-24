@@ -477,7 +477,7 @@ class LogicGroups:
 
     def follow_models(self):
         """The carried or turning models' collision where they are drawn
-        now (a turn has just been stepped: PropSession._update_rotations)."""
+        now (a turn has just been stepped: PropSession.update_rotations)."""
         if not len(self.models):
             return False
         player = self.logic.player_runtime.player

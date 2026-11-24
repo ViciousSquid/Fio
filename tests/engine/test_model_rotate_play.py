@@ -55,7 +55,8 @@ def _model(**props):
 
 def _run(session, seconds, step=1.0 / 60.0):
     for _ in range(int(round(seconds / step))):
-        session.tick(step, False)
+        session.update_rotations(step)      # as the logic thread does, at the
+        session.tick(step, False)           # head of its tick
 
 
 def test_a_model_without_rotate_never_turns():
@@ -214,3 +215,72 @@ def test_the_rotate_inputs_reach_the_prop_runtime():
     handlers[('prop', 'togglerotate')](prop, '', logic)
     _run(session, 0.1)
     assert session.rotate_velocity_of(prop) == 360.0
+
+
+# -- what a save game carries ---------------------------------------------------------
+
+def _with_id(prop, name):
+    prop.properties['id'] = name
+    return prop
+
+
+def test_a_snapshot_restores_each_mode_where_it_was():
+    spin = _with_id(_model(rotate_autostart=True), 'spin')
+    swing = _with_id(_model(rotate_mode='swing', rotate_angle=60.0, rotate_autostart=True), 'swing')
+    valve = _with_id(_model(rotate_mode='turn', rotate_angle=90.0, rotate_speed=90.0), 'valve')
+    session, _io = _session(spin, swing, valve)
+    session.start_rotate(valve)
+    _run(session, 0.7)
+    session.reverse_rotate(spin)
+    session.set_rotate_speed(swing, 45.0)
+    _run(session, 0.3)
+    saved = session.rotation_snapshot()
+    assert set(saved) == {'spin', 'swing', 'valve'}
+    assert all(isinstance(v, (bool, float, int)) for entry in saved.values()
+               for v in entry.values()), "plain values a save file holds"
+    at_save = {p.properties['id']: p._rotate_angle for p in (spin, swing, valve)}
+
+    _run(session, 2.0)                                   # the world goes on
+    session.stop_rotate(valve)
+    _run(session, 1.5)
+    assert valve._rotate_angle == pytest.approx(0.0, abs=1e-6)
+
+    session.restore_rotations(saved)                     # ...and the save is loaded
+    for prop in (spin, swing, valve):
+        assert prop._rotate_angle == pytest.approx(at_save[prop.properties['id']])
+    after = session.rotation_snapshot()
+    for name in saved:
+        assert after[name] == pytest.approx(saved[name])
+    # and it carries on as it would have
+    _run(session, 1.0)
+    assert valve._rotate_angle == pytest.approx(90.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("entry", [
+    None, [], "open", {}, {'running': True},
+    {'running': True, 'direction': 1, 'speed': 'fast', 'angle': 0, 'velocity': 0,
+     'amount': 0, 'phase': 0, 'turned': 0},
+    {'running': True, 'direction': 1, 'speed': 90, 'angle': float('nan'), 'velocity': 0,
+     'amount': 0, 'phase': 0, 'turned': 0},
+    {'running': True, 'direction': 1, 'speed': 90, 'angle': 10 ** 400, 'velocity': 0,
+     'amount': 0, 'phase': 0, 'turned': 0},
+])
+def test_a_saved_rotation_that_is_not_one_is_left_alone(entry):
+    valve = _with_id(_model(rotate_mode='turn', rotate_angle=90.0, rotate_speed=90.0), 'valve')
+    session, _io = _session(valve)
+    session.restore_rotations({'valve': entry})
+    session.restore_rotations(entry)
+    assert valve._rotate_angle == 0.0
+    assert session._motion(valve).running is False
+
+
+def test_restored_values_are_kept_within_what_a_motion_can_hold():
+    valve = _with_id(_model(rotate_mode='turn', rotate_angle=90.0, rotate_speed=90.0), 'valve')
+    session, _io = _session(valve)
+    session.restore_rotations({'valve': {
+        'running': 1, 'direction': -7, 'speed': 1e12, 'angle': 0, 'velocity': 0,
+        'amount': 9.0, 'phase': 1e6, 'turned': 4.0}})
+    motion = session._motion(valve)
+    assert motion.turned == 1.0 and motion.amount == 1.0 and motion.direction == -1.0
+    assert motion.speed == mr.rotate_speed({'rotate_speed': 1e12})
+    assert valve._rotate_angle == pytest.approx(90.0)

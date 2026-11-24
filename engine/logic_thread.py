@@ -748,6 +748,7 @@ class LogicThread(threading.Thread):
         self.mover_runtime._update_doors(delta)
         self.parenting_runtime._update_parented_lights()
         self.light_path_runtime.update(delta)
+        self.prop_runtime.update_rotations(delta)
         self.parenting_runtime._update_parented_portals()
         
         # Update I/O system (delayed events)

@@ -313,6 +313,36 @@ class RotateMotion:
         elif self.mode == SWING:
             self.angle = (abs(rotate_angle(self.props)) / 2.0) * math.sin(self.phase)
 
+    #: What a save game carries of a motion.
+    SAVED = ('running', 'direction', 'speed', 'angle', 'velocity', 'amount',
+             'phase', 'turned')
+
+    def snapshot(self):
+        return {key: getattr(self, key) for key in self.SAVED}
+
+    def restore(self, saved):
+        """Take up the progress :meth:`snapshot` recorded. An entry that is
+        not one (a field missing, a value that is no finite number) is left
+        alone; returns whether it was taken."""
+        try:
+            values = {key: float(saved[key]) for key in self.SAVED if key != 'running'}
+            running = bool(saved['running'])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+        if not all(math.isfinite(value) for value in values.values()):
+            return False
+        self.running = running
+        self.direction = -1.0 if values['direction'] < 0.0 else 1.0
+        self.speed = rotate_speed({'rotate_speed': values['speed']})
+        self.angle = values['angle'] % 360.0 if self.mode == CONTINUOUS else values['angle']
+        self.velocity = values['velocity']
+        self.amount = min(1.0, max(0.0, values['amount']))
+        self.phase = values['phase'] % (2.0 * math.pi)
+        self.turned = min(1.0, max(0.0, values['turned']))
+        self._eased_to = None
+        self._sync()
+        return True
+
     @property
     def moving(self):
         """Whether it is still turning (a stopped one may still be coasting)."""
