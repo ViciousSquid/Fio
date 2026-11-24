@@ -785,9 +785,7 @@ class LightingMixin:
                     uniform_matrix4(inst_lsm_loc, glm.value_ptr(lsm))
                     gl.glUniform3f(inst_lightpos_loc, lx, ly, lz)
                     gl.glUniform1f(inst_far_loc, far_plane)
-                    gl.glBindVertexArray(stream.vao)
-                    gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
-                    self._point_brush_instances_at(0)
+                    gl.glBindVertexArray(stream.vao)         # reads from row 0
                     gl.glDrawArraysInstanced(
                         gl.GL_TRIANGLES, 0, 36, len(cube_slots))
                     self.render_stats.shadow_draw_calls += 1

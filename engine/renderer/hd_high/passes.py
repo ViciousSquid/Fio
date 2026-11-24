@@ -168,9 +168,9 @@ class PassesMixin:
         travels as instance data, already packed into the shared buffer.
 
         What is left between draws is exactly what changed: a texture bind when
-        this run's texture is not the one already bound, and the instance
-        attribute base, which stands in for the base-instance offset OpenGL 3.3
-        does not have.
+        this run's texture is not the one already bound, and the vertex array
+        for the row the run starts at, which stands in for the base-instance
+        offset OpenGL 3.3 does not have.
 
         *run_texture* may be zero for a pass that binds no texture; the lit
         pass is such a pass, and passing zero is how it says so rather than by
@@ -179,9 +179,9 @@ class PassesMixin:
         self._begin_instanced_pass(program_name, projection, view, lights)
         # GL_LINE when the lit pass draws the Wireframe display mode.
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
-        gl.glBindVertexArray(stream.vao)
-        # The run's attribute re-pointing reads the bound array buffer.
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
+        # Each run reads the stream from the row it starts at, through the
+        # vertex array kept for that row (_brush_run_vao).
+        run_vaos = stream.run_vaos
 
         current_tex = None
         triangles = vertex_count // 3
@@ -197,7 +197,10 @@ class PassesMixin:
                 self.render_stats.batched_draws += 1
                 if self._env_active:
                     self._bind_material_maps(program_name, tex_id)
-            self._point_brush_instances_at(begin)
+            vao = run_vaos.get(begin)
+            if vao is None:
+                vao = self._brush_run_vao(stream, begin)
+            gl.glBindVertexArray(vao)
             gl.glDrawArraysInstanced(gl.GL_TRIANGLES, int(run_first[run]),
                                      vertex_count, length)
             self.render_stats.draw_calls += 1

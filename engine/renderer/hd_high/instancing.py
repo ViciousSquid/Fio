@@ -75,12 +75,15 @@ class BrushStream:
     table's matrices this buffer last matched. The two double-buffered
     render tables take turns, so each keeps its own entry."""
 
-    __slots__ = ('vbo', 'vao', 'capacity', 'mirror', 'count', 'slots', 'spare',
+    __slots__ = ('vbo', 'vao', 'run_vaos', 'capacity', 'mirror', 'count', 'slots', 'spare',
                  'payload', 'consts', 'seen', 'uploaded', 'index', 'given')
 
     def __init__(self):
         self.vbo = None
         self.vao = None
+        #: Vertex arrays over this buffer by the instance a run starts at
+        #: (:meth:`InstancingMixin._brush_run_vao`); ``vao`` is the one at 0.
+        self.run_vaos = {}
         self.capacity = 0
         self.mirror = np.zeros((0, 32), dtype=np.float32)
         self.count = 0
@@ -460,13 +463,43 @@ class InstancingMixin:
         gl.glBufferData(gl.GL_ARRAY_BUFFER, stream.mirror.nbytes, None,
                         gl.GL_DYNAMIC_DRAW)
         if stream.vao is None:
-            stream.vao = self._brush_stream_vao(stream.vbo)
+            stream.vao = stream.run_vaos[0] = self._brush_stream_vao(stream.vbo)
         # A grown store keeps the buffer's name: the vertex array's pointers
         # (name, stride, offset) are still right.
         return True
 
-    def _brush_stream_vao(self, vbo):
-        """A VAO over the shared cube VBO plus one instance stream's buffer.
+    #: The most vertex arrays one stream keeps for its runs. A stable scene
+    #: draws the same runs every frame; one that keeps changing would grow
+    #: the set without end, so past this it starts again.
+    RUN_VAOS_PER_STREAM = 256
+
+    def _brush_run_vao(self, stream, base):
+        """The vertex array that reads *stream*'s instances from row *base*.
+
+        OpenGL 3.3 has no ``glDrawArraysInstancedBaseInstance``: a run that
+        starts part way through the buffer is reached by where the instance
+        attributes point. They were re-aimed for every run of every frame --
+        eight calls a run, 300 a frame on the showcase, though the same runs
+        start at the same rows from one frame to the next. Each start has its
+        own vertex array now, made the first time a run starts there and
+        bound thereafter: one call a run.
+        """
+        vaos = stream.run_vaos
+        vao = vaos.get(base)
+        if vao is None:
+            if len(vaos) >= self.RUN_VAOS_PER_STREAM:
+                spare = [name for row, name in vaos.items() if row]
+                gl.glDeleteVertexArrays(len(spare), spare)
+                vaos.clear()
+                vaos[0] = stream.vao
+                if not base:
+                    return stream.vao
+            vao = vaos[base] = self._brush_stream_vao(stream.vbo, base)
+        return vao
+
+    def _brush_stream_vao(self, vbo, base=0):
+        """A VAO over the shared cube VBO plus one instance stream's buffer,
+        its instances read from row *base*.
 
         Deliberately separate from ``vaos['cube']``: the non-instanced path
         shares that one, and giving it eight enabled divisor-1 attributes would
@@ -481,10 +514,11 @@ class InstancingMixin:
             gl.glEnableVertexAttribArray(location)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         stride = self.BRUSH_INSTANCE_FLOATS * 4
+        origin = int(base) * stride
         for location in range(3, 11):
             gl.glVertexAttribPointer(
                 location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
-                ctypes.c_void_p((location - 3) * 16))
+                ctypes.c_void_p(origin + (location - 3) * 16))
             gl.glEnableVertexAttribArray(location)
             gl.glVertexAttribDivisor(location, 1)
         gl.glBindVertexArray(0)
@@ -494,30 +528,13 @@ class InstancingMixin:
         """Delete every instance stream's buffer and vertex array (renderer
         cleanup, or a context about to be lost)."""
         for stream in self._brush_streams.values():
-            if stream.vao:
-                gl.glDeleteVertexArrays(1, [stream.vao])
+            if stream.run_vaos:
+                names = list(stream.run_vaos.values())
+                gl.glDeleteVertexArrays(len(names), names)
+                stream.run_vaos.clear()
             if stream.vbo:
                 gl.glDeleteBuffers(1, [stream.vbo])
         self._brush_streams.clear()
-
-    def _point_brush_instances_at(self, base):
-        """Re-aim the instance attributes at instance *base*.
-
-        OpenGL 3.3 has no ``glDrawArraysInstancedBaseInstance``, so a run that
-        starts part way through the buffer is reached by moving the attribute
-        pointers instead. Eight calls per run, against six vertices' worth of
-        draw -- and there are at most six runs per texture.
-        """
-        stride = self.BRUSH_INSTANCE_FLOATS * 4
-        origin = int(base) * stride
-        # The raw entry point: the offset is a plain integer into the bound
-        # buffer, so PyOpenGL's array handling and the pointer bookkeeping it
-        # keeps per context (a dict write per call) buy nothing here -- and
-        # they were most of the cost of a brush pass.
-        for location in range(3, 11):
-            vertex_attrib_pointer(
-                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
-                origin + (location - 3) * 16)
 
     def _ensure_sprite_instance_buffer(self, count):
         """Grow the sprite instance VBO and its staging array to *count* rows."""

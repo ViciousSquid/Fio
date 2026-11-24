@@ -1661,9 +1661,7 @@ class EnvironmentMixin:
         if len(cube_slots) and stream is not None:
             gl.glUseProgram(instanced.id)
             uniform_matrix4(instanced['lightSpaceMatrix'], matrix_ptr)
-            gl.glBindVertexArray(stream.vao)
-            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
-            self._point_brush_instances_at(0)
+            gl.glBindVertexArray(stream.vao)                 # reads from row 0
             gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, len(cube_slots))
         gl.glUseProgram(plain.id)
         uniform_matrix4(plain['lightSpaceMatrix'], matrix_ptr)
