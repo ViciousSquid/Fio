@@ -184,13 +184,21 @@ def test_the_blend_state_is_asked_for_once_a_pass(sends):
 
 
 def test_both_renderers_draw_their_models_through_it():
-    """No group loop sends these three uniforms directly any more."""
+    """No group loop sends these three uniforms directly any more.
+
+    Classic's instanced pass is not among them: it consumes a prepared plan
+    (``tests/visual/test_model_plan.py``) and keeps what it has sent each
+    program itself.
+    """
     import ast
     import inspect
     for name in PACKAGES:
         module = importlib.import_module(name)
         for method in ("draw_models_instanced", "_draw_dense_model_single"):
             source = inspect.getsource(getattr(module.PassesMixin, method))
+            if "_model_plan(" in source:
+                assert ".forward." in name and method == "draw_models_instanced"
+                continue
             tree = ast.parse("class _:\n" + source)
             sent = [ast.unparse(node) for node in ast.walk(tree)
                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
