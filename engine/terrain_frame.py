@@ -90,10 +90,22 @@ class TerrainFrame:
         'grass_blade_width',
         'paint_display', 'paint_maps', 'paint_versions', 'paint_epoch', 'paint_resolution',
         'paint_page_layers', 'height_page_layers', 'max_gradient_stops',
-        'triangle_count', '_sealed',
+        'triangle_count',
+        # The world's edge, where the terrain's sides are drawn as a cliff
+        # of rock strata: (min x, max x, min z, max z, floor y, low y, high y,
+        # layers) -- the terrain's world rectangle, the wall's foot, the
+        # surface's height range and the beds the wall shows -- or None for
+        # no sides (engine/terrain.py, TerrainGL._draw_skirts).
+        'skirt',
+        '_sealed',
     )
 
+    #: Fields a frame may leave out (a renderer reads them as None).
+    _OPTIONAL = ('skirt',)
+
     def __init__(self, **fields):
+        for name in self._OPTIONAL:
+            fields.setdefault(name, None)
         for name, value in fields.items():
             object.__setattr__(self, name, value)
         object.__setattr__(self, '_sealed', True)

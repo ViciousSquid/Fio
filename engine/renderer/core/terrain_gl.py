@@ -73,6 +73,14 @@ class TerrainGL:
         self.block_uniforms = {}
         self.grass_shader_program = 0
         self.grass_uniforms = {}
+        #: The strata walls at the world's edge (_draw_skirts): their
+        #: program, its uniforms, and the attribute-less vertex array they
+        #: are drawn from.
+        self.skirt_program = 0
+        self.skirt_uniforms = {}
+        self._skirt_vao = 0
+        #: Chunk sides drawn as strata walls the last frame (tests, SysMon).
+        self.skirt_sides = 0
         #: Programs compiled here (a renderer may hand in its own instead).
         self._own_programs = set()
         self._failed_programs = set()
@@ -416,6 +424,277 @@ class TerrainGL:
         gl_state.glActiveTexture(gl.GL_TEXTURE0)
         gl_state.glBindVertexArray(0)
         return triangles
+
+    # -- the world's edge: strata walls -----------------------------------
+
+    #: Beds a wall shows from foot to top when the frame does not say
+    #: (``TerrainAppearance.strata_layers``), the thinnest a bed may be, and
+    #: the scale of the soil horizons over them (terrain_skirt.frag).
+    SKIRT_LAYERS = 24
+    SKIRT_MIN_BED = 4.0
+    SKIRT_SOIL_SCALE = 1.0
+    #: How far the wall's face leans out per unit of drop (about 31 degrees
+    #: off sheer). The play camera looks straight down from over the player:
+    #: a sheer wall (0) faces away from it and is never seen in play; an
+    #: escarpment this steep fills the edge of the screen with its beds.
+    SKIRT_LEAN = 0.6
+    SKIRT_UNIFORMS = (
+        'projection', 'view', 'uHeights', 'uChunkI', 'uChunkX', 'uSide',
+        'uFloor', 'uEdge', 'uLean', 'uBasement', 'uMeta', 'uBand', 'uSoil',
+        'uChunkY',
+    )
+
+    def _ensure_skirt_program(self) -> int:
+        """The strata-wall program, compiled on first use (0 without a
+        context or after a failed compile, which is reported once)."""
+        if self.skirt_program or 'skirt' in self._failed_programs:
+            return self.skirt_program
+        if gl is None or _no_current_gl_context():
+            return 0
+        try:
+            vertex_shader = compileShader(
+                shaders.DEFAULT_SHADERS['terrain_skirt.vert'], gl.GL_VERTEX_SHADER)
+            fragment_shader = compileShader(
+                shaders.DEFAULT_SHADERS['terrain_skirt.frag'], gl.GL_FRAGMENT_SHADER)
+            program = compileProgram(vertex_shader, fragment_shader, validate=False)
+        except Exception as e:
+            msg = str(e)
+            if ("glCreateShader" in msg or "undefined alternate function" in msg
+                    or "context" in msg.lower()):
+                return 0
+            print(f"ERROR: Exception during terrain skirt shader compilation: {e}")
+            self._failed_programs.add('skirt')
+            return 0
+        self.skirt_program = int(program)
+        self._own_programs.add(self.skirt_program)
+        self.skirt_uniforms = {}
+        return self.skirt_program
+
+    @staticmethod
+    def edge_sides(world, size, bounds):
+        """``(slot index, side)`` pairs for chunks on the terrain's edge.
+
+        *world* is the chunks' ``(x, z)`` origins, *size* their edge length
+        and *bounds* ``(min x, max x, min z, max z)``. Side 0 is the -x edge,
+        1 +x, 2 -z, 3 +z; a corner chunk has two.
+        """
+        world = np.asarray(world, dtype=np.float64).reshape(-1, 2)
+        size = np.asarray(size, dtype=np.float64).reshape(-1)
+        if not len(size):
+            return []
+        min_x, max_x, min_z, max_z = (float(v) for v in bounds[:4])
+        eps = np.maximum(size * 1e-4, 1e-3)
+        x0, z0 = world[:, 0], world[:, 1]
+        hits = (np.abs(x0 - min_x) <= eps,
+                np.abs(x0 + size - max_x) <= eps,
+                np.abs(z0 - min_z) <= eps,
+                np.abs(z0 + size - max_z) <= eps)
+        pairs = []
+        for side, mask in enumerate(hits):
+            pairs.extend((int(i), side) for i in np.flatnonzero(mask))
+        return pairs
+
+    @classmethod
+    def bed_thickness(cls, floor, high, layers=None):
+        """A bed's mean thickness for walls from *floor* up to *high* that
+        show *layers* beds (the terrain's ``strata_layers``) from foot to top."""
+        layers = cls.SKIRT_LAYERS if layers is None else max(1.0, float(layers))
+        return max(cls.SKIRT_MIN_BED, (float(high) - float(floor)) / layers)
+
+    @classmethod
+    def soil_scale(cls, floor, high):
+        """How deep the soil horizons run (1 is about ten units of topsoil):
+        deeper on a taller wall, so a mountain edge keeps a visible soil."""
+        return cls.SKIRT_SOIL_SCALE * max(1.0, (float(high) - float(floor)) / 1500.0)
+
+    @staticmethod
+    def strata_levels(floor, low, high):
+        """``(basement top, metamorphic top)`` world heights for walls
+        whose foot is *floor* under ground from *low* to *high*."""
+        depth = max(float(low) - float(floor), 1.0)
+        return (float(floor) + 0.30 * depth,
+                float(floor) + 0.58 * depth)
+
+    @staticmethod
+    def skirt_visible(world, size, min_y, max_y, floor, lean, frustum_planes):
+        """Which edge chunks' walls may be in the frustum (far plane, and so
+        the view distance, included): each chunk's box taken down to the
+        wall's foot and out by the most the wall leans, so a wall is never
+        culled with its chunk while it is itself in view."""
+        world = np.asarray(world, dtype=np.float64).reshape(-1, 2)
+        n = len(world)
+        if frustum_planes is None or not n:
+            return np.ones(n, dtype=bool)
+        size = np.asarray(size, dtype=np.float64)
+        top = np.asarray(max_y, dtype=np.float64)
+        bottom = np.minimum(np.asarray(min_y, dtype=np.float64), float(floor))
+        reach = np.maximum(top - bottom, 0.0) * float(lean)
+        lo = np.stack([world[:, 0] - reach, bottom, world[:, 1] - reach], axis=1)
+        hi = np.stack([world[:, 0] + size + reach, top + 1.0, world[:, 1] + size + reach], axis=1)
+        planes = np.asarray(frustum_planes, dtype=np.float64).reshape(-1, 4)
+        inside = np.ones(n, dtype=bool)
+        for a, b, c, d in planes:
+            # The box corner furthest along the plane's normal.
+            px = np.where(a >= 0, hi[:, 0], lo[:, 0])
+            py = np.where(b >= 0, hi[:, 1], lo[:, 1])
+            pz = np.where(c >= 0, hi[:, 2], lo[:, 2])
+            inside &= a * px + b * py + c * pz + d >= 0
+        return inside
+
+    def _draw_skirts(self, slots, projection, view, env_uniforms, unit,
+                     frustum_planes=None, paint_unit=None, use_textures=0) -> int:
+        """Draw the cliff walls on the terrain's edge for every built chunk
+        that lies on it, each side a triangle strip from the chunk's own
+        height grid down to the wall's foot. Returns the sides drawn.
+
+        Culled by the wall's own box (skirt_visible), never the chunk's: a
+        wall reaches far below and beyond its chunk. Each strip is drawn with
+        the terrain's own material uniforms, which terrain_skirt.frag runs at
+        the rim for the top layer.
+        """
+        frame = self.frame
+        table = frame.table
+        if not len(slots):
+            return 0
+        floor, low, high = frame.skirt[4], frame.skirt[5], frame.skirt[6]
+        pairs = self.edge_sides(table.world[slots], table.size[slots], frame.skirt)
+        if not pairs:
+            return 0
+        edge_idx = np.unique(np.asarray([i for i, _ in pairs], dtype=np.intp))
+        edge = slots[edge_idx]
+        seen = self.skirt_visible(table.world[edge], table.size[edge], table.min_y[edge],
+                                  table.max_y[edge], floor, self.SKIRT_LEAN, frustum_planes)
+        keep = set(edge_idx[seen].tolist())
+        pairs = [(i, side) for i, side in pairs if i in keep]
+        if not pairs:
+            return 0
+        prog = self._ensure_skirt_program()
+        if not prog:
+            return 0
+        u = self.skirt_uniforms
+        # The wall's program is built on the terrain's (terrain_skirt.frag
+        # runs terrain.frag's material on the rim), so it takes every one of
+        # the terrain's uniforms as well as its own.
+        names = (self.UNIFORM_NAMES + tuple(frame.appearance) + self.SKIRT_UNIFORMS
+                 + tuple(env_uniforms or ()))
+        for name in names:
+            if name not in u:
+                u[name] = gl.glGetUniformLocation(prog, name)
+        edge_slots = np.unique(np.asarray([slots[i] for i, _ in pairs], dtype=np.intp))
+        stale = edge_slots[self._gpu_version[edge_slots] != table.version[edge_slots]]
+        for slot in stale:
+            self._upload_heightfield(int(slot))
+        # Paint on the rim chunks, uploaded with its own unit active (an
+        # upload binds the paint page on the active unit).
+        paint = {}
+        versions = frame.paint_versions
+        if paint_unit is not None and versions:
+            gl_state.glActiveTexture(gl.GL_TEXTURE0 + paint_unit)
+            gpu_version = self._paint_gpu_version
+            for slot, coord in zip(edge_slots.tolist(), table.coord[edge_slots].tolist()):
+                version = versions.get(tuple(coord), 0)
+                if version and gpu_version[slot] != version:
+                    self._upload_paint_chunk(slot)
+                if version and slot in self._paint_layer:
+                    paint[slot] = self._paint_layer[slot]
+
+        basement, meta = self.strata_levels(floor, low, high)
+        layers = frame.skirt[7] if len(frame.skirt) > 7 else self.SKIRT_LAYERS
+        band = self.bed_thickness(floor, high, layers)
+        gl_state.glUseProgram(prog)
+        uniform_matrix4(u['projection'], glm.value_ptr(projection))
+        uniform_matrix4(u['view'], glm.value_ptr(view))
+        # The ground's material, set as _render sets it for the heightfield.
+        for i, (name, tex) in enumerate((('texGrass', self.grass_tex), ('texRock', self.rock_tex),
+                                         ('texSand', self.sand_tex), ('texSnow', self.snow_tex))):
+            gl_state.glActiveTexture(gl.GL_TEXTURE0 + i)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex)
+            if u.get(name, -1) != -1:
+                gl_state.glUniform1i(u[name], i)
+        if u.get('use_textures', -1) != -1:
+            gl_state.glUniform1i(u['use_textures'], use_textures)
+        self._upload_appearance_uniforms(u)
+        self.set_heightfield_frame_uniforms(u, unit)
+        if paint_unit is not None:
+            if u.get('terrainPaintMap', -1) != -1:
+                gl_state.glUniform1i(u['terrainPaintMap'], paint_unit)
+        paint_enabled = None
+        for name, value in (('uFloor', floor), ('uBasement', basement), ('uMeta', meta),
+                            ('uBand', band),
+                            ('uSoil', self.soil_scale(floor, high)),
+                            ('uLean', self.SKIRT_LEAN)):
+            if u.get(name, -1) != -1:
+                gl_state.glUniform1f(u[name], float(value))
+        if u.get('uEdge', -1) != -1:
+            gl_state.glUniform4f(u['uEdge'], *(float(v) for v in frame.skirt[:4]))
+        if env_uniforms:
+            for name, value in env_uniforms.items():
+                loc = u.get(name, -1)
+                if loc is None or loc == -1:
+                    continue
+                if isinstance(value, int):
+                    gl_state.glUniform1i(loc, value)
+                elif isinstance(value, float):
+                    gl_state.glUniform1f(loc, value)
+                else:
+                    gl_state.glUniform3f(loc, *value)
+
+        if not self._skirt_vao:
+            self._skirt_vao = int(gl.glGenVertexArrays(1))
+        gl_state.glBindVertexArray(self._skirt_vao)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + unit)
+        # Every strip is wound counter-clockwise seen from outside
+        # (terrain_skirt.vert): a wall seen from behind -- from the world's
+        # far side, past ground too distant to be drawn -- is culled.
+        cull = gl.glIsEnabled(gl.GL_CULL_FACE)
+        cull_mode = int(np.asarray(gl.glGetIntegerv(gl.GL_CULL_FACE_MODE)).ravel()[0])
+        front = int(np.asarray(gl.glGetIntegerv(gl.GL_FRONT_FACE)).ravel()[0])
+        gl_state.glEnable(gl.GL_CULL_FACE)
+        gl_state.glCullFace(gl.GL_BACK)
+        gl.glFrontFace(gl.GL_CCW)
+        uniforms = {slot: entry for slot, entry in
+                    zip(edge_slots.tolist(), self.chunk_uniforms(edge_slots))}
+        page_layers = self._page_layers
+        bound_page = -1
+        bound_paint_page = -1
+        drawn = 0
+        for i, side in pairs:
+            slot = int(slots[i])
+            (res, layer), cx, cy = uniforms[slot]
+            page = slot // page_layers
+            if page != bound_page:
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._height_pages[page])
+                bound_page = page
+            if paint_unit is not None:
+                number = paint.get(slot)
+                if number is not None:
+                    paint_page, paint_layer = divmod(number, self._paint_page_layers)
+                    if paint_page != bound_paint_page:
+                        gl_state.glActiveTexture(gl.GL_TEXTURE0 + paint_unit)
+                        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._paint_pages[paint_page])
+                        bound_paint_page = paint_page
+                        gl_state.glActiveTexture(gl.GL_TEXTURE0 + unit)
+                    if paint_enabled != 1:
+                        gl_state.glUniform1i(u['uPaintEnabled'], 1)
+                        paint_enabled = 1
+                    gl_state.glUniform1i(u['uPaintLayer'], paint_layer)
+                elif paint_enabled != 0:
+                    gl_state.glUniform1i(u['uPaintEnabled'], 0)
+                    paint_enabled = 0
+            gl_state.glUniform2i(u['uChunkI'], res, layer)
+            gl_state.glUniform3f(u['uChunkX'], *cx)
+            gl_state.glUniform2f(u['uChunkY'], *cy)
+            gl_state.glUniform1i(u['uSide'], side)
+            gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 2 * (res + 1))
+            drawn += 1
+        gl_state.glCullFace(cull_mode)
+        gl.glFrontFace(front)
+        if not cull:
+            gl_state.glDisable(gl.GL_CULL_FACE)
+        gl_state.glBindVertexArray(0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        self.total_triangles += sum(2 * int(uniforms[int(slots[i])][0][0]) for i, _ in pairs)
+        return drawn
 
     def _draw_grass(self, visible_slots, projection, view, camera_pos, env_uniforms):
         if not self.frame.grass_enabled or not self.grass_shader_program:
@@ -915,6 +1194,11 @@ class TerrainGL:
         self.visible_chunks = int(len(drawn))
         #: The slots drawn this frame, in draw order (tests, Debug Tables).
         self.drawn_slots = drawn
+        self.skirt_sides = 0
+        if not blocks and frame.skirt is not None:
+            self.skirt_sides = self._draw_skirts(
+                slots[table.built[slots]], projection, view, env_uniforms, unit,
+                frustum_planes, paint_texture_unit, use_tex)
         if frame.wireframe: gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
         if frame.grass_enabled and self.grass_shader_program:
@@ -947,7 +1231,15 @@ class TerrainGL:
             except Exception:
                 pass
         self.shader_program = self.block_program = self.grass_shader_program = 0
+        self.skirt_program = 0
         self.uniforms, self.block_uniforms, self.grass_uniforms = {}, {}, {}
+        self.skirt_uniforms = {}
+        if self._skirt_vao:
+            try:
+                gl_state.glDeleteVertexArrays(1, [self._skirt_vao])
+            except Exception:
+                pass
+            self._skirt_vao = 0
         for pages in (self._paint_pages, self._height_pages):
             if pages:
                 try:

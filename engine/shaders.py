@@ -2963,6 +2963,480 @@ def _terrain_indexed_sources():
  DEFAULT_SHADERS['terrain_flat.frag']) = _terrain_indexed_sources()
 
 
+# ==============================================================================
+# The terrain's edge: a cliff wall of rock strata
+# ==============================================================================
+# Where the terrain ends (the edge of the world) its side is drawn as a cut
+# through the ground, like a geologist's block diagram: the ground itself at
+# the lip, its topsoil with roots, a paler subsoil, then folded sedimentary
+# beds -- sandstones, shales, limestone blocks, chalk, the odd coal seam,
+# fossils and ore -- over a folded metamorphic band and a crystalline
+# basement. Drawn by TerrainGL._draw_skirts, one triangle strip a chunk side,
+# from the same height grid the chunk itself is drawn from, so the wall's top
+# is exactly the terrain's edge.
+#
+# Both stages are built on the terrain's own: the vertex shader hands the
+# fragment shader terrain.vert's outputs for the rim point above each
+# fragment, and the fragment shader runs terrain.frag's material code there
+# (textures, layers, biomes, paint, the palette looks), so the top layer is
+# always the colour of the ground it lies under.
+_SKIRT_VERT_DECLS = """
+// The wall: which side of the chunk, its foot, the terrain's rectangle, and
+// how far the face leans out per unit of drop. A sheer wall faces away from
+// a camera above the ground, so the top-down view would never see it; a
+// steep escarpment it can.
+uniform int uSide;              // 0: -x, 1: +x, 2: -z, 3: +z
+uniform highp float uFloor;     // the wall's foot, world y
+uniform highp vec4 uEdge;       // the terrain's min x, max x, min z, max z
+uniform float uLean;
+out highp vec3 WallPos;
+out highp float SurfaceY;
+flat out vec3 WallNormal;
+"""
+
+_SKIRT_VERT_MAIN = """void main() {
+    int res = uChunkI.x;
+    int j = gl_VertexID / 2;
+    // Top first on the -x and +z sides, foot first on the others, so every
+    // strip is counter-clockwise seen from outside (back faces are culled).
+    bool flip = uSide == 1 || uSide == 2;
+    bool top = ((gl_VertexID & 1) == 0) != flip;
+    ivec2 g = uSide == 0 ? ivec2(0, j)
+            : uSide == 1 ? ivec2(res, j)
+            : uSide == 2 ? ivec2(j, 0)
+            :              ivec2(j, res);
+    vec3 rim = gridPoint(g);
+    highp float h = rim.y;
+    highp vec3 p = rim;
+    vec2 out2 = uSide == 0 ? vec2(-1.0, 0.0)
+              : uSide == 1 ? vec2( 1.0, 0.0)
+              : uSide == 2 ? vec2(0.0, -1.0)
+              :              vec2(0.0,  1.0);
+    if (!top) {
+        highp float foot = min(uFloor, h - 1.0);
+        highp float reach = (h - foot) * uLean;
+        // At the world's corners the foot is mitred, so the two faces meet
+        // along the diagonal with no gap between them.
+        highp float eps = uChunkX.z * 0.01;
+        vec2 along = vec2(abs(out2.y), abs(out2.x));
+        highp float a = dot(p.xz, along);
+        highp float lo = uSide < 2 ? uEdge.z : uEdge.x;
+        highp float hi = uSide < 2 ? uEdge.w : uEdge.y;
+        float mitre = a <= lo + eps ? -1.0 : (a >= hi - eps ? 1.0 : 0.0);
+        p.xz += (out2 + along * mitre) * reach;
+        p.y = foot;
+    }
+    WallNormal = normalize(vec3(out2.x, uLean, out2.y));
+    SurfaceY = h;
+    WallPos = p;
+
+    // The ground at the rim, as terrain.vert hands it to terrain.frag --
+    // as open, flat ground: the rim of a world's edge is often steep, and
+    // the material would turn it to bare rock, where the top layer is to be
+    // the colour of the land itself.
+    SmoothNormal = vec3(0.0, 1.0, 0.0);
+    Normal = SmoothNormal;
+    if (uFlatMode != 0) {
+        VertexColor = vec3(0.7);
+    } else {
+        // Read against the chunk's own height range, as terrain.vert does.
+        float norm = clamp((h - uChunkY.x) / uChunkY.y, 0.0, 1.0);
+        VertexColor = gradientColour(norm);
+    }
+    // Down the face the ground is read as if folded back inward over the
+    // land (as far in as the point is below the rim), so its textures, grain
+    // and speckles run on down the face rather than streaking straight down
+    // it, and every sample stays over the terrain's biome map and paint.
+    vec2 inward = -out2 * (h - p.y);
+    TexCoords = (rim.xz + inward) / uTiling;
+    PaintCoords = (vec2(float(g.x), float(g.y)) + inward / uChunkX.z) / float(max(res, 1));
+    FragPos = vec3(rim.x + inward.x, h, rim.z + inward.y);
+    gl_Position = projection * view * vec4(p, 1.0);
+}
+"""
+
+_SKIRT_FRAG_DECLS = """
+in highp vec3 WallPos;
+in highp float SurfaceY;
+flat in vec3 WallNormal;
+uniform highp float uFloor;      // the wall's foot
+uniform highp float uBasement;   // top of the crystalline basement
+uniform highp float uMeta;       // top of the folded metamorphic band
+uniform highp float uBand;       // a sedimentary bed's mean thickness
+uniform highp float uSoil;       // scale of the soil horizons
+
+"""
+
+_SKIRT_STRATA_HELPERS = """// ---- noise --------------------------------------------------------------
+float hash11(float p) {
+    p = fract(p * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return fract(p);
+}
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+vec2 hash22(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.xx + p3.yz) * p3.zy);
+}
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x),
+               mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float fbm(vec2 p) {
+    float a = 0.5;
+    float s = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        s += a * vnoise(p);
+        p = p * 2.03 + 17.1;
+        a *= 0.5;
+    }
+    return s / 0.9375;
+}
+// Distance to the nearest and second-nearest feature point of a jittered
+// grid, and the nearest cell (for blocky crystalline rock).
+vec3 voronoi(vec2 p, out vec2 cell) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float d1 = 8.0;
+    float d2 = 8.0;
+    cell = i;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            vec2 o = vec2(float(x), float(y));
+            vec2 r = o + hash22(i + o) * 0.85 + 0.075 - f;
+            float d = dot(r, r);
+            if (d < d1) { d2 = d1; d1 = d; cell = i + o; }
+            else if (d < d2) { d2 = d; }
+        }
+    }
+    return vec3(sqrt(d1), sqrt(d2), 0.0);
+}
+// 1 inside a line |x| < w, anti-aliased over aa (world units a pixel).
+float lineAA(float x, float w, float aa) {
+    return 1.0 - smoothstep(w - aa, w + aa, abs(x));
+}
+
+// ---- rock ---------------------------------------------------------------
+vec3 bedColour(int t) {
+    if (t == 0) return vec3(0.62, 0.29, 0.21);   // red sandstone
+    if (t == 1) return vec3(0.80, 0.74, 0.60);   // buff limestone
+    if (t == 2) return vec3(0.37, 0.51, 0.53);   // teal shale
+    if (t == 3) return vec3(0.29, 0.30, 0.33);   // grey mudstone
+    if (t == 4) return vec3(0.79, 0.56, 0.49);   // pink siltstone
+    if (t == 5) return vec3(0.78, 0.60, 0.36);   // ochre sandstone
+    if (t == 6) return vec3(0.52, 0.59, 0.66);   // blue-grey limestone
+    return vec3(0.89, 0.86, 0.77);               // chalk
+}
+
+// A fossil in the bed, or alpha 0. q is the point relative to the fossil's
+// centre, R its size, kind which fossil.
+vec4 fossil(vec2 q, float R, float kind, float aa) {
+    vec3 bone = vec3(0.92, 0.87, 0.74);
+    vec3 dark = vec3(0.30, 0.25, 0.20);
+    float r = length(q);
+    if (kind < 0.30) {
+        // Ammonite: a coiled shell with its whorls and ribs.
+        if (r > R) return vec4(0.0);
+        float a = atan(q.y, q.x) / 6.2831853;
+        float coil = fract(log(r / R + 0.04) * 1.9 - a);
+        float ribs = fract(a * 26.0 + r / R * 2.0);
+        float rim = 1.0 - smoothstep(R - 1.5 * aa - 0.6, R, r);
+        vec3 c = bone * (0.82 + 0.18 * smoothstep(0.0, 0.5, coil));
+        c = mix(c, dark, (1.0 - smoothstep(0.0, 0.12, coil)) * 0.8);
+        c = mix(c, c * 0.8, step(0.75, ribs) * 0.6);
+        c = mix(dark, c, rim);
+        return vec4(c, 1.0);
+    }
+    if (kind < 0.55) {
+        // Fish skeleton: spine, ribs and a skull.
+        float x = q.x / R;
+        float y = q.y / R;
+        float spine = lineAA(y, 0.06, aa / R) * step(abs(x + 0.15), 1.05);
+        float ribEnv = max(0.0, 0.48 * (1.0 - abs(x + 0.1) / 1.0));
+        float ribs = lineAA(fract(x * 4.5) - 0.5, 0.11, aa * 4.5 / R)
+                   * step(abs(y), ribEnv) * step(-1.0, x) * step(x, 0.75);
+        float skull = 1.0 - smoothstep(0.30, 0.30 + aa / R, length(vec2((x - 1.05) * 0.9, y)));
+        float eye = 1.0 - smoothstep(0.07, 0.07 + aa / R, length(vec2(x - 1.12, y - 0.06)));
+        float tail = step(x, -1.05) * step(-1.5, x) * step(abs(y), (-1.05 - x) * 0.9 + 0.04);
+        float m = max(max(spine, ribs), max(skull, tail));
+        if (m <= 0.0) return vec4(0.0);
+        return vec4(mix(bone, dark, eye * 0.9), m);
+    }
+    if (kind < 0.80) {
+        // Bivalve: a ribbed fan.
+        vec2 s = vec2(q.x, q.y + R * 0.55);
+        float sr = length(s);
+        float sa = atan(s.x, s.y);
+        if (sr > R * 1.15 || abs(sa) > 1.0) return vec4(0.0);
+        float ribs = 0.5 + 0.5 * cos(sa * 22.0);
+        float edge = 1.0 - smoothstep(R * 1.15 - 2.0 * aa, R * 1.15, sr);
+        vec3 c = bone * (0.78 + 0.22 * ribs);
+        return vec4(mix(dark, c, edge), 1.0);
+    }
+    // Trilobite: a segmented oval.
+    vec2 e = q / vec2(R * 0.62, R);
+    float er = length(e);
+    if (er > 1.0) return vec4(0.0);
+    float seg = fract(e.y * 5.5);
+    float lobe = abs(abs(e.x) - 0.33);
+    vec3 c = bone * 0.86;
+    c = mix(c, dark, (1.0 - smoothstep(0.0, 0.18, seg)) * 0.55 * step(e.y, 0.45));
+    c = mix(c, dark, lineAA(lobe, 0.03, aa / R) * 0.5);
+    c = mix(dark, c, 1.0 - smoothstep(1.0 - 2.0 * aa / R, 1.0, er));
+    return vec4(c, 1.0);
+}
+
+"""
+
+_SKIRT_STRATA_MAIN = """
+    vec3 p = WallPos;
+    vec2 hp = p.xz;
+    // Along the wall: x + z runs continuously round the world's corners.
+    float s = p.x + p.z;
+    float aa = max(max(fwidth(s), fwidth(p.y)), 1e-3);   // world units a pixel
+    // Fine detail fades out where a pixel covers more than it can show.
+    float detail = 1.0 - smoothstep(1.2, 4.0, aa);
+    float depth = SurfaceY - p.y;
+    float grain = vnoise(vec2(s, p.y) * 0.55) - 0.5;
+    float grain2 = vnoise(vec2(s, p.y) * 2.3 + 7.0) - 0.5;
+    vec3 col;
+
+    // ---- soil horizons, following the surface --------------------------
+    // The top layer is the ground's own colour: the lip exactly, the rest of
+    // the topsoil a little darker with depth.
+    float topsoil = (15.0 + 8.0 * vnoise(vec2(s / 45.0, 1.3))) * uSoil;
+    float lip = topsoil * (0.3 + 0.15 * vnoise(vec2(s * 0.35, 3.0)));
+    float subsoil = topsoil + (13.0 + 11.0 * vnoise(vec2(s / 140.0, 7.7))) * uSoil;
+    // Bedrock reaches up into the subsoil in weathered, broken blocks.
+    vec2 rubbleCell;
+    vec3 rv = voronoi(vec2(s, p.y) / (6.0 * uSoil), rubbleCell);
+    float rockhead = subsoil + (vnoise(vec2(s / 60.0, 2.2)) - 0.5) * 10.0 * uSoil;
+    float rubble = step(hash12(rubbleCell), 0.55) * step(rv.x, 0.42)
+                 * smoothstep(rockhead - 10.0 * uSoil, rockhead, depth);
+
+    // ---- bedrock --------------------------------------------------------
+    // Beds were laid flat and have since been folded: a bed's level is the
+    // height minus a broad and a tighter fold.
+    float fold = (fbm(hp / 1600.0) - 0.5) * min(uBand * 10.0, 520.0)
+               + (fbm(hp / 420.0 + 5.3) - 0.5) * min(uBand * 2.4, 110.0);
+    float g = p.y - fold;
+    float u = g / uBand;
+    u += 1.25 * vnoise(vec2(u * 0.2, 3.7)) + 0.3 * vnoise(vec2(u * 0.9, 8.1));   // uneven beds
+    float id = floor(u);
+    float f = fract(u);
+    float uaa = max(fwidth(u), 1e-4);
+    int kind = int(hash11(id * 1.37 + 11.0) * 8.0);
+    vec3 rock = bedColour(kind) * (0.88 + 0.22 * hash11(id * 7.13 + 2.0));
+    float bedPx = uBand;                                // a bed's thickness in units
+    // Each kind's own texture.
+    if (kind == 0 || kind == 5) {
+        // Sandstone: grain and slanted cross-bedding.
+        float dir = hash11(id * 3.1) < 0.5 ? 1.0 : -1.0;
+        float cross = fract((g + dir * s * 0.45) / (bedPx * 0.16));
+        rock *= 1.0 - 0.10 * lineAA(cross - 0.5, 0.06, uaa * 6.0) * detail;
+        rock *= 1.0 + 0.16 * grain * detail;
+    } else if (kind == 1 || kind == 6) {
+        // Limestone: blocks with mortar-like joints, two courses a bed.
+        float rowv = f * 2.0;
+        float row = floor(rowv);
+        float jx = s / (bedPx * 1.25) + hash11(id * 5.0 + row * 1.7) * 7.0;
+        float vj = 1.0 - smoothstep(0.0, max(fwidth(jx) * 1.5, 0.015), min(fract(jx), 1.0 - fract(jx)));
+        float hj = 1.0 - smoothstep(0.0, max(fwidth(rowv) * 1.5, 0.02), min(fract(rowv), 1.0 - fract(rowv)));
+        float block = hash12(vec2(floor(jx), id * 2.0 + row));
+        rock *= 0.92 + 0.14 * block;
+        rock *= 1.0 - 0.38 * max(vj, hj) * detail;
+        rock *= 1.0 + 0.10 * grain2 * detail;
+    } else if (kind == 2 || kind == 3) {
+        // Shale and mudstone: tight laminations.
+        float lam = sin(g * 1.9 + vnoise(vec2(s * 0.02, g * 0.1)) * 4.0);
+        rock *= 1.0 + 0.09 * lam * detail;
+        rock *= 1.0 + 0.08 * grain * detail;
+    } else if (kind == 4) {
+        float lam = sin(g * 0.9 + grain * 2.0);
+        rock *= 1.0 + 0.07 * lam * detail;
+        rock *= 1.0 + 0.10 * grain2 * detail;
+    } else {
+        // Chalk with a line of dark flint nodules.
+        vec2 fc = vec2(s / 9.0, id);
+        float fh = hash12(floor(fc));
+        float fx = fract(fc.x) - 0.5;
+        float fy = (f - (0.3 + 0.4 * hash11(id * 9.0))) * bedPx / 9.0;
+        float nodule = step(fh, 0.45) * (1.0 - smoothstep(0.18, 0.18 + aa / 9.0, length(vec2(fx, fy * 1.6))));
+        rock = mix(rock * (1.0 + 0.06 * grain), vec3(0.20, 0.21, 0.24), nodule * detail);
+    }
+    // A coal seam at the foot of some beds.
+    float coal = step(0.86, hash11(id * 3.33 + 1.0)) * (1.0 - smoothstep(0.10, 0.10 + uaa, f));
+    rock = mix(rock, vec3(0.08, 0.08, 0.09) + 0.05 * grain2, coal);
+    // The contact between beds: a fine dark parting.
+    float contact = 1.0 - smoothstep(0.0, uaa * 1.5, min(f, 1.0 - f) - 0.008);
+    rock = mix(rock, rock * 0.5, contact * 0.7);
+    // Weathering: blotchy stains, a little longer than they are wide.
+    rock *= 1.0 - 0.07 * smoothstep(0.55, 0.9, fbm(vec2(s / 26.0, p.y / 48.0) + 2.0));
+
+    // Fossils, in the sedimentary beds only.
+    float C = max(30.0, uBand * 0.85);
+    vec2 fpos = vec2(s, g);
+    vec2 cell = floor(fpos / C);
+    if (hash12(cell + 0.5) < 0.07 && detail > 0.0) {
+        vec2 jit = hash22(cell);
+        vec2 centre = (cell + 0.25 + 0.5 * jit) * C;
+        float R = C * (0.20 + 0.12 * hash12(cell + 3.7));
+        vec2 q = fpos - centre;
+        float ang = (hash12(cell + 9.1) - 0.5) * 1.2;
+        q = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * q;
+        vec4 fo = fossil(q, R, hash12(cell + 1.9), aa);
+        rock = mix(rock, fo.rgb, fo.a * detail);
+    }
+    // Ore: rare gold nuggets.
+    float O = max(22.0, uBand * 0.65);
+    vec2 ocell = floor(vec2(s, g) / O);
+    if (hash12(ocell + 4.2) < 0.02) {
+        vec2 oc = (ocell + 0.3 + 0.4 * hash22(ocell + 2.0)) * O;
+        vec2 q = vec2(s, g) - oc;
+        float a = hash12(ocell) * 3.14159;
+        vec2 rq = mat2(cos(a), -sin(a), sin(a), cos(a)) * q;
+        float r = (2.2 + 1.6 * hash12(ocell + 8.0)) * O / 22.0;
+        float d = abs(rq.x) * 0.9 + abs(rq.y) * 1.35 + 0.35 * abs(rq.x + rq.y);
+        float nug = 1.0 - smoothstep(r - aa, r + aa, d);
+        float rim = 1.0 - smoothstep(r * 0.7 - aa, r * 0.7 + aa, d);
+        vec3 gold = mix(vec3(0.55, 0.38, 0.08), vec3(0.98, 0.78, 0.22) * (0.9 + 0.2 * grain2), rim);
+        rock = mix(rock, gold, nug);
+    }
+    // ---- folded metamorphic band and the crystalline basement ---------
+    float baseTop = uBasement + (fbm(vec2(s / 500.0, 9.0)) - 0.5) * 90.0;
+    float metaTop = uMeta + (fbm(vec2(s / 650.0, 5.0)) - 0.5) * 110.0;
+    if (p.y < metaTop) {
+        // Schist: tight, swirling folds in reds and browns.
+        float sw = p.y * 0.22 + (fbm(vec2(s, p.y) / 70.0) - 0.5) * 9.0
+                 + (fbm(vec2(s, p.y) / 22.0 + 3.0) - 0.5) * 2.5;
+        float band = 0.5 + 0.5 * sin(sw);
+        vec3 schist = mix(vec3(0.44, 0.20, 0.16), vec3(0.62, 0.32, 0.24), band);
+        schist = mix(schist, vec3(0.30, 0.14, 0.11), lineAA(fract(sw / 6.2831853) - 0.5, 0.035, fwidth(sw) / 6.2831853) * detail * 0.7);
+        schist *= 1.0 + 0.10 * grain2 * detail;
+        float unconf = 1.0 - smoothstep(0.0, aa * 1.5, abs(p.y - metaTop) - 0.6);
+        rock = mix(schist, vec3(0.12, 0.10, 0.09), unconf * 0.85);
+    }
+    if (p.y < baseTop) {
+        // Granite / basalt: dark angular blocks with lighter fractures.
+        vec2 bc;
+        vec2 warp = vec2(fbm(vec2(s, p.y) / 90.0), fbm(vec2(s, p.y) / 90.0 + 4.0)) - 0.5;
+        vec3 v = voronoi(vec2(s, p.y) / 26.0 + warp * 1.4, bc);
+        float tone = hash12(bc);
+        vec3 crystal = mix(vec3(0.17, 0.18, 0.21), vec3(0.34, 0.35, 0.38), tone);
+        crystal *= 0.85 + 0.3 * smoothstep(0.0, 0.6, v.x);
+        float crack = 1.0 - smoothstep(0.0, max(aa / 26.0 * 1.5, 0.015), v.y - v.x - 0.03);
+        crystal = mix(crystal, vec3(0.07, 0.07, 0.08), crack * 0.9);
+        crystal *= 1.0 + 0.12 * grain2 * detail;
+        // Pale feldspar and quartz grains.
+        crystal = mix(crystal, vec3(0.62, 0.60, 0.58), step(0.93, hash12(floor(vec2(s, p.y) * 0.8))) * 0.5 * detail);
+        float unconf = 1.0 - smoothstep(0.0, aa * 1.5, abs(p.y - baseTop) - 0.8);
+        rock = mix(crystal, vec3(0.06, 0.06, 0.07), unconf * 0.9);
+    }
+
+    // ---- soil over rock -------------------------------------------------
+    if (depth < rockhead && rubble < 0.5) {
+        float t = clamp((depth - topsoil) / max(subsoil - topsoil, 1e-3), 0.0, 1.0);
+        vec3 sub = mix(vec3(0.60, 0.44, 0.27), vec3(0.74, 0.60, 0.40), t);
+        // Pebbles in the subsoil.
+        vec2 pc;
+        vec3 pv = voronoi(vec2(s, p.y) / (3.2 * uSoil), pc);
+        float pebble = step(hash12(pc + 1.3), 0.22) * (1.0 - smoothstep(0.26, 0.26 + aa / (3.2 * uSoil), pv.x));
+        sub = mix(sub, vec3(0.55, 0.52, 0.48) * (0.8 + 0.4 * hash12(pc)), pebble * detail);
+        sub *= 1.0 + 0.16 * grain * detail;
+        sub = mix(sub, ground * 0.8, 0.2);
+        // The topsoil is the ground's own colour, a little darker with depth.
+        vec3 top = ground * mix(1.0, 0.86, clamp(depth / max(topsoil, 1e-3), 0.0, 1.0))
+                 * (1.0 + 0.08 * grain2 * detail);
+        float soilEdge = smoothstep(-1.2 * uSoil - aa, 1.2 * uSoil + aa,
+                                    depth - topsoil + (vnoise(vec2(s * 0.3, 5.0)) - 0.5) * 3.0 * uSoil);
+        col = mix(top, sub, soilEdge);
+        // Roots hanging down from the surface.
+        float cw = 9.0 * uSoil;
+        float ci = floor(s / cw);
+        for (int k = -1; k <= 1; ++k) {
+            float c = ci + float(k);
+            if (hash11(c * 1.7 + 0.3) > 0.6) continue;
+            float len = topsoil * (0.8 + 1.8 * hash11(c + 3.1));
+            float along = clamp(depth / len, 0.0, 1.0);
+            float rx = (c + 0.2 + 0.6 * hash11(c)) * cw
+                     + sin(depth * 0.45 / uSoil + c) * 1.4 * uSoil * along
+                     + (hash11(c + 5.0) - 0.5) * depth * 0.6;
+            float w = 0.55 * uSoil * (1.0 - along) + 0.1;
+            float root = lineAA(s - rx, w, aa) * step(depth, len);
+            col = mix(col, vec3(0.13, 0.09, 0.06), root * detail);
+        }
+        // The rock head: a dark line where the soil meets the rock.
+        col = mix(col, col * 0.55, (1.0 - smoothstep(0.0, aa * 1.5, abs(depth - rockhead) - 0.25)) * 0.7);
+    } else {
+        col = rock;
+    }
+    // The lip is the ground itself, coloured exactly as the terrain is at
+    // the rim (terrain.frag's material, run on the rim point).
+    float onLip = 1.0 - smoothstep(lip - aa, lip + aa, depth);
+    col = mix(col, ground, onLip);
+    // A dark foot, so the block reads as a cut.
+    col *= mix(0.35, 1.0, smoothstep(uFloor, uFloor + 14.0, p.y));
+
+    // ---- light, as terrain.frag lights the ground -----------------------
+    // The top layer is lit as open ground is, so it is the land's colour on
+    // screen too; below it the light turns to the face.
+    float seam = 1.0 - smoothstep(topsoil, topsoil + 0.6 * (subsoil - topsoil), depth);
+    vec3 norm = normalize(mix(normalize(WallNormal), vec3(0.0, 1.0, 0.0), seam));
+    vec3 skyColor = vec3(0.6, 0.75, 0.9);
+    vec3 groundColor = vec3(0.3, 0.25, 0.2);
+    float skyFactor = (norm.y + 1.0) * 0.5;
+    vec3 result = (mix(groundColor, skyColor, skyFactor) * 0.3 + uAmbient) * col;
+    vec3 sunDir = normalize(vec3(0.4, 0.7, 0.3));
+    float sunDiff = max(dot(norm, sunDir), 0.0);
+    float wrappedDiff = (sunDiff + 0.3) / 1.3;
+    if (uLightSteps > 0) {
+        float steps = float(uLightSteps);
+        wrappedDiff = floor(wrappedDiff * steps + 0.5) / steps;
+    }
+    result += wrappedDiff * vec3(1.0, 0.95, 0.85) * 0.7 * col;
+    vec3 fillDir = normalize(vec3(-0.3, 0.2, -0.4));
+    result += max(dot(norm, fillDir), 0.0) * 0.2 * skyColor * col;
+    float gray = dot(result, vec3(0.299, 0.587, 0.114));
+    result = mix(vec3(gray), result, 1.15);
+    result = applyFog(result, WallPos);
+    if (uDither > 0) {
+        float levels = float(uDither);
+        result = floor(clamp(result, 0.0, 1.0) * levels + bayer4(gl_FragCoord.xy)) / levels;
+    }
+    FragColor = vec4(result, 1.0);
+"""
+
+
+def _terrain_skirt_sources():
+    """``terrain_skirt.vert`` and ``terrain_skirt.frag``: the terrain's
+    shaders with the wall added (see above)."""
+    head, marker, _ = DEFAULT_SHADERS['terrain.vert'].partition('void main() {')
+    assert marker, 'terrain.vert: main() not found'
+    vert = head + _SKIRT_VERT_DECLS + _SKIRT_VERT_MAIN
+    fhead, marker, fbody = DEFAULT_SHADERS['terrain.frag'].partition('void main() {')
+    assert marker, 'terrain.frag: main() not found'
+    material, marker, _ = fbody.partition('    // ---- Lighting')
+    assert marker, 'terrain.frag: the lighting section was not found'
+    frag = (fhead + _SKIRT_FRAG_DECLS + _SKIRT_STRATA_HELPERS + 'void main() {\n'
+            + '    // The ground at the rim: terrain.frag\'s material, unlit.\n'
+            + '    vec3 ground;\n    {' + material + '        ground = texColor;\n    }\n'
+            + _SKIRT_STRATA_MAIN + '}\n')
+    return vert, frag
+
+
+(DEFAULT_SHADERS['terrain_skirt.vert'],
+ DEFAULT_SHADERS['terrain_skirt.frag']) = _terrain_skirt_sources()
+
+
 # The optional 360-degree panorama is kept in the central shader registry so
 # desktop and GLES portability checks compile it with every other shader.
 DEFAULT_SHADERS['void_background.vert'] = """#version 330 core
