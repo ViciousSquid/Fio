@@ -182,6 +182,21 @@ def test_shift_click_picks_the_terrain_only_when_it_is_nearest(window, monkeypat
     assert not window.terrain_selected and window.primary_selection() is brush, (
         "a brush in front of the terrain was not picked")
 
+    # Selecting changes nothing in the map: the click that picked the brush
+    # took an undo checkpoint, which dropped the redo history and marked an
+    # untouched map modified.
+    window.unsaved_changes = False
+    window.save_state()
+    window.undo()
+    window.unsaved_changes = False
+    depth, redo = len(window.state.undo_stack), len(window.state.redo_stack)
+    assert redo == 1
+    window.set_selected_objects([])
+    shift_click()
+    assert window.primary_selection() is brush
+    assert (len(window.state.undo_stack), len(window.state.redo_stack)) == (depth, redo)
+    assert window.unsaved_changes is False
+
     state.update(object=brush, object_distance=500.0, ground=300.0)
     shift_click()
     assert window.terrain_selected, "terrain in front of a brush was not picked"

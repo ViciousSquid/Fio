@@ -642,7 +642,7 @@ class ConsoleCommandHandler:
             pos = [cam.pos.x, cam.pos.y, cam.pos.z]
 
         # Checkpoint before the change: undo restores the state before it.
-        self.editor_state.save_state()
+        self.main_window.save_state()
 
         # Create portal A
         portal_a = Portal(pos=[pos[0] - 64, pos[1], pos[2]])
@@ -690,7 +690,7 @@ class ConsoleCommandHandler:
             for t in self.editor_state.things
         )
 
-        self.editor_state.save_state()
+        self.main_window.save_state()
         portal.properties['portal_target'] = target_name
         touch(portal)
         sync_group_to(portal, self.editor_state.things)   # the linked end follows
@@ -723,7 +723,7 @@ class ConsoleCommandHandler:
         portals = [t for t in self.editor_state.things
                    if isinstance(t, Portal) and t.properties.get('name') == name]
         if portals:
-            self.editor_state.save_state()
+            self.main_window.save_state()
         found = False
         for t in portals:
             t.properties['color'] = [r, g, b]
@@ -747,7 +747,7 @@ class ConsoleCommandHandler:
         name = args.strip()
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
-                self.editor_state.save_state()
+                self.main_window.save_state()
                 # Fades in, with its linked portals, as the Enable input does.
                 set_group_active(t, self.editor_state.things, True)
                 debug_log("Info", f"Portal '{name}' enabled")
@@ -765,7 +765,7 @@ class ConsoleCommandHandler:
         name = args.strip()
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
-                self.editor_state.save_state()
+                self.main_window.save_state()
                 # Fades out, with its linked portals, as the Disable input does.
                 set_group_active(t, self.editor_state.things, False)
                 debug_log("Info", f"Portal '{name}' disabled")
@@ -840,7 +840,7 @@ class ConsoleCommandHandler:
 
         target_name = portal.properties.get('portal_target', '')
 
-        self.editor_state.save_state()
+        self.main_window.save_state()
         self.editor_state.things.remove(portal)
         deleted = [name]
 
@@ -1838,7 +1838,7 @@ class ConsoleCommandHandler:
                 value.strip().lower() in ('true', 'false'):
             value = value.strip().lower() == 'true'
 
-        self.editor_state.save_state()
+        self.main_window.save_state()
         if key == 'hidden' and isinstance(value, bool):
             # As hide/show: parking-aware, and a brush's collision follows.
             self._set_hidden(entity, value)
@@ -1955,7 +1955,7 @@ class ConsoleCommandHandler:
             return
         # --- Checkpoint first: undo restores the state before the change ---
         try:
-            self.editor_state.save_state()
+            self.main_window.save_state()
         except Exception as e:
             debug_log("Warning", f"Could not checkpoint before connecting: {e}")
         try:
@@ -2018,7 +2018,7 @@ class ConsoleCommandHandler:
             return
 
         try:
-            self.editor_state.save_state()
+            self.main_window.save_state()
         except Exception as e:
             debug_log("Warning", f"Could not checkpoint before disconnecting: {e}")
         set_connections(source_ent, remaining)
@@ -2060,7 +2060,7 @@ class ConsoleCommandHandler:
             elif collect_type == "key":
                 new_prop.properties['sprite_path'] = new_prop.get_key_sprite_path(
                     new_prop.properties.get('collect_key_name', new_prop.DEFAULT_KEY_NAME))
-            self.editor_state.save_state()
+            self.main_window.save_state()
             self.editor_state.things.append(new_prop)
             debug_log("Info", f"Spawned Prop collection: {item} (value={value}) named '{new_prop.properties['name']}'")
             self.main_window.update_all_ui()
@@ -2068,7 +2068,7 @@ class ConsoleCommandHandler:
         elif spawn_type == "light":
             new_light = Light(pos=[0, 100, 0])
             new_light.properties['name'] = f"Light_{self._spawn_counter}"
-            self.editor_state.save_state()
+            self.main_window.save_state()
             self.editor_state.things.append(new_light)
             debug_log("Info", f"Spawned light at [0, 100, 0] named '{new_light.properties['name']}'")
             self.main_window.update_all_ui()
@@ -2077,7 +2077,7 @@ class ConsoleCommandHandler:
             new_changer = LevelChanger(pos=[0, 40, 0])
             new_changer.properties['name'] = f"LevelChanger_{self._spawn_counter}"
             new_changer.properties['target_map'] = "Simple_Map_Test.json"
-            self.editor_state.save_state()
+            self.main_window.save_state()
             self.editor_state.things.append(new_changer)
             debug_log("Info", f"Spawned LevelChanger at [0, 40, 0] named '{new_changer.properties['name']}'")
             self.main_window.update_all_ui()
@@ -2130,7 +2130,7 @@ class ConsoleCommandHandler:
         if not entities:
             return 0
 
-        self.editor_state.save_state()
+        self.main_window.save_state()
         deleted_brush = False
 
         # The scene mutation and all derived runtime-cache updates must be

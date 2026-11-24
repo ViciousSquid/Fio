@@ -7287,9 +7287,12 @@ class PropertyEditor(QWidget):
         if self.current_object is None:
             return
         shared = self._shared_edit_targets(key)
-        if shared:
+        if not self._populating:
             # One undo step puts every object the edit reaches back -- one per
-            # gesture, not one per valueChanged.
+            # gesture, not one per valueChanged. An edit of a single object
+            # is a step too: it used to take none, so Ctrl+Z either did
+            # nothing or took the edit back together with whatever came
+            # before it.
             self._checkpoint_shared_edit(key, [self.current_object] + shared)
         if isinstance(self.current_object, dict):
             self.current_object[key] = value

@@ -2354,7 +2354,9 @@ class QtGameView(QOpenGLWidget):
                 self.editor.select_terrain()
                 self.update()
             elif obj:
-                self.editor.save_state()
+                # A selection changes nothing in the map: no undo checkpoint
+                # (one here dropped the redo history and marked the map
+                # modified on every click), as in the 2D views.
                 self.editor.set_selected_objects([obj])
                 self.update()
             return
