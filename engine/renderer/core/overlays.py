@@ -14,6 +14,7 @@ import OpenGL.GL as gl
 
 from engine.constants import brush_aabb_bounds
 from .diagnostics import timed_pass
+from .raw_calls import uniform_matrix4
 
 
 class OverlaysMixin:
@@ -119,9 +120,9 @@ class OverlaysMixin:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
+        uniform_matrix4(uniforms['model'], glm.value_ptr(self._identity_mat4))
         gl.glUniform3f(uniforms['color'], 0.2, 0.2, 0.2)
         gl.glUniform1f(uniforms['alpha'], 1.0)
         gl.glBindVertexArray(self.vaos['grid'])
@@ -160,14 +161,14 @@ class OverlaysMixin:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         pos_vec = glm.vec3(*position) if isinstance(position, (list, tuple)) else position
         base = glm.scale(glm.translate(self._identity_mat4, pos_vec), glm.vec3(32.0))
         model_loc, color_loc = uniforms['model'], uniforms['color']
         gl.glUniform1f(uniforms['alpha'], 1.0)
         gl.glBindVertexArray(self.vao_gizmo_lines)
-        gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(base))
+        uniform_matrix4(model_loc, glm.value_ptr(base))
         for i,c in enumerate([(1,0,0), (0,1,0), (0,0,1)]):
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_LINES, i*2, 2)
@@ -179,7 +180,7 @@ class OverlaysMixin:
             if axis[0]: m = glm.translate(glm.rotate(base, glm.radians(-90), glm.vec3(0,0,1)), glm.vec3(0,1,0))
             if axis[2]: m = glm.translate(glm.rotate(base, glm.radians(90), glm.vec3(1,0,0)), glm.vec3(0,1,0))
             if axis[1]: m = glm.translate(base, glm.vec3(0,1,0))
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(m))
+            uniform_matrix4(model_loc, glm.value_ptr(m))
             gl.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
         gl.glBindVertexArray(0)
@@ -190,10 +191,10 @@ class OverlaysMixin:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
-        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+        uniform_matrix4(uniforms['model'], glm.value_ptr(model_matrix))
         gl.glUniform3f(uniforms['color'], 1.0, 1.0, 0.0)
         gl.glUniform1f(uniforms['alpha'], 1.0)
         edge_vao = self._ensure_edge_vao()
@@ -307,8 +308,8 @@ class OverlaysMixin:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
 
         lo_x, lo_y, lo_z, hi_x, hi_y, hi_z = bounds
         corners = np.array([
@@ -376,9 +377,9 @@ class OverlaysMixin:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
+        uniform_matrix4(uniforms['model'], glm.value_ptr(self._identity_mat4))
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         gl.glUniform3f(uniforms['color'], *colour)
@@ -473,9 +474,9 @@ class OverlaysMixin:
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
+        uniform_matrix4(uniforms['model'], glm.value_ptr(self._identity_mat4))
         gl.glUniform1f(uniforms['alpha'], 1.0)
 
         if self._component_overlay_vao is None:
@@ -539,8 +540,8 @@ class OverlaysMixin:
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glUniform3f(uniforms['color'], 1.0, 0.5, 0.0)
         gl.glUniform1f(uniforms['alpha'], 1.0)
         cube_size = 16.0
@@ -549,7 +550,7 @@ class OverlaysMixin:
             model_matrix = glm.scale(glm.translate(self._identity_mat4,
                                                    glm.vec3(x, y, z)),
                                      glm.vec3(cube_size, cube_size, cube_size))
-            gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+            uniform_matrix4(uniforms['model'], glm.value_ptr(model_matrix))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
@@ -580,10 +581,8 @@ class OverlaysMixin:
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(
-            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(
-            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glUniform1f(uniforms['alpha'], 1.0)
 
         if self._portal_outline_vao is None:
@@ -613,8 +612,7 @@ class OverlaysMixin:
         gl.glLineWidth(1.0)
         model_loc = uniforms['model']
         color_loc = uniforms['color']
-        gl.glUniformMatrix4fv(
-            model_loc, 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        uniform_matrix4(model_loc, glm.value_ptr(self._identity_mat4))
 
         for slot_value in slots:
             slot = int(slot_value)
@@ -691,9 +689,9 @@ class OverlaysMixin:
         vertices = np.ascontiguousarray(segments, dtype=np.float32).ravel()
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
+        uniform_matrix4(uniforms['model'], glm.value_ptr(self._identity_mat4))
         gl.glUniform1f(uniforms['alpha'], 1.0)
         self._line_buffer(vertices)
         color_loc = uniforms['color']
@@ -711,9 +709,9 @@ class OverlaysMixin:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
+        uniform_matrix4(uniforms['model'], glm.value_ptr(self._identity_mat4))
         gl.glUniform1f(uniforms['alpha'], 1.0)
         # Clamped to what the driver supports (a core profile need only
         # offer 1.0); the helper caches the queried range.
@@ -751,8 +749,8 @@ class OverlaysMixin:
         gl.glUseProgram(shader)
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(view)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
+        uniform_matrix4(uniforms['projection'], proj_ptr)
+        uniform_matrix4(uniforms['view'], view_ptr)
         gl.glBindVertexArray(self.vaos['cube'])
         for mark in marks:
             pos = mark['pos']
@@ -760,7 +758,7 @@ class OverlaysMixin:
             gl.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0)
             mat = glm.translate(glm.mat4(1.0), glm.vec3(pos[0], pos[1], pos[2]))
             mat = glm.scale(mat, glm.vec3(2.0, 2.0, 2.0))
-            gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
+            uniform_matrix4(uniforms['model'], glm.value_ptr(mat))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
         gl.glBindVertexArray(0)
         gl.glDisable(gl.GL_BLEND)

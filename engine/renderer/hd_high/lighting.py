@@ -14,6 +14,7 @@ from engine import shaders
 from engine.render_keys import KeyLayout
 from ..core.diagnostics import timed_pass
 from ..core.uniform_rows import uniform_rows
+from ..core.raw_calls import uniform_matrix4
 
 
 #: Light-array capacity of each lighting shader, so the renderer can never set
@@ -877,13 +878,11 @@ class LightingMixin:
                 gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
                 lsm = proj * glm.lookAt(
                     center, center + face_dirs[face][0], face_dirs[face][1])
-                gl.glUniformMatrix4fv(
-                    lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
+                uniform_matrix4(lsm_loc, glm.value_ptr(lsm))
 
                 if len(cube_slots) and stream is not None:
                     gl.glUseProgram(depth_instanced)
-                    gl.glUniformMatrix4fv(
-                        inst_lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
+                    uniform_matrix4(inst_lsm_loc, glm.value_ptr(lsm))
                     gl.glUniform3f(inst_lightpos_loc, lx, ly, lz)
                     gl.glUniform1f(inst_far_loc, far_plane)
                     gl.glBindVertexArray(stream.vao)
@@ -893,8 +892,7 @@ class LightingMixin:
                         gl.GL_TRIANGLES, 0, 36, len(cube_slots))
                     self.render_stats.shadow_draw_calls += 1
                     gl.glUseProgram(shader)
-                    gl.glUniformMatrix4fv(
-                        lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
+                    uniform_matrix4(lsm_loc, glm.value_ptr(lsm))
                 elif len(cube_slots):
                     cube_models, _ = self._frame_transforms(table, cube_slots)
                     upload_model = uniform_rows('mat4', cube_models)

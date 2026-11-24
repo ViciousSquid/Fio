@@ -70,6 +70,7 @@ from engine import cell_cull
 from engine.cell_cull import (
     PROBE_KEEP_FRACTION, OcclusionProbeBook, ProbeGovernor,
 )
+from ..core.raw_calls import uniform_matrix4
 
 # 36 vertices of a unit cube centred on the origin. Winding is irrelevant --
 # face culling is disabled for the probe pass -- so this is simply the plain
@@ -604,8 +605,7 @@ class OcclusionMixin:
 
         proj_view = projection * view
         gl.glUseProgram(self._occlusion_program)
-        gl.glUniformMatrix4fv(self._occlusion_projview_loc, 1, gl.GL_FALSE,
-                             glm.value_ptr(proj_view))
+        uniform_matrix4(self._occlusion_projview_loc, glm.value_ptr(proj_view))
         # The probes change no pixel. Colour writes, depth writes and the
         # stencil test are off; both cube faces are drawn so the cull state
         # a brush pass left behind cannot matter; the depth test -- against
@@ -629,8 +629,7 @@ class OcclusionMixin:
                      else self._query_name(gl.glGenQueries(1)))
             gl.glBeginQuery(self._occlusion_target, query)
             model = self._probe_model_matrix(group_bounds[i])
-            gl.glUniformMatrix4fv(self._occlusion_model_loc, 1, gl.GL_FALSE,
-                                 glm.value_ptr(model))
+            uniform_matrix4(self._occlusion_model_loc, glm.value_ptr(model))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             gl.glEndQuery(self._occlusion_target)
             self._occlusion_probes[coord] = query

@@ -24,6 +24,7 @@ from engine.constants import (
     PLAYER_HULL_SIZE,
     RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX)
 from engine.entity_models import editor_models_around
+from ..core.raw_calls import uniform_matrix4
 
 # Camera render-distance cull. The pure per-object geometry lives in
 # engine.render_cull (GL-free, so it is unit-testable without a GL context) and
@@ -806,10 +807,8 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         gl.glDepthMask(gl.GL_FALSE)
         gl.glDisable(gl.GL_BLEND)
         gl.glUseProgram(self._background_image_program)
-        gl.glUniformMatrix4fv(
-            inv_projection_loc, 1, gl.GL_FALSE, glm.value_ptr(inverse_projection))
-        gl.glUniformMatrix4fv(
-            inv_view_loc, 1, gl.GL_FALSE, glm.value_ptr(inverse_view))
+        uniform_matrix4(inv_projection_loc, glm.value_ptr(inverse_projection))
+        uniform_matrix4(inv_view_loc, glm.value_ptr(inverse_view))
         gl.glUniform1i(sky_loc, 0)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, self._background_cube_texture)

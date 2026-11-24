@@ -40,6 +40,7 @@ from engine import shaders
 from engine import decal_text, decal_textures
 from engine.decal_table import IMAGE, box_inverse
 from engine.asset_archives import asset_source
+from ..core.raw_calls import buffer_sub_data, uniform_matrix4
 
 DECAL_FOLDER = os.path.join('assets', 'textures', 'decals')
 #: Side of a layer of the decal texture array; images are scaled to it.
@@ -591,10 +592,10 @@ class DecalsMixin:
         u = self._decal_uniforms
         gl.glUseProgram(program)
         self._current_shader = program
-        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(u['projection'], glm.value_ptr(projection))
+        uniform_matrix4(u['view'], glm.value_ptr(view))
         inverse = glm.inverse(projection * view)        # kept alive for value_ptr
-        gl.glUniformMatrix4fv(u['invViewProjection'], 1, gl.GL_FALSE, glm.value_ptr(inverse))
+        uniform_matrix4(u['invViewProjection'], glm.value_ptr(inverse))
         gl.glUniform4f(u['viewport'], float(viewport[0]), float(viewport[1]),
                        float(max(int(viewport[2]), 1)), float(max(int(viewport[3]), 1)))
         gl.glUniform3f(u['viewPos'], float(camera_pos.x), float(camera_pos.y),
@@ -602,8 +603,7 @@ class DecalsMixin:
         gl.glUniform1i(u['sceneDepth'], self._water_depth_texture_unit)
         gl.glUniform1i(u['sceneColor'], self._glass_scene_texture_unit)
         inverse_projection = glm.inverse(projection)
-        gl.glUniformMatrix4fv(u['invProjection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(inverse_projection))
+        uniform_matrix4(u['invProjection'], glm.value_ptr(inverse_projection))
         gl.glUniform1i(u['reflectionsOn'],
                        1 if getattr(self, 'reflections_enabled', True) else 0)
         gl.glUniform1f(u['decalFadeEnd'], float(getattr(
@@ -634,7 +634,7 @@ class DecalsMixin:
                         block = staging[start:start + rows]
                         remap_glow_rows(block, block[:, 16].astype(np.int64),
                                         self._decal_image_index, self._decal_image_lut)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, staging.nbytes, staging)
+        buffer_sub_data(gl.GL_ARRAY_BUFFER, 0, staging)
 
         # The box's far faces, untested against depth: every pixel the box
         # covers is reached once, the camera inside the box or not. The

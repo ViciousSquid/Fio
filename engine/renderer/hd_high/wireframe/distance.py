@@ -15,6 +15,7 @@ from engine.constants import RENDER_MODE_LIT
 
 from ...core.diagnostics import timed_pass
 from ...core.resources import UniformCache
+from ...core.raw_calls import uniform_matrix4
 
 #: Distance, world units, over which the colour runs from red to blue.
 DISTANCE_RANGE = 1500.0
@@ -102,7 +103,7 @@ class DistanceMixin:
         gl.glUniform1i(u['uDepth'], self._water_depth_texture_unit)
         # Held in a name: value_ptr does not keep its matrix alive.
         inverse = glm.inverse(projection * view)
-        gl.glUniformMatrix4fv(u['uInvViewProj'], 1, gl.GL_FALSE, glm.value_ptr(inverse))
+        uniform_matrix4(u['uInvViewProj'], glm.value_ptr(inverse))
         gl.glUniform3f(u['uEye'], *self._camera_xyz(camera_pos))
         gl.glUniform1f(u['uRange'], DISTANCE_RANGE)
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)

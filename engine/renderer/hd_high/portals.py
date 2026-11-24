@@ -17,6 +17,7 @@ from engine.constants import RENDER_MODE_UNLIT
 from engine.shaders import DEFAULT_SHADERS
 from ..core.diagnostics import timed_pass
 from ..core.visibility import RenderView
+from ..core.raw_calls import uniform_matrix4
 
 
 def _clip_polygon(polygon, distance):
@@ -257,10 +258,8 @@ class PortalsMixin:
 
         self._portal_upload_quad(corners)
         gl.glUseProgram(self._portal_mask_shader)
-        gl.glUniformMatrix4fv(
-            self._portal_mask_proj_loc, 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(
-            self._portal_mask_view_loc, 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(self._portal_mask_proj_loc, glm.value_ptr(projection))
+        uniform_matrix4(self._portal_mask_view_loc, glm.value_ptr(view))
         gl.glBindVertexArray(self._portal_quad_vao)
         # A hair nearer than the plane, so a wall the portal is set flush
         # against draws behind its image rather than z-fighting it.
@@ -324,7 +323,7 @@ class PortalsMixin:
         gl.glStencilFunc(gl.GL_EQUAL,parent_level,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_INCR)
         if clamp: gl.glEnable(gl.GL_DEPTH_CLAMP)
         self._portal_upload_quad(mask_quad); gl.glUseProgram(self._portal_mask_shader)
-        gl.glUniformMatrix4fv(self._portal_mask_proj_loc,1,gl.GL_FALSE,mask_proj_ptr); gl.glUniformMatrix4fv(self._portal_mask_view_loc,1,gl.GL_FALSE,mask_view_ptr)
+        uniform_matrix4(self._portal_mask_proj_loc, mask_proj_ptr); uniform_matrix4(self._portal_mask_view_loc, mask_view_ptr)
         gl.glBindVertexArray(self._portal_quad_vao); gl.glDrawArrays(gl.GL_TRIANGLE_FAN,0,4)
         if straddle: gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthMask(gl.GL_TRUE); gl.glDepthFunc(gl.GL_ALWAYS); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glDepthRange(1.0,1.0)
@@ -361,13 +360,13 @@ class PortalsMixin:
         if bool(portal_table.portal_show_rim[portal_a]):
             gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00); gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE)
             r,g,b=portal_table.portal_color[portal_a]; self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader)
-            gl.glUniformMatrix4fv(self._portal_rim_proj_loc,1,gl.GL_FALSE,proj_ptr); gl.glUniformMatrix4fv(self._portal_rim_view_loc,1,gl.GL_FALSE,view_ptr); gl.glUniform4f(self._portal_rim_color_loc,float(r),float(g),float(b),0.55*fade_a)
+            uniform_matrix4(self._portal_rim_proj_loc, proj_ptr); uniform_matrix4(self._portal_rim_view_loc, view_ptr); gl.glUniform4f(self._portal_rim_color_loc,float(r),float(g),float(b),0.55*fade_a)
             gl.glBindVertexArray(self._portal_quad_vao); gl.glDrawArrays(gl.GL_LINE_LOOP,0,4); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE_MINUS_SRC_ALPHA); gl.glDisable(gl.GL_BLEND)
         if fade_a < 0.999 and behind is not None:
             self._draw_behind_portal(corners_a, proj_ptr, view_ptr, depth, behind, 1.0 - fade_a)
         elif fade_a < 0.999:
             gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00); gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE_MINUS_SRC_ALPHA)
-            self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader); gl.glUniformMatrix4fv(self._portal_rim_proj_loc,1,gl.GL_FALSE,proj_ptr); gl.glUniformMatrix4fv(self._portal_rim_view_loc,1,gl.GL_FALSE,view_ptr); gl.glUniform4f(self._portal_rim_color_loc,0.0,0.0,0.0,1.0-fade_a)
+            self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader); uniform_matrix4(self._portal_rim_proj_loc, proj_ptr); uniform_matrix4(self._portal_rim_view_loc, view_ptr); gl.glUniform4f(self._portal_rim_color_loc,0.0,0.0,0.0,1.0-fade_a)
             gl.glBindVertexArray(self._portal_quad_vao); gl.glDrawArrays(gl.GL_TRIANGLE_FAN,0,4); gl.glDisable(gl.GL_BLEND)
 
         # Replace destination-camera depth with the real source aperture depth
@@ -420,8 +419,8 @@ class PortalsMixin:
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         self._portal_upload_quad(corners)
         gl.glUseProgram(self._portal_fade_shader)
-        gl.glUniformMatrix4fv(locs['projection'], 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(locs['view'], 1, gl.GL_FALSE, view_ptr)
+        uniform_matrix4(locs['projection'], proj_ptr)
+        uniform_matrix4(locs['view'], view_ptr)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self._portal_behind_texture)
         gl.glUniform1i(locs['behind'], 0)

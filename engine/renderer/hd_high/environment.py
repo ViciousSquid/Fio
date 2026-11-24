@@ -34,6 +34,7 @@ from engine.constants import RENDER_MODE_LIT
 from engine.renderer.core.uniform_rows import uniform_rows
 from engine.renderer.hd_high import hdr, skylight, surface
 from engine.renderer.hd_high.lighting import point_shadow_source
+from ..core.raw_calls import uniform_matrix4
 
 ENV_MAP_SIZE = (512, 256)
 #: Frames between redraws of a procedural sky's environment map while its
@@ -993,10 +994,8 @@ class EnvironmentMixin:
         # Held in locals: value_ptr points into the matrix it is given.
         inverse_projection = glm.inverse(projection)
         inverse_view = glm.inverse(view)
-        gl.glUniformMatrix4fv(program['uInvProjection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(inverse_projection))
-        gl.glUniformMatrix4fv(program['uInvView'], 1, gl.GL_FALSE,
-                              glm.value_ptr(inverse_view))
+        uniform_matrix4(program['uInvProjection'], glm.value_ptr(inverse_projection))
+        uniform_matrix4(program['uInvView'], glm.value_ptr(inverse_view))
         self._env_sky_uniforms(program, 0, self._frame_camera_pos)
         self._env_fullscreen()
         gl.glUseProgram(0)
@@ -1604,7 +1603,7 @@ class EnvironmentMixin:
             stats['casters'] += len(moving) + len(in_models)
             # Models need not be closed: both sides, pushed back a little more.
             gl.glUseProgram(plain.id)
-            gl.glUniformMatrix4fv(plain['lightSpaceMatrix'], 1, gl.GL_FALSE, matrix_ptr)
+            uniform_matrix4(plain['lightSpaceMatrix'], matrix_ptr)
             model_loc = plain['model']
             gl.glDisable(gl.GL_CULL_FACE)
             gl.glPolygonOffset(2.5, 4.0)
@@ -1661,13 +1660,13 @@ class EnvironmentMixin:
         cube_vao = self.vaos['cube']
         if len(cube_slots) and stream is not None:
             gl.glUseProgram(instanced.id)
-            gl.glUniformMatrix4fv(instanced['lightSpaceMatrix'], 1, gl.GL_FALSE, matrix_ptr)
+            uniform_matrix4(instanced['lightSpaceMatrix'], matrix_ptr)
             gl.glBindVertexArray(stream.vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
             self._point_brush_instances_at(0)
             gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, len(cube_slots))
         gl.glUseProgram(plain.id)
-        gl.glUniformMatrix4fv(plain['lightSpaceMatrix'], 1, gl.GL_FALSE, matrix_ptr)
+        uniform_matrix4(plain['lightSpaceMatrix'], matrix_ptr)
         model_loc = plain['model']
         if len(cube_slots) and stream is None:
             cube_models, _ = self._frame_transforms(table, cube_slots)

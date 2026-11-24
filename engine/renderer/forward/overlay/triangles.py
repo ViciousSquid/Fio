@@ -9,6 +9,7 @@ import OpenGL.GL as gl
 from engine import render_table
 from ...core.diagnostics import timed_pass
 from ...core.uniform_rows import uniform_rows
+from ...core.raw_calls import uniform_matrix4
 
 
 class OverlayMixin:
@@ -27,8 +28,8 @@ class OverlayMixin:
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
         self._current_shader = shader
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glUniform3f(uniforms['color'], 1.0, 1.0, 1.0)
         gl.glUniform1f(uniforms['alpha'], 1.0)
         model_loc = uniforms['model']

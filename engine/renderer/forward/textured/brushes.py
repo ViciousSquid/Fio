@@ -17,6 +17,7 @@ from ...core.diagnostics import timed_pass
 from ...core.uniform_rows import uniform_rows
 from ...core.geometry import RUN_NODRAW, RUN_SKIP
 from ..instancing import GEO_BATCH_KEY, GEO_RUN_KEY
+from ...core.raw_calls import draw_elements, uniform_matrix4
 
 
 class TexturedMixin:
@@ -84,8 +85,8 @@ class TexturedMixin:
 
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(view)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
+        uniform_matrix4(uniforms['projection'], proj_ptr)
+        uniform_matrix4(uniforms['view'], view_ptr)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['texture_diffuse'], 0)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
@@ -253,10 +254,8 @@ class TexturedMixin:
         gl.glUseProgram(program)
         self._current_shader = program
         self._upload_lights_once(name, lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
-                              glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['texture_diffuse'], 0)
         return uniforms
@@ -365,8 +364,8 @@ class TexturedMixin:
                 # Element-array binding is VAO state: bound after the VAO.
                 gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, store.index_buffer(
                     (tex_id, group_page[group]), first[begin:end], count[begin:end]))
-                gl.glDrawElements(gl.GL_TRIANGLES, int(count[begin:end].sum()),
-                                  gl.GL_UNSIGNED_SHORT, None)
+                draw_elements(gl.GL_TRIANGLES, int(count[begin:end].sum()),
+                              gl.GL_UNSIGNED_SHORT, 0)
             else:
                 gl.glMultiDrawArrays(gl.GL_TRIANGLES, first[begin:end],
                                      count[begin:end], end - begin)

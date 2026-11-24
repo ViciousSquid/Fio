@@ -16,6 +16,7 @@ from ...core.diagnostics import timed_pass
 from ...core.uniform_rows import uniform_rows
 from ..instancing import (BRUSH_RUN_KEY, _OVERRIDE_COLOURS, _SELECTED_ROW,
                           _SUBTRACT_ROW, _TRIGGER_ROW)
+from ...core.raw_calls import uniform_matrix4
 
 
 class SolidLitMixin:
@@ -47,8 +48,8 @@ class SolidLitMixin:
         # Cache value_ptr results – avoids redundant ctypes work per draw call
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(view)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, view_ptr)
+        uniform_matrix4(uniforms['projection'], proj_ptr)
+        uniform_matrix4(uniforms['view'], view_ptr)
         gl.glBindVertexArray(self.vaos['cube'])
         display_mode        = config.get('brush_display_mode', 'Textured')
         show_triggers_solid = config.get('show_triggers_as_solid', False)
@@ -98,8 +99,8 @@ class SolidLitMixin:
             self._portal_end_cull()
             gl.glUseProgram(shader)
             self._current_shader = shader
-            gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-            gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
+            uniform_matrix4(uniforms['projection'], proj_ptr)
+            uniform_matrix4(uniforms['view'], view_ptr)
             gl.glBindVertexArray(self.vaos['cube'])
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
             indices = lit['geo_rows']

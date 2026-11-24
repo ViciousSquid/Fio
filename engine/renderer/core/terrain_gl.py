@@ -26,6 +26,7 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 from engine import shaders
 from engine.terrain_frame import grass_vertex_count, heightfield_indices
 from engine.terrain_table import GRID_BORDER, STORED_GRID
+from .raw_calls import draw_elements, uniform_matrix4
 
 
 def _no_current_gl_context():
@@ -409,8 +410,7 @@ class TerrainGL:
             if res != bound_res:
                 gl.glBindVertexArray(self._index_vao(res))
                 bound_res = res
-            gl.glDrawElements(gl.GL_TRIANGLES, 6 * res * res,
-                              gl.GL_UNSIGNED_INT, None)
+            draw_elements(gl.GL_TRIANGLES, 6 * res * res, gl.GL_UNSIGNED_INT, 0)
             triangles += 2 * res * res
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindVertexArray(0)
@@ -427,8 +427,8 @@ class TerrainGL:
         self._grass_last_time = now
         gl.glUseProgram(self.grass_shader_program)
         u = self.grass_uniforms
-        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(u['projection'], glm.value_ptr(projection))
+        uniform_matrix4(u['view'], glm.value_ptr(view))
         gl.glUniform1f(u['time'], self.grass_time)
         gl.glUniform3f(u['grassColor'], *self.frame.grass_color)
         gl.glUniform3f(u['cameraPos'], float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
@@ -820,8 +820,8 @@ class TerrainGL:
             self._paint_epoch = frame.paint_epoch
 
         gl.glUseProgram(prog)
-        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(u['projection'], glm.value_ptr(projection))
+        uniform_matrix4(u['view'], glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0); gl.glBindTexture(gl.GL_TEXTURE_2D, self.grass_tex); gl.glUniform1i(u['texGrass'], 0)
         gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex);  gl.glUniform1i(u['texRock'],  1)
         gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex);  gl.glUniform1i(u['texSand'],  2)

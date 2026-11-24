@@ -23,6 +23,7 @@ import math
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from ..core.raw_calls import uniform_matrix4
 # The raw entry point: PyOpenGL's wrapper has no array handler for the packed
 # depth-stencil pixel type, and these allocations pass no pixels anyway.
 from OpenGL.raw.GL.VERSION.GL_1_1 import glTexImage2D as _raw_tex_image
@@ -648,10 +649,8 @@ class PostFXMixin:
     def _postfx_matrices(self, program, projection):
         # Held in a local: value_ptr points into the matrix it is given.
         inverse = glm.inverse(projection)
-        gl.glUniformMatrix4fv(program['uProjection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(program['uInvProjection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(inverse))
+        uniform_matrix4(program['uProjection'], glm.value_ptr(projection))
+        uniform_matrix4(program['uInvProjection'], glm.value_ptr(inverse))
         # A plain perspective (no shear between x, y and w, which a portal's
         # oblique plane or an orthographic view would have): its terms.
         p = projection
@@ -723,9 +722,8 @@ class PostFXMixin:
         gl.glUseProgram(program.id)
         self._postfx_matrices(program, projection)
         inverse_view = glm.inverse(view)
-        gl.glUniformMatrix4fv(program['uView'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glUniformMatrix4fv(program['uInvView'], 1, gl.GL_FALSE,
-                              glm.value_ptr(inverse_view))
+        uniform_matrix4(program['uView'], glm.value_ptr(view))
+        uniform_matrix4(program['uInvView'], glm.value_ptr(inverse_view))
         self._postfx_bind(program, 'uDepth', 0, tex['depth'])
         self._postfx_bind(program, 'uColor', 1, tex['colour'])
         self._postfx_bind(program, 'uData', 2, tex['data'])

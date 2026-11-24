@@ -26,6 +26,8 @@ from .core_ext import HDTerrainGL, model_draw_groups
 from ..core.diagnostics import timed_pass
 from ..core.uniform_rows import uniform_rows
 from .explosion_rows import as_float32, explosion_rows, same_rows
+from ..core.raw_calls import (
+    buffer_sub_data, draw_elements, draw_elements_instanced, uniform_matrix4)
 
 
 def _tinted(colour, tint):
@@ -209,10 +211,8 @@ class PassesMixin:
         gl.glUseProgram(program)
         self._current_shader = program
         self._upload_lights_once(name, lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
-                              glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         return uniforms
 
     #: How the batched path submits a (texture, page) group of faces:
@@ -243,8 +243,8 @@ class PassesMixin:
         self._upload_lights_once('lit', lights)
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(view)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, view_ptr)
+        uniform_matrix4(uniforms['projection'], proj_ptr)
+        uniform_matrix4(uniforms['view'], view_ptr)
         _set_model_emissive(uniforms, (0.0, 0.0, 0.0))
         gl.glBindVertexArray(self.vaos['cube'])
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
@@ -547,9 +547,9 @@ class PassesMixin:
                     sends.colour(u, _tinted(group.colour, tint))
                 with sends.material(u, group.alpha):
                     if group.indexed:
-                        gl.glDrawElementsInstanced(
+                        draw_elements_instanced(
                             gl.GL_TRIANGLES, group.count, gl.GL_UNSIGNED_INT,
-                            ctypes.c_void_p(group.start * 4), len(run_slots))
+                            group.start * 4, len(run_slots))
                     else:
                         gl.glDrawArraysInstanced(
                             gl.GL_TRIANGLES, group.start, group.count, len(run_slots))
@@ -669,9 +669,9 @@ class PassesMixin:
                 if group is None:
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
                 elif group.indexed:
-                    gl.glDrawElements(
+                    draw_elements(
                         gl.GL_TRIANGLES, group.count, gl.GL_UNSIGNED_INT,
-                        ctypes.c_void_p(group.start * 4))
+                        group.start * 4)
                 else:
                     gl.glDrawArrays(
                         gl.GL_TRIANGLES, group.start, group.count)
@@ -690,8 +690,8 @@ class PassesMixin:
         if current_shader != shader_name:
             gl.glUseProgram(program)
             u = self.uniforms[shader_name]
-            gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-            gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+            uniform_matrix4(u['projection'], glm.value_ptr(projection))
+            uniform_matrix4(u['view'], glm.value_ptr(view))
             self._upload_lights_once(shader_name, lights)
             if shader_name.startswith('textured'):
                 gl.glActiveTexture(gl.GL_TEXTURE0)
@@ -883,10 +883,8 @@ class PassesMixin:
         # Billboards are unlit, so they never reach _upload_lights_once -- they
         # still need fogging, exactly as the per-sprite path does.
         self._upload_env_uniforms(program)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
-                              glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['use_fixed_facing'], 1)
         gl.glBindVertexArray(self._ensure_sprite_instance_vao())
@@ -940,10 +938,8 @@ class PassesMixin:
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_env_uniforms('sprite_instanced')
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
-                              glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['sprite_texture'], 0)
         gl.glUniform1i(uniforms['use_fixed_facing'], 0)
@@ -984,12 +980,8 @@ class PassesMixin:
         uniforms = self.uniforms['sprite']
         gl.glUseProgram(shader)
         self._current_shader = shader
-        gl.glUniformMatrix4fv(
-            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
-        )
-        gl.glUniformMatrix4fv(
-            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
-        )
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['sprite_texture'], 0)
         gl.glBindVertexArray(vao)
@@ -1083,7 +1075,7 @@ class PassesMixin:
         vao = self._ensure_effect_instance_vao()
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
         if not same_rows(rows, self._explosion_uploaded):
-            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, as_float32(rows))
+            buffer_sub_data(gl.GL_ARRAY_BUFFER, 0, as_float32(rows))
             self._explosion_uploaded = rows
 
         shader = self.shaders['effect_instanced']
@@ -1091,10 +1083,8 @@ class PassesMixin:
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_env_uniforms('effect_instanced')
-        gl.glUniformMatrix4fv(
-            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(
-            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glUniform1f(uniforms['uTime'], float(
             (time.perf_counter() - _CLOCK_ORIGIN) % EXPLOSION_TIME_WRAP))
 
@@ -1267,7 +1257,7 @@ class PassesMixin:
         uploaded = self._particle_uploaded
         if (uploaded is None or uploaded.shape != data.shape
                 or not np.array_equal(uploaded, data)):
-            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+            buffer_sub_data(gl.GL_ARRAY_BUFFER, 0, data)
             self._particle_uploaded = data.copy()
 
         shader = self.shaders['particle_instanced']
@@ -1279,10 +1269,8 @@ class PassesMixin:
             table_rows = self._PARTICLE_PRESET_TABLE
             gl.glUniform4fv(uniforms['uPresets'], len(table_rows), table_rows)
             self._particle_presets_sent = shader
-        gl.glUniformMatrix4fv(
-            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(
-            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glUniform1f(uniforms['uTime'], float((now - _CLOCK_ORIGIN) % wrap))
         gl.glUniform1f(uniforms['uMaxScreen'], self.PARTICLE_MAX_SCREEN)
         gl.glUniform2f(uniforms['uNearFade'], *self.PARTICLE_NEAR_FADE)
@@ -1515,12 +1503,8 @@ class PassesMixin:
         self._current_shader = shader
         self._upload_env_uniforms('sprite_instanced')
         gl.glUniform1i(uniforms['use_fixed_facing'], 0)
-        gl.glUniformMatrix4fv(
-            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
-        )
-        gl.glUniformMatrix4fv(
-            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
-        )
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['sprite_texture'], 0)
         gl.glBindVertexArray(self._ensure_sprite_instance_vao())
@@ -1666,10 +1650,8 @@ class PassesMixin:
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('water', lights)
-        gl.glUniformMatrix4fv(
-            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(
-            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glUniform3fv(
             uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
         gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
@@ -1731,9 +1713,7 @@ class PassesMixin:
             gl.glUniform1i(ssr_loc, 0)
         # Keep the inverse alive: value_ptr() only borrows its storage.
         inv_projection = glm.inverse(projection)
-        gl.glUniformMatrix4fv(
-            uniforms['invProjection'], 1, gl.GL_FALSE,
-            glm.value_ptr(inv_projection))
+        uniform_matrix4(uniforms['invProjection'], glm.value_ptr(inv_projection))
 
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self.water_normal_id)
@@ -2068,8 +2048,8 @@ class PassesMixin:
         shader, uniforms = self.shaders['glass'], self.uniforms['glass']
         gl.glUseProgram(shader)
         self._upload_env_uniforms('glass')
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
 
         # Capture once, before any glass surface is drawn.
@@ -2141,8 +2121,8 @@ class PassesMixin:
         shader, uniforms = self.shaders['fog'], self.uniforms['fog']
         gl.glUseProgram(shader)
         self._upload_lights_once('fog', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
         gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
         gl.glActiveTexture(gl.GL_TEXTURE1)
