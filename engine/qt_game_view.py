@@ -29,7 +29,8 @@ from editor.things import (
 from engine.sdl_runtime import init_input as init_sdl_input
 from engine.player import Player
 
-from engine.renderer import DEFAULT_RENDERER, available_renderers, create_renderer
+from engine.renderer import (
+    DEFAULT_RENDERER, available_renderers, canonical_name, create_renderer)
 from editor.selection_overlay import describe_selection
 _HUD_FONT_FILES = {
     1: "Rushfordclean-rgz89.otf",
@@ -656,6 +657,10 @@ class QtGameView(QOpenGLWidget):
             debug_log("Error", "3D view: the renderer's shaders did not build, so "
                                "the view stays empty; the error is in the "
                                "terminal output.")
+        # Qt calls this again when it replaces the widget's context (a move
+        # to another top-level window): the renderer made above is new, and
+        # has no grid until it is given one.
+        self.grid_dirty = True
         self.set_cull_distance(self.cull_distance)
         self.load_all_sprite_textures()
         self.preload_level_textures()
@@ -1374,7 +1379,25 @@ class QtGameView(QOpenGLWidget):
         # QPainter owns the GL state again before any HUD/overlay drawing.
         painter = QPainter(self._paint_device())
         painter.beginNativePainting()
+        self._native_painting = True
+        try:
+            self._draw_frame(painter, render_state)
+        except BaseException:
+            # A frame that fails must still end its painter, here, while the
+            # context is current. Left active, it lives on in the traceback
+            # the interpreter keeps (sys.last_exc) and is destroyed when that
+            # is next replaced -- by any later exception, in any Qt callback
+            # -- with whatever context is current then, or none: a segfault
+            # long after the frame that caused it.
+            if self._native_painting:
+                painter.endNativePainting()
+            if painter.isActive():
+                painter.end()
+            raise
 
+    def _draw_frame(self, painter, render_state):
+        """The frame :meth:`_paint_frame` opened *painter* for: the world
+        inside native painting, then the 2D overlay."""
         if render_state:
             self._cached_health = render_state.player_health
             self._cached_max_health = render_state.player_max_health
@@ -1741,6 +1764,7 @@ class QtGameView(QOpenGLWidget):
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glViewport(0, 0, max(1, int(self.width())), max(1, int(self.height())))
         painter.endNativePainting()
+        self._native_painting = False
         # Do not let native rendering leak QPainter state into the first 2D
         # overlay draw. Individual HUD elements still use save()/restore().
         painter.setOpacity(1.0)
@@ -2099,6 +2123,7 @@ class QtGameView(QOpenGLWidget):
         old renderer's textures die with it. Returns True when *mode* is the
         active renderer afterwards.
         """
+        mode = canonical_name(mode)         # "Classic" is the Forward renderer
         if self.renderer is not None and mode == self._renderer_mode:
             return True
         if mode not in available_renderers():
