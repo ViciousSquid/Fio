@@ -214,7 +214,7 @@ def test_a_version_this_fio_cannot_run_is_refused(refused, declared):
 @pytest.mark.parametrize("declared", [
     "", "1", "abc", "v1.0.0", "1.0.0-beta", "1.0.0.0", " 1.0.0", "1.0.0\n", "1.x.0",
     1.0, 1, (1, 0, 0), b"1.0.0", True, (lambda self: "1.0.0")],
-    ids=repr)
+    ids=lambda declared: "a method" if callable(declared) else repr(declared))
 def test_a_declaration_that_is_not_a_version_is_refused(refused, declared):
     made = conforming_renderer(contract_version=declared)
     assert "is not a contract version" in refused(made)

@@ -12,6 +12,10 @@ import copy
 
 import pytest
 
+# The headless tier leaves out any module that imports PyQt5 or OpenGL
+# (one test here does); unmarked, the Qt tier deselected it too.
+pytestmark = pytest.mark.qt
+
 
 @pytest.fixture
 def state(qt_app):

@@ -12,6 +12,10 @@ import pytest
 
 from editor import model_wireframe as mw
 
+# The headless tier leaves out any module that imports PyQt5 or OpenGL
+# (one test here does); unmarked, the Qt tier deselected it too.
+pytestmark = pytest.mark.qt
+
 
 def _cube():
     """A unit cube as flat triangles (36 corners, as a flat OBJ lays out)."""

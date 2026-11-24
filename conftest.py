@@ -796,9 +796,16 @@ def gl_availability():
 
 @pytest.fixture(autouse=True)
 def _skip_without_gl(request):
-    """Skip ``gl``-marked tests with a readable reason instead of erroring."""
+    """Skip ``gl``-marked tests with a readable reason instead of erroring.
+
+    With ``FIO_REQUIRE_GL=1`` (the CI job that exists to run this tier) a
+    missing context is a failure: skipped, the whole tier is green without
+    having run.
+    """
     if request.node.get_closest_marker("gl") is None:
         return
     ok, reason = gl_availability()
     if not ok:
+        if os.environ.get("FIO_REQUIRE_GL") == "1":
+            pytest.fail("FIO_REQUIRE_GL is set and there is no OpenGL context: %s" % reason)
         pytest.skip("OpenGL tier unavailable: %s" % reason)

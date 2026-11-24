@@ -11,6 +11,10 @@ from engine.asset_archives import (asset_bytes, asset_exists, asset_files, asset
                                    asset_listdir, asset_source, prepare_asset_archives)
 from tools.pack_assets import pack_category
 
+# The headless tier leaves out any module that imports PyQt5 or OpenGL
+# (one test here does); unmarked, the Qt tier deselected it too.
+pytestmark = pytest.mark.qt
+
 
 def write_archive(root, category, members):
     assets = root / 'assets'

@@ -474,7 +474,7 @@ def test_readers_see_a_parked_row_where_it_is_now(worlds):
                 assert runtime[:3] == pytest.approx(expected[:3], abs=1e-6)
             assert bp.world_bounds(mine) == pytest.approx(bp.world_bounds(theirs), abs=1e-4)
             assert brush_aabb_bounds(mine) == pytest.approx(brush_aabb_bounds(theirs), abs=1e-3)
-            assert bp.collision_shape(mine) is None or True
+            assert (bp.collision_shape(mine) is None) == (bp.collision_shape(theirs) is None)
         # The grid's queries, one at a time and batched.
         lift = bp.world_bounds(w.brushes["lift"])
         cx, cz = (lift[0] + lift[3]) / 2, (lift[2] + lift[5]) / 2

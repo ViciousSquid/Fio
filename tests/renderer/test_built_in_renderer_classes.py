@@ -7,11 +7,13 @@ attributes' values, its GL objects -- is in
 ``tests/visual/test_renderer_conformance.py``.
 """
 
+import functools
+import inspect
+
 import pytest
 
 from engine.renderer import (
-    RENDERER_CONTRACT_VERSION, available_renderers, contract_violations,
-    renderer_factory)
+    RENDERER_CONTRACT_VERSION, available_renderers, renderer_factory)
 from engine.renderer import api
 
 pytestmark = [pytest.mark.qt]
@@ -19,24 +21,22 @@ pytestmark = [pytest.mark.qt]
 BUILT_IN = {"Forward": "engine.renderer.forward", "HD_High": "engine.renderer.hd_high"}
 SHARED = "engine.renderer.core"
 
-#: What ``__init__`` sets on an instance: absent from one that was only
-#: allocated, and so the only violations such an instance may have.
-SET_WHEN_MADE = ("view_distance", "shadows_enabled", "water_quality", "render_stats")
-
-
 def test_both_built_in_renderers_are_registered():
     assert set(BUILT_IN) <= set(available_renderers())
 
 
 @pytest.mark.parametrize("name", BUILT_IN)
 def test_every_method_takes_what_the_contract_declares(name):
+    """Each method as the class defines it, with ``self`` taken: what the
+    registry checks on an instance, asked of the class."""
     cls = renderer_factory(name)
-    violations = contract_violations(object.__new__(cls))
-    methods, _attributes = api._declared_members()
-    about_methods = [v for v in violations if v.split(" ")[0].split("(")[0] in methods]
-    assert about_methods == []
-    left = [v for v in violations if not v.startswith(SET_WHEN_MADE + ("ready raised",))]
-    assert left == [], left
+    for options in (api.Renderer, api.RendererOptions):
+        methods, _attributes = api._declared_members(options)
+        assert methods
+        for member, declared in methods.items():
+            bound = functools.partial(getattr(cls, member), None)
+            assert api._method_violation(member, declared, bound) is None
+    assert isinstance(inspect.getattr_static(cls, "ready"), property)
 
 
 @pytest.mark.parametrize("name", BUILT_IN)

@@ -65,7 +65,7 @@ jobs:
         shell: bash
         env:
           FIO_HEADLESS_TIER: '1'
-        run: python -m pytest -m "not qt and not gl and not benchmark and not slow" -q
+        run: python -m pytest -m "not qt and not gl and not benchmark" -q
 
   windows_qt_no_gpu:
     name: Qt / no-GPU suite on Windows x64 (offscreen, shard ${{ matrix.shard }})
@@ -94,7 +94,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest
+          python -m pip install pytest pyflakes
           python -m pip install -r requirements.txt
       - name: Run the complete Qt suite without a GPU or a display
         shell: bash
@@ -169,7 +169,7 @@ jobs:
         shell: bash
         env:
           FIO_HEADLESS_TIER: '1'
-        run: python -m pytest -m "not qt and not gl and not benchmark and not slow" -q
+        run: python -m pytest -m "not qt and not gl and not benchmark" -q
 
   # The ARM64 runtime path end users get from "pip install -r
   # requirements.txt" resolves PyQt5 to the prebuilt PyQt5-WinARM64 wheel
@@ -231,7 +231,7 @@ jobs:
         run: |
           call "%VCVARS%" arm64
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install pytest
+          python -m pip install pytest pyflakes
           python -m pip install -r requirements.txt
       - name: Verify the installed PyQt5 is native ARM64
         shell: pwsh

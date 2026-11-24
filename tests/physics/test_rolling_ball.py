@@ -312,13 +312,6 @@ def test_the_numbered_ball_is_a_ball_at_twice_the_size():
     assert p['scale'] == [2.0, 2.0, 2.0]
 
 
-def test_the_numbered_ball_is_a_ball_at_twice_the_size():
-    ball = Prop.for_model(BALL_NUMBERS_MODEL_PATH)
-    p = ball.properties
-    assert p['rolls'] and p['physics_enabled'] and not p['no_collision']
-    assert p['scale'] == [2.0, 2.0, 2.0]
-
-
 @pytest.mark.parametrize('count', [8, Soma.FLOOR_BATCH_MIN_POINTS],
                          ids=['few-scalar', 'many-grouped'])
 def test_sunk_bodies_settle_the_same_scalar_or_grouped(monkeypatch, count):
