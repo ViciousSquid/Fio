@@ -175,7 +175,7 @@ class ModelInstanceStream:
     staging rows, a copy of what was last uploaded, and counts of uploads
     made and skipped (for the tests)."""
 
-    __slots__ = ('vbo', 'data', 'held', 'uploads', 'skipped')
+    __slots__ = ('vbo', 'data', 'held', 'uploads', 'skipped', 'plan', 'run_vaos')
 
     def __init__(self):
         self.vbo = None
@@ -183,6 +183,12 @@ class ModelInstanceStream:
         self.held = None
         self.uploads = 0
         self.skipped = 0
+        #: The :class:`ModelPlan` last built for this stream, while every
+        #: model it draws was loaded (PassesMixin._model_plan).
+        self.plan = None
+        #: ``(model vertex array, first row) -> vertex array`` reading that
+        #: model's vertices and this buffer's rows from that row.
+        self.run_vaos = {}
 
     def ensure(self, count, floats):
         """Room for *count* rows in the staging array (grown geometrically);
@@ -194,6 +200,32 @@ class ModelInstanceStream:
             capacity *= 2
         self.data = np.empty((capacity, floats), dtype=np.float32)
         self.held = None
+
+
+class ModelPlan:
+    """What one model pass submits, prepared: the rows in draw order and each
+    run's vertex array and draws. See ``PassesMixin._model_plan``."""
+
+    __slots__ = ('slots', 'slot_bytes', 'recipe_bytes', 'solid', 'programs', 'vbo',
+                 'runs', 'sources', 'triangles')
+
+    def __init__(self, slots, slot_bytes, recipe_bytes, solid, programs, vbo):
+        #: The pass's rows, sorted into runs: what the instance buffer holds.
+        self.slots = slots
+        # What the plan was made from; it is used again while these hold.
+        self.slot_bytes = slot_bytes
+        self.recipe_bytes = recipe_bytes
+        self.solid = solid
+        self.programs = programs
+        self.vbo = vbo
+        #: ``(vertex array, instances, draws)`` per run; a draw is ``(program
+        #: name, textured, emissive, texture, colour, tint, alpha, indexed,
+        #: start, vertices)``.
+        self.runs = []
+        #: ``(recipe id, recipe, model, its draw groups, manual texture)`` per
+        #: run: what each run's draws were resolved from.
+        self.sources = []
+        self.triangles = 0
 
 
 class InstancingMixin:
@@ -760,39 +792,68 @@ class InstancingMixin:
         stream.held = out.copy()
         stream.uploads += 1
 
-    def _ensure_model_instance_vao(self, vao):
-        """Enable *vao*'s instance attributes (3-10, one step per instance).
-        Where they point is set per run (:meth:`_point_model_instances_at`):
-        the buffer bound then, at the run's first instance."""
-        key = int(vao)
-        if key in self._model_instanced_vaos:
-            return
-        gl_state.glBindVertexArray(vao)
-        for location in range(3, 11):
-            gl.glEnableVertexAttribArray(location)
-            gl.glVertexAttribDivisor(location, 1)
-        gl_state.glBindVertexArray(0)
-        self._model_instanced_vaos.add(key)
+    #: The most vertex arrays one model stream keeps for its runs; past it
+    #: the set starts again.
+    MODEL_RUN_VAOS = 256
 
-    def _point_model_instances_at(self, base):
-        """Aim the bound VAO's model instance attributes at instance *base*
-        of the bound buffer (no BaseInstance draws in GL 3.3), as the sprite
-        and brush passes reach a run part way through their buffers."""
+    def _model_run_vao(self, stream, obj, base):
+        """A vertex array over model *obj*'s vertices and *stream*'s instance
+        rows read from row *base*.
+
+        The model's own vertex array used to be given the instance
+        attributes and re-aimed at each run's first row, eight pointer calls
+        a run every frame (OpenGL 3.3 has no base-instance draw). A run has
+        its own now -- the model's vertex layout (position, normal,
+        texcoord: 32 bytes a vertex in both loaders) and its element buffer,
+        plus the stream's rows from *base* -- and the model's is left as its
+        loader made it.
+        """
+        vaos = stream.run_vaos
+        key = (int(obj.vao), int(base))
+        vao = vaos.get(key)
+        if vao is not None:
+            return vao
+        if len(vaos) >= self.MODEL_RUN_VAOS:
+            names = list(vaos.values())
+            gl_state.glDeleteVertexArrays(len(names), names)
+            vaos.clear()
+            stream.plan = None              # it names the arrays just deleted
+        vao = gl.glGenVertexArrays(1)
+        gl_state.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, obj.vbo)
+        for location, size, offset in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
+            vertex_attrib_pointer(location, size, gl.GL_FLOAT, gl.GL_FALSE, 32, offset)
+            gl.glEnableVertexAttribArray(location)
+        ebo = getattr(obj, 'ebo', None)
+        if ebo is not None:
+            gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, ebo)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
         stride = self.MODEL_INSTANCE_FLOATS * 4
         origin = int(base) * stride
         for location in range(3, 10):
             vertex_attrib_pointer(location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
                                   origin + (location - 3) * 16)
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
         vertex_attrib_pointer(10, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, origin + 112)
+        gl.glEnableVertexAttribArray(10)
+        gl.glVertexAttribDivisor(10, 1)
+        gl_state.glBindVertexArray(0)
+        vaos[key] = vao
+        return vao
 
     def _release_model_instance_streams(self):
         """Delete every model instance buffer (renderer cleanup)."""
         streams = self.__dict__.get('_model_instance_streams') or {}
         for stream in streams.values():
+            if stream.run_vaos:
+                names = list(stream.run_vaos.values())
+                gl_state.glDeleteVertexArrays(len(names), names)
+                stream.run_vaos.clear()
+            stream.plan = None
             if stream.vbo:
                 gl.glDeleteBuffers(1, [stream.vbo])
         streams.clear()
-        self._model_instanced_vaos.clear()
 
     @staticmethod
     def lit_instance_payload(table, row_slots, selected_slot=-1):

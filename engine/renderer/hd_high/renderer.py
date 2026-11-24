@@ -259,12 +259,9 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         self._sprite_depth_scratch = np.empty(0, dtype=np.float64)
         self._sprite_depth_aux_scratch = np.empty(0, dtype=np.float64)
         self._sprite_sorted_slots_scratch = np.empty(0, dtype=np.int32)
-        # Model VAOs whose instance attributes are enabled; the buffers are
-        # per draw call (_model_instance_stream).
-        self._model_instanced_vaos = set()
+        # Model instance buffers, one per draw call (_model_instance_stream),
+        # each with its prepared plan and its runs' vertex arrays.
         self._model_instance_streams = {}
-        self._model_recipe_scratch = np.empty(0, dtype=np.int32)
-        self._model_sorted_slots_scratch = np.empty(0, dtype=np.int32)
 
         # Shared std140 light UBO. One upload feeds every lighting shader.
         # Light data now travels through the shared std140 UBO; no per-slot

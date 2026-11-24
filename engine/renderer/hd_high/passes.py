@@ -27,6 +27,7 @@ from .core_ext import HDTerrainGL, model_draw_groups
 from ..core.diagnostics import timed_pass
 from ..core.uniform_rows import uniform_rows
 from .explosion_rows import as_float32, explosion_rows, same_rows
+from .instancing import ModelPlan
 from ..core.raw_calls import (
     buffer_sub_data, draw_elements, draw_elements_instanced, uniform_matrix4)
 
@@ -58,6 +59,10 @@ def _set_model_emissive(uniforms, emissive):
     if location is not None and location != -1:
         gl_state.glUniform3f(location, emissive[0], emissive[1], emissive[2])
 
+
+
+#: A draw of the model plan that sets no surface (a whole-model draw).
+_NO_SURFACE = object()
 
 
 class _ModelSends:
@@ -434,133 +439,93 @@ class PassesMixin:
             else:
                 gl_state.glDisable(gl.GL_CULL_FACE)
             return drawn
-        if len(self._model_recipe_scratch) < count:
-            grown = max(64, len(self._model_recipe_scratch) * 2, count)
-            self._model_recipe_scratch = np.empty(grown, dtype=np.int32)
-            self._model_sorted_slots_scratch = np.empty(grown, dtype=np.int32)
-
-        recipe_ids = self._model_recipe_scratch[:count]
-        np.take(table.model_recipe_id, slots, out=recipe_ids)
-        order, starts = sort_into_runs(recipe_ids)
-        sorted_slots = self._model_sorted_slots_scratch[:count]
-        np.take(slots, order, out=sorted_slots)
-
         # Every run's rows in one buffer, uploaded once (or not at all when
-        # unchanged); each run's draws are aimed at its first row.
+        # unchanged); each run reads it through a vertex array of its own.
         stream = self._model_instance_stream(self._stream_key('models'))
-        self._fill_model_instance_stream(stream, table, sorted_slots)
+        if stream.vbo is None:
+            stream.vbo = gl.glGenBuffers(1)         # the runs' vertex arrays name it
+        plan = self._model_plan(stream, table, slots)
+        self._fill_model_instance_stream(stream, table, plan.slots)
 
-        recipes = table.model_recipes()
+        stats = self.render_stats
+        stats.visible_tris += plan.triangles
+        uniforms = self.uniforms
         current_shader = None
-        sends = _ModelSends()
-        # 'Solid Lit': models shaded in their colours, no textures.
-        solid = bool(getattr(self, '_solid_look', False))
-        for start, end in zip(starts[:-1], starts[1:]):
-            if start == end:
-                continue
-            recipe_id = int(recipe_ids[order[start]])
-            if recipe_id < 0 or recipe_id >= len(recipes):
-                continue
-            model_path, manual_texture, override_color, tint = recipes[recipe_id]
-            if solid:
-                manual_texture = None
-            obj = self.load_model(model_path)
-            if not obj or not obj.is_loaded:
-                continue
-
-            run_slots = sorted_slots[start:end]
-            self.render_stats.visible_tris += (obj.vertex_count // 3) * len(run_slots)
-            self._ensure_model_instance_vao(obj.vao)
-            gl_state.glBindVertexArray(obj.vao)
-            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
-            self._point_model_instances_at(start)
-
-            groups = self._model_draw_groups(obj)
-            if manual_texture:
-                shader_kind = (
-                    'textured' if self.shaders.get('textured_instanced')
-                    else 'lit' if self.shaders.get('lit_instanced') else None)
-                if not shader_kind:
-                    continue
-                shader_name = shader_kind + '_instanced'
-                current_shader = self._prepare_model_shader(
-                    shader_name, projection, view, lights, current_shader)
-                if current_shader != shader_name:
-                    continue
-                u = self.uniforms[shader_name]
-                sends.emissive(u, (0.0, 0.0, 0.0))
-                gl_state.glBindTexture(
-                    gl.GL_TEXTURE_2D,
-                    self._manual_model_texture_id(manual_texture))
-                sends.alpha(u, 1.0)
-                if shader_kind != 'textured':
-                    sends.colour(u, _tinted(override_color or (0.8, 0.8, 0.8), tint))
-                elif tint:
-                    _set_model_tint(u, tint)
-                gl.glDrawArraysInstanced(
-                    gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
-                if tint and shader_kind == 'textured':
-                    _set_model_tint(u, None)
-                self.render_stats.draw_calls += 1
-                self.render_stats.batched_draws += 1
-                continue
-
-            if not groups:
-                if not self.shaders.get('lit_instanced'):
-                    continue
-                shader_kind = 'lit'
-                shader_name = 'lit_instanced'
-                current_shader = self._prepare_model_shader(
-                    shader_name, projection, view, lights, current_shader)
-                if current_shader != shader_name:
-                    continue
-                u = self.uniforms[shader_name]
-                sends.emissive(u, (0.0, 0.0, 0.0))
-                if shader_kind == 'lit':
-                    sends.colour(u, _tinted((0.8, 0.8, 0.8), tint))
-                    sends.alpha(u, 1.0)
-                gl.glDrawArraysInstanced(
-                    gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
-                self.render_stats.draw_calls += 1
-                self.render_stats.batched_draws += 1
-                continue
-
-            for group in groups:
-                shader_kind = (
-                    'textured' if (group.textured and not solid
-                                   and self.shaders.get('textured_instanced'))
-                    else 'lit' if self.shaders.get('lit_instanced') else None)
-                if not shader_kind:
-                    continue
-                shader_name = shader_kind + '_instanced'
-                current_shader = self._prepare_model_shader(
-                    shader_name, projection, view, lights, current_shader)
-                if current_shader != shader_name:
-                    continue
-                u = self.uniforms[shader_name]
-                sends.emissive(u, group.emissive)
-                if self._env_active:
-                    self._model_surface(shader_name, group.surface)
-                if shader_kind == 'textured':
-                    gl_state.glBindTexture(gl.GL_TEXTURE_2D, group.texture)
-                    if self._env_active:
-                        self._bind_material_maps(shader_name, group.texture)
+        u = last = None
+        emissive_at = alpha_at = -1
+        # What this pass has sent each program: [emissive, colour, alpha].
+        # A uniform is program state, so that is what the program holds; the
+        # first send to each program in a pass always goes out.
+        sent = {}
+        blend_state = None
+        env_active = self._env_active
+        drawn = 0
+        for vao, instances, items in plan.runs:
+            gl_state.glBindVertexArray(vao)
+            for (shader_name, textured, emissive, texture, colour, tint, alpha,
+                 indexed, start, vertices, surface, maps) in items:
+                if shader_name != current_shader:
+                    current_shader = self._prepare_model_shader(
+                        shader_name, projection, view, lights, current_shader)
+                    if current_shader != shader_name:
+                        continue
+                    u = uniforms[shader_name]
+                    last = sent.get(shader_name)
+                    if last is None:
+                        last = sent[shader_name] = [None, None, None]
+                    emissive_at = u['emissive_factor']
+                    if emissive_at is None:
+                        emissive_at = -1
+                    alpha_at = u['alpha']
+                if emissive != last[0] and emissive_at != -1:
+                    gl_state.glUniform3f(emissive_at, emissive[0], emissive[1], emissive[2])
+                    last[0] = emissive
+                if env_active and surface is not _NO_SURFACE:
+                    self._model_surface(shader_name, surface)
+                if texture:
+                    # The material maps' units are used between groups, so
+                    # the base map is bound for each group that has one.
+                    gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture)
+                    if maps and env_active:
+                        self._bind_material_maps(shader_name, texture)
+                if textured:
                     if tint:
                         _set_model_tint(u, tint)
+                elif colour != last[1]:
+                    gl_state.glUniform3f(u['object_color'], colour[0], colour[1], colour[2])
+                    last[1] = colour
+                if alpha != last[2]:
+                    gl_state.glUniform1f(alpha_at, alpha)
+                    last[2] = alpha
+                if alpha < 1.0:
+                    # A clear surface: blended, and not written to depth over
+                    # the ink. The state put back afterwards is asked of GL
+                    # once a pass -- every clear group restores the same.
+                    if blend_state is None:
+                        blend_state = (
+                            gl.glIsEnabled(gl.GL_BLEND),
+                            bool(gl.glGetBooleanv(gl.GL_DEPTH_WRITEMASK)),
+                            [int(gl.glGetIntegerv(key)) for key in (
+                                gl.GL_BLEND_SRC_RGB, gl.GL_BLEND_DST_RGB,
+                                gl.GL_BLEND_SRC_ALPHA, gl.GL_BLEND_DST_ALPHA)])
+                    gl_state.glEnable(gl.GL_BLEND)
+                    gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                    gl_state.glDepthMask(gl.GL_FALSE)
+                if indexed:
+                    draw_elements_instanced(gl.GL_TRIANGLES, vertices,
+                                            gl.GL_UNSIGNED_INT, start, instances)
                 else:
-                    sends.colour(u, _tinted(group.colour, tint))
-                with sends.material(u, group.alpha):
-                    if group.indexed:
-                        draw_elements_instanced(
-                            gl.GL_TRIANGLES, group.count, gl.GL_UNSIGNED_INT,
-                            group.start * 4, len(run_slots))
-                    else:
-                        gl.glDrawArraysInstanced(
-                            gl.GL_TRIANGLES, group.start, group.count, len(run_slots))
-                if tint and shader_kind == 'textured':
+                    gl.glDrawArraysInstanced(gl.GL_TRIANGLES, start, vertices, instances)
+                if alpha < 1.0:
+                    gl_state.glDepthMask(blend_state[1])
+                    gl_state.glBlendFuncSeparate(*blend_state[2])
+                    if not blend_state[0]:
+                        gl_state.glDisable(gl.GL_BLEND)
+                if tint and textured:
                     _set_model_tint(u, None)
-                self.render_stats.draw_calls += 1
-                self.render_stats.batched_draws += 1
+                drawn += 1
+        stats.draw_calls += drawn
+        stats.batched_draws += drawn
 
         gl_state.glBindVertexArray(0)
         if cull_was_enabled:
@@ -568,6 +533,104 @@ class PassesMixin:
         else:
             gl_state.glDisable(gl.GL_CULL_FACE)
         return count
+
+    def _model_plan(self, stream, table, slots):
+        """What the model pass submits for *slots*: the rows in draw order
+        and, for each run of rows sharing a model recipe, its vertex array and
+        its draws -- program, material values, texture, vertex range.
+
+        Kept on the stream and used again while it still describes the
+        frame: the same rows with the same recipes, the same loaded models
+        and their draw groups, the same programs. A frame of a world that has
+        not changed then sorts nothing, looks nothing up and aims no pointer;
+        it binds each run's vertex array and draws. What moves every frame --
+        the rows' transforms -- is the instance buffer's business, not the
+        plan's.
+        """
+        slots = np.asarray(slots)
+        recipe_ids = np.take(table.model_recipe_id, slots)
+        recipes = table.model_recipes()
+        solid = bool(getattr(self, '_solid_look', False))    # 'Solid Lit'
+        programs = (self.shaders.get('lit_instanced'),
+                    self.shaders.get('textured_instanced'))
+        held = stream.plan
+        if (held is not None and held.solid == solid and held.programs == programs
+                and held.vbo == stream.vbo
+                and held.slot_bytes == slots.tobytes()
+                and held.recipe_bytes == recipe_ids.tobytes()):
+            models = self.loaded_models
+            groups_of = self._model_draw_groups
+            for recipe_id, recipe, obj, groups, manual in held.sources:
+                if (recipes[recipe_id] != recipe or models.get(recipe[0]) is not obj
+                        or groups_of(obj) is not groups
+                        or (manual and self._manual_model_texture_id(recipe[1]) != manual)):
+                    break
+            else:
+                return held
+
+        order, starts = sort_into_runs(recipe_ids)
+        sorted_slots = np.take(slots, order)
+        plan = ModelPlan(sorted_slots, slots.tobytes(), recipe_ids.tobytes(),
+                         solid, programs, stream.vbo)
+        complete = True
+        lit = 'lit_instanced' if programs[0] else None
+        tex = 'textured_instanced' if programs[1] else None
+        black = (0.0, 0.0, 0.0)
+        for start, end in zip(starts[:-1], starts[1:]):
+            if start == end:
+                continue
+            recipe_id = int(recipe_ids[order[start]])
+            if recipe_id < 0 or recipe_id >= len(recipes):
+                continue
+            recipe = recipes[recipe_id]
+            model_path, manual_texture, override_color, tint = recipe
+            if solid:
+                manual_texture = None
+            obj = self.load_model(model_path)
+            if not obj or not obj.is_loaded:
+                complete = False            # not loaded yet: ask again next frame
+                continue
+            instances = int(end - start)
+            plan.triangles += (obj.vertex_count // 3) * instances
+            groups = self._model_draw_groups(obj)
+            manual = 0
+            items = []
+            if manual_texture:
+                manual = int(self._manual_model_texture_id(manual_texture))
+                name = tex or lit
+                if name:
+                    textured = name is tex
+                    items.append((
+                        name, textured, black, manual,
+                        None if textured else _tinted(override_color or (0.8, 0.8, 0.8), tint),
+                        tint, 1.0, False, 0, obj.vertex_count,
+                        _NO_SURFACE, False))
+            elif not groups:
+                if lit:
+                    items.append((lit, False, black, 0, _tinted((0.8, 0.8, 0.8), tint),
+                                  tint, 1.0, False, 0, obj.vertex_count,
+                        _NO_SURFACE, False))
+            else:
+                for group in groups:
+                    name = tex if (group.textured and not solid and tex) else lit
+                    if not name:
+                        continue
+                    textured = name is tex
+                    emissive = group.emissive
+                    items.append((
+                        name, textured,
+                        (float(emissive[0]), float(emissive[1]), float(emissive[2])),
+                        group.texture if textured else 0,
+                        None if textured else _tinted(group.colour, tint),
+                        tint, float(group.alpha), group.indexed,
+                        group.start * 4 if group.indexed else group.start, group.count,
+                        group.surface, textured))
+            plan.sources.append((recipe_id, recipe, obj, groups, manual))
+            if items:
+                plan.runs.append((self._model_run_vao(stream, obj, int(start)),
+                                  instances, tuple(items)))
+        stream.plan = plan if complete else None
+        return plan
 
     def _draw_dense_model_single(self, projection, view, table, slot, lights):
         """Draw one dense model row through the proven uniform model path.
