@@ -509,16 +509,14 @@ class InstancingMixin:
         gl.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._cube_vbo)
         for location, size, offset in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
-            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
-                                     32, ctypes.c_void_p(offset))
+            vertex_attrib_pointer(location, size, gl.GL_FLOAT, gl.GL_FALSE, 32, offset)
             gl.glEnableVertexAttribArray(location)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         stride = self.BRUSH_INSTANCE_FLOATS * 4
         origin = int(base) * stride
         for location in range(3, 11):
-            gl.glVertexAttribPointer(
-                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
-                ctypes.c_void_p(origin + (location - 3) * 16))
+            vertex_attrib_pointer(location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
+                                  origin + (location - 3) * 16)
             gl.glEnableVertexAttribArray(location)
             gl.glVertexAttribDivisor(location, 1)
         gl.glBindVertexArray(0)

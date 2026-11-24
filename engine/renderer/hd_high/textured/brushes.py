@@ -96,19 +96,19 @@ class TexturedMixin:
         tex_scale_loc = uniforms.get('tex_scale', -1)
         if tex_scale_loc == -1:
             loc = gl.glGetUniformLocation(shader, "tex_scale")
-            uniforms._cache['tex_scale'] = loc
+            uniforms['tex_scale'] = loc
             tex_scale_loc = loc
 
         tex_angle_loc = uniforms.get('tex_angle', -1)
         if tex_angle_loc == -1:
             loc = gl.glGetUniformLocation(shader, "tex_angle")
-            uniforms._cache['tex_angle'] = loc
+            uniforms['tex_angle'] = loc
             tex_angle_loc = loc
 
         tex_shift_loc = uniforms.get('tex_shift', -1)
         if tex_shift_loc == -1:
             loc = gl.glGetUniformLocation(shader, "tex_shift")
-            uniforms._cache['tex_shift'] = loc
+            uniforms['tex_shift'] = loc
             tex_shift_loc = loc
 
         normal_mat_loc = uniforms.get('normalMatrix', -1)
