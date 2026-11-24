@@ -20,6 +20,7 @@ pytest.importorskip("OpenGL", reason="engine.glb_loader imports PyOpenGL")
 
 from engine import glb_loader                      # noqa: E402
 from engine.glb_loader import GLB, flat_shaded     # noqa: E402
+from engine.renderer.core import gl_state                     # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -116,6 +117,7 @@ def test_a_glb_without_normals_uploads_flat_normals(tmp_path, monkeypatch):
     path.write_bytes(_cube_glb())
     gl = _RecordingGL()
     monkeypatch.setattr(glb_loader, "gl", gl)
+    monkeypatch.setattr(gl_state, "gl", gl)   # GL state is set through core.gl_state
     model = GLB(str(path))
 
     assert model.is_loaded
@@ -137,6 +139,7 @@ def test_a_non_indexed_primitive_keeps_its_vertices_in_place(tmp_path, monkeypat
     path.write_bytes(_cube_glb(loose_first=True))
     gl = _RecordingGL()
     monkeypatch.setattr(glb_loader, "gl", gl)
+    monkeypatch.setattr(gl_state, "gl", gl)   # GL state is set through core.gl_state
     model = GLB(str(path))
 
     loose, cube = model.groups

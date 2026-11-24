@@ -145,8 +145,11 @@ def _entries(archive, category):
     total = 0
     names = set()
     for info in infos:
-        if not category_member(info.filename, category):
-            raise ValueError(f'invalid {category} asset path: {info.filename!r}')
+        # The name as the archive stores it: on Windows zipfile turns a
+        # backslash in ``filename`` into a slash, so an archive refused
+        # everywhere else was accepted there.
+        if not category_member(info.orig_filename, category):
+            raise ValueError(f'invalid {category} asset path: {info.orig_filename!r}')
         mode = info.external_attr >> 16
         if stat.S_ISLNK(mode):
             raise ValueError('asset archive contains a symbolic link')

@@ -21,6 +21,7 @@
 | `floating_windows.py` | Draggable, collapsible overlay windows drawn in the 3D view (SysMon style). |
 | `glasses.py` | Player glasses styles and their sprite paths. |
 | `glb_loader.py` | GLB/glTF model loader. |
+| `hd_graphics.py` | Which renderer the settings ask for (Classic or HD_High), the PlayerStart's HD sky properties, HD_High's configuration and exposure arithmetic. No OpenGL. |
 | `items.py` | Item definitions for the four item slots (`gun1`, `gun2`, `custom1`, `custom2`). |
 | `level_validation.py` | Checks the structure of maps and save games before loading them. |
 | `logic_camera.py` | LogicThread runtime: editor and play camera, overhead view, frustum. |
@@ -91,7 +92,7 @@
 | `core/resources.py` | Texture, model, effect-frame and shader loading; animates GIF textures. |
 | `core/tables.py` | Lookups into the render and entity tables. |
 | `core/visibility.py` | Culling, pass classification, light selection, portal cameras. |
-| `forward/__init__.py` | Exports `ForwardRenderer`. |
+| `forward/__init__.py` | Exports `ForwardRenderer`: the **Classic** renderer, Fio's original and the default. |
 | `forward/instancing.py` | Instance buffers. |
 | `forward/lighting.py` | Lights and shadow maps. |
 | `forward/occlusion.py` | Chained occlusion queries over the cell groups (play mode). |
@@ -103,3 +104,11 @@
 | `forward/portals.py` | Stencil portals. |
 | `forward/renderer.py` | `ForwardRenderer`, the built-in renderer. |
 | `forward/shaders.py` | The forward renderer's shaders. |
+| `hd_high/__init__.py` | Exports `HDHighRenderer`: the **HD_High** renderer, separate from Classic and swapped with it live. |
+| `hd_high/renderer.py` | `HDHighRenderer`: the frame, with the HD frame around it. |
+| `hd_high/environment.py` | Sun and shadow map, sky light volume, sky modes, exposure, reflection fallback, material maps, Forward+ light clusters. |
+| `hd_high/surface.py` | Physically based shading for the lit programs and the terrain. |
+| `hd_high/postfx.py` | HDR target, ambient occlusion, reflections, bloom, sun shafts, tone mapping, grading, FXAA. |
+| `hd_high/hdr.py` | Keeps the non-physical programs' colours through the tone curve. |
+| `hd_high/core_ext.py` | HD_High's additions over `core/`, kept on its own side. |
+| `hd_high/` (the rest) | HD_High's own copies of the passes listed under `forward/`. |

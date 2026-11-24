@@ -45,6 +45,16 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CROSSOVERS = {
     ("engine/renderer/forward/decals.py", "GLOW_REMAP_VECTOR_FROM"):
         "tests/performance/test_small_n_invariant.py::test_glow_remap_paths_agree",
+    # HD_High is a separate renderer with its own copies of these two (it
+    # shares no code with the classic renderer). The copies are held to the
+    # classic modules word for word, so the classic tests above cover them.
+    ("engine/renderer/hd_high/decals.py", "GLOW_REMAP_VECTOR_FROM"):
+        "tests/engine/test_hd_graphics.py::test_hd_highs_small_n_crossovers_are_classics_code",
+    ("engine/renderer/hd_high/explosion_rows.py", "EXPLOSION_ROWS_VECTOR_FROM"):
+        "tests/engine/test_hd_graphics.py::test_hd_highs_small_n_crossovers_are_classics_code",
+    ("engine/brush_placement.py", "MESH_CULL_VECTOR_FROM"):
+        "tests/physics/test_mesh_triangle_cull.py"
+        "::test_the_player_goes_the_same_way_with_and_without_the_cull",
     ("engine/brush_placement.py", "BulkBoxes.SCALAR_BELOW"):
         "tests/brush_model (BulkBoxes: same values as world_box, to the bit)",
     ("engine/spatial_grid.py", "SpatialGrid.LOS_DENSE_MIN_CANDIDATES"):

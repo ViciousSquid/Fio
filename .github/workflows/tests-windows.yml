@@ -12,7 +12,10 @@ permissions:
 
 # Keep CI focused on the latest commit for a branch, as tests.yml does.
 concurrency:
-  group: fio-tests-windows-${{ github.ref }}
+  # The event is part of the key, as in tests.yml: a release calls this
+  # workflow, and a push to the same branch must not cancel the tests the
+  # release is waiting on.
+  group: fio-tests-windows-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Windows tiers for the same suites tests.yml runs on Ubuntu. The desktop
@@ -21,16 +24,15 @@ concurrency:
 # Until now only the packaging was exercised on Windows (Native Windows
 # ARM64 Build, FULL BUILD ALL PLATFORMS); no test tier ever ran there.
 #
-# All jobs start report-only (continue-on-error) so Windows-only findings
-# surface on every push without blocking the branch. Once a job has been
-# green across a release cycle, remove its continue-on-error line to promote
-# it to a blocking tier.
+# Every job here can fail the workflow. They began report-only
+# (continue-on-error), which let the workflow conclude "success" whatever a
+# job found: Windows was never red. The release workflows require this
+# workflow as they require tests.yml.
 jobs:
   windows_no_gpu:
     name: No-GPU fast core on Windows x64 (no Qt, CPython ${{ matrix.python }})
     runs-on: windows-latest
     timeout-minutes: 15
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -65,7 +67,7 @@ jobs:
         shell: bash
         env:
           FIO_HEADLESS_TIER: '1'
-        run: python -m pytest -m "not qt and not gl and not benchmark and not slow" -q
+        run: python -m pytest -m "not qt and not gl and not benchmark" -q
 
   windows_qt_no_gpu:
     name: Qt / no-GPU suite on Windows x64 (offscreen, shard ${{ matrix.shard }})
@@ -79,7 +81,6 @@ jobs:
     # timings, seven shards take 20-59 min (eight: up to 61, as count
     # balancing groups the slow modules), restoring the headroom.
     timeout-minutes: 75
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -94,7 +95,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest
+          python -m pip install pytest pyflakes
           python -m pip install -r requirements.txt
       - name: Run the complete Qt suite without a GPU or a display
         shell: bash
@@ -106,7 +107,6 @@ jobs:
     name: No-GPU fast core on Windows ARM64 (native, CPython 3.14)
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 25
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -169,7 +169,7 @@ jobs:
         shell: bash
         env:
           FIO_HEADLESS_TIER: '1'
-        run: python -m pytest -m "not qt and not gl and not benchmark and not slow" -q
+        run: python -m pytest -m "not qt and not gl and not benchmark" -q
 
   # The ARM64 runtime path end users get from "pip install -r
   # requirements.txt" resolves PyQt5 to the prebuilt PyQt5-WinARM64 wheel
@@ -182,7 +182,6 @@ jobs:
     runs-on: windows-11-vs2026-arm
     # Same split as x64 (see there); ARM64 runners take a little longer.
     timeout-minutes: 90
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -231,7 +230,7 @@ jobs:
         run: |
           call "%VCVARS%" arm64
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install pytest
+          python -m pip install pytest pyflakes
           python -m pip install -r requirements.txt
       - name: Verify the installed PyQt5 is native ARM64
         shell: pwsh

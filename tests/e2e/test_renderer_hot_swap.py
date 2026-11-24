@@ -151,6 +151,21 @@ def test_a_renderer_that_fails_to_start_leaves_the_current_one(fio_session, rend
     assert session.paint().std() > 4.0
 
 
+def test_classic_names_the_forward_renderer_to_the_view_too(fio_session, renderers):
+    """The registry, the console and the documentation call it Classic;
+    ``switch_renderer("Classic")`` answered "Unknown renderer"."""
+    session = _open(fio_session, size=(160, 120))
+    view = session.view
+    current = view.renderer
+    assert view.switch_renderer("Classic") is True
+    assert view.renderer is current, "already the active renderer: nothing is rebuilt"
+    assert view.switch_renderer("Flat") is True
+    assert view.switch_renderer("Classic") is True
+    assert view.renderer_mode == "Forward" and view.renderer is not current
+    session.publish()
+    assert session.paint().std() > 4.0
+
+
 def test_the_console_swaps_the_renderer(fio_session, renderers):
     from editor.console_commands import ConsoleCommandHandler
     session = _open(fio_session, size=(160, 120))

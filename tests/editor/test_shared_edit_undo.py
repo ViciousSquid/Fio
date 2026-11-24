@@ -93,3 +93,44 @@ def test_a_single_edit_is_still_one_undo_step(main_window, lights):
     assert len(main_window.state.undo_stack) == depth + 1
     main_window.undo()
     assert [t.properties['intensity'] for t in main_window.state.things[-2:]] == [1.0, 1.0]
+
+
+# -- one object selected ---------------------------------------------------------
+
+def test_an_edit_of_one_selected_object_is_an_undo_step(main_window, lights):
+    """With a single object selected a panel edit took no checkpoint at all:
+    Ctrl+Z did nothing, or took the edit back together with the step before."""
+    light = main_window.state.things[-1]
+    main_window.set_selected_objects([light])
+    panel = main_window.property_editor
+    depth = len(main_window.state.undo_stack)
+    panel.update_object_prop('intensity', 6.0)
+    assert len(main_window.state.undo_stack) == depth + 1
+    main_window.undo()
+    assert main_window.state.things[-1].properties['intensity'] == 1.0
+    main_window.redo()
+    assert main_window.state.things[-1].properties['intensity'] == 6.0
+
+
+def test_an_edit_of_one_object_does_not_take_the_step_before_it_back(main_window, lights):
+    light = main_window.state.things[-1]
+    main_window.set_selected_objects([light])
+    main_window.save_state()
+    light.pos = [light.pos[0] + 64.0, light.pos[1], light.pos[2]]
+    moved = list(light.pos)
+    main_window.property_editor.update_object_prop('intensity', 6.0)
+    main_window.undo()
+    after = main_window.state.things[-1]
+    assert after.properties['intensity'] == 1.0
+    assert list(after.pos) == moved, "the move before the edit is its own step"
+
+
+def test_dragging_one_objects_slider_is_one_step(main_window, lights, monkeypatch):
+    main_window.set_selected_objects([main_window.state.things[-1]])
+    panel = main_window.property_editor
+    checkpoints = _count_checkpoints(main_window, monkeypatch)
+    for value in (2.0, 2.5, 3.0, 3.5, 4.0):
+        panel.update_object_prop('intensity', value)
+    assert len(checkpoints) == 1
+    main_window.undo()
+    assert main_window.state.things[-1].properties['intensity'] == 1.0

@@ -19,6 +19,10 @@ import pytest
 from editor.package_exporter import PackageExporter
 from engine.fiopak import FioPackage
 
+# The headless tier leaves out any module that imports PyQt5 or OpenGL
+# (one test here does); unmarked, the Qt tier deselected it too.
+pytestmark = pytest.mark.qt
+
 
 def _write_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)

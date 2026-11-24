@@ -20,6 +20,7 @@ FioTestSession, used outside pytest, gives itself one for its lifetime.
 
 from __future__ import annotations
 
+import configparser
 import os
 import sys
 
@@ -66,12 +67,21 @@ def redirected():
 
 
 def fresh_copy(path):
-    """Write the tracked defaults to *path* and return it."""
+    """Write isolated test settings with the legacy renderer selected.
+
+    The established integration and visual suite exercises the original
+    Forward/Classic renderer; tests for HD_High construct it explicitly, so
+    their target is never implicit. Whichever renderer the shipped settings
+    select, each editor test's is chosen here, and the shipped settings are
+    left untouched.
+    """
+    config = configparser.ConfigParser()
     try:
-        with open(_REPO_SETTINGS, 'rb') as handle:
-            defaults = handle.read()
+        config.read(_REPO_SETTINGS, encoding='utf-8')
     except OSError:
-        defaults = b''
-    with open(path, 'wb') as handle:
-        handle.write(defaults)
+        pass
+    if config.has_section('Renderer'):
+        config.set('Renderer', 'renderer', 'Classic')
+    with open(path, 'w', encoding='utf-8') as handle:
+        config.write(handle)
     return str(path)

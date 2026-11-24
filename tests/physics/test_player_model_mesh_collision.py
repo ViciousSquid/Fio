@@ -3,6 +3,8 @@
 Model Props are arbitrary triangle surfaces, not convex solids: the player must
 land on deck/tread triangles without filling the gaps between them.
 """
+import math
+
 import glm
 import pytest
 
@@ -408,8 +410,40 @@ def test_mesh_slide_is_rechecked_against_aabb_boxes():
         and p_max.y > b_min[1] and p_min.y < b_max[1]
         and p_max.z > b_min[2] and p_min.z < b_max[2]
     )
-    assert player.pos.x >= 75.0 - 1e-2
+    # It leaves the box the short way -- its head was ten units into the
+    # underside -- and stays against the wall it slid along. An X pass moved
+    # it 50 units sideways, out of the box's far face.
+    assert player.pos.x == pytest.approx(25.0, abs=1e-2)
     assert player.pos.z == pytest.approx(50.0, abs=1e-2)
+    assert player.pos.y == pytest.approx(40.0, abs=1e-2)
+
+
+@pytest.mark.parametrize("high, low", [(160.0, 40.0), (200.0, 0.0), (110.0, 90.0)])
+def test_walking_under_a_sloping_mesh_does_not_throw_the_player_off_the_floor(high, low):
+    """A mesh that slopes down over a box floor (the underside of a model
+    staircase, a leaning panel) presses the hull a fraction of a unit into
+    the floor. The box re-check ran an X pass first, which took that for an
+    X overlap and moved the player out of the floor brush's nearest side:
+    a thousand units in one tick, and then a fall into the void."""
+    a, b = (100.0, high, -200.0), (300.0, low, -200.0)
+    c, d = (300.0, low, 200.0), (100.0, high, 200.0)
+    slope = math.hypot(200.0, high - low)
+    normal = (-(high - low) / slope, -200.0 / slope, 0.0)
+    panel = _model_collision_brushes(_quad(a, b, c, d, normal), solid=True)[0]
+    floor = {"pos": [0.0, -50.0, 0.0], "size": [2000.0, 100.0, 2000.0]}   # top at y=0
+    brushes = [floor, panel]
+    player = Player(0.0, 0.0, angle=math.pi / 2)                          # facing +x
+    player.pos = glm.vec3(0.0, 50.0, 0.0)
+    forward = type("Input", (), {"x": 0, "z": 1})()
+
+    for _ in range(360):
+        before = glm.vec3(player.pos)
+        player.update(1.0 / 60.0, forward, False, False, brushes)
+        assert glm.distance(player.pos, before) < 20.0, (before, player.pos)
+
+    assert player.on_ground and player.pos.y == pytest.approx(50.0, abs=0.5)
+    assert 100.0 < player.pos.x < 300.0, "stopped under the slope, on the floor"
+    assert player.pos.z == pytest.approx(0.0, abs=1.0)
 
 
 def test_model_ceiling_correction_keeps_the_capsule_below_the_surface():

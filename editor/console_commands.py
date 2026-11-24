@@ -139,7 +139,7 @@ class ConsoleCommandHandler:
             'r_shadows': self.cmd_render_shadows,
             'r_waterquality': self.cmd_water_quality,
             'r_vsync': self.cmd_render_vsync,
-            'r_clearcolor': self.cmd_render_clearcolor,
+            'r_clearcolor': self.cmd_fog_color,
             'r_info': self.cmd_render_info,
 
             # View distance & far-plane fog. These are the commands the I/O
@@ -642,7 +642,7 @@ class ConsoleCommandHandler:
             pos = [cam.pos.x, cam.pos.y, cam.pos.z]
 
         # Checkpoint before the change: undo restores the state before it.
-        self.editor_state.save_state()
+        self.main_window.save_state()
 
         # Create portal A
         portal_a = Portal(pos=[pos[0] - 64, pos[1], pos[2]])
@@ -690,7 +690,7 @@ class ConsoleCommandHandler:
             for t in self.editor_state.things
         )
 
-        self.editor_state.save_state()
+        self.main_window.save_state()
         portal.properties['portal_target'] = target_name
         touch(portal)
         sync_group_to(portal, self.editor_state.things)   # the linked end follows
@@ -723,7 +723,7 @@ class ConsoleCommandHandler:
         portals = [t for t in self.editor_state.things
                    if isinstance(t, Portal) and t.properties.get('name') == name]
         if portals:
-            self.editor_state.save_state()
+            self.main_window.save_state()
         found = False
         for t in portals:
             t.properties['color'] = [r, g, b]
@@ -747,7 +747,7 @@ class ConsoleCommandHandler:
         name = args.strip()
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
-                self.editor_state.save_state()
+                self.main_window.save_state()
                 # Fades in, with its linked portals, as the Enable input does.
                 set_group_active(t, self.editor_state.things, True)
                 debug_log("Info", f"Portal '{name}' enabled")
@@ -765,7 +765,7 @@ class ConsoleCommandHandler:
         name = args.strip()
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
-                self.editor_state.save_state()
+                self.main_window.save_state()
                 # Fades out, with its linked portals, as the Disable input does.
                 set_group_active(t, self.editor_state.things, False)
                 debug_log("Info", f"Portal '{name}' disabled")
@@ -840,7 +840,7 @@ class ConsoleCommandHandler:
 
         target_name = portal.properties.get('portal_target', '')
 
-        self.editor_state.save_state()
+        self.main_window.save_state()
         self.editor_state.things.remove(portal)
         deleted = [name]
 
@@ -1074,7 +1074,7 @@ class ConsoleCommandHandler:
             (('r_waterquality', 'waterquality'), "[cheap|expensive] — Debug cap: cheap forces all water "
                                                  "cheap; expensive lets each brush's High quality decide"),
             (('r_vsync', 'vsync'), '— Toggle VSync (saved to settings)'),
-            (('r_clearcolor',), 'r g b — Set background colour'),
+            (('r_clearcolor',), 'r g b — Set background colour (the fog colour: r_fogcolor)'),
         ]),
         ('View Distance &amp; Far-Plane Fog',
          '<i>Fog always reaches full opacity before the clip, so pulling the view '
@@ -1372,20 +1372,6 @@ class ConsoleCommandHandler:
         self.main_window.save_config()
 
         debug_log("Info", f"VSync: {'ON' if new_state else 'OFF'}")
-
-    def cmd_render_clearcolor(self, args):
-        renderer = self._get_renderer()
-        if not renderer:
-            return
-        try:
-            parts = [float(x) for x in args.split()]
-            if len(parts) == 3:
-                renderer.clear_color = [max(0.0, min(1.0, c)) for c in parts]
-                debug_log("Info", f"Clear color set to {renderer.clear_color}")
-            else:
-                debug_log("Error", "Usage: r_clearcolor r g b   (values 0.0 to 1.0)")
-        except Exception:
-            debug_log("Error", "Usage: r_clearcolor r g b")
 
     # ===================================================================
     # VIEW DISTANCE & FAR-PLANE FOG
@@ -1838,7 +1824,7 @@ class ConsoleCommandHandler:
                 value.strip().lower() in ('true', 'false'):
             value = value.strip().lower() == 'true'
 
-        self.editor_state.save_state()
+        self.main_window.save_state()
         if key == 'hidden' and isinstance(value, bool):
             # As hide/show: parking-aware, and a brush's collision follows.
             self._set_hidden(entity, value)
@@ -1955,7 +1941,7 @@ class ConsoleCommandHandler:
             return
         # --- Checkpoint first: undo restores the state before the change ---
         try:
-            self.editor_state.save_state()
+            self.main_window.save_state()
         except Exception as e:
             debug_log("Warning", f"Could not checkpoint before connecting: {e}")
         try:
@@ -2018,7 +2004,7 @@ class ConsoleCommandHandler:
             return
 
         try:
-            self.editor_state.save_state()
+            self.main_window.save_state()
         except Exception as e:
             debug_log("Warning", f"Could not checkpoint before disconnecting: {e}")
         set_connections(source_ent, remaining)
@@ -2060,7 +2046,7 @@ class ConsoleCommandHandler:
             elif collect_type == "key":
                 new_prop.properties['sprite_path'] = new_prop.get_key_sprite_path(
                     new_prop.properties.get('collect_key_name', new_prop.DEFAULT_KEY_NAME))
-            self.editor_state.save_state()
+            self.main_window.save_state()
             self.editor_state.things.append(new_prop)
             debug_log("Info", f"Spawned Prop collection: {item} (value={value}) named '{new_prop.properties['name']}'")
             self.main_window.update_all_ui()
@@ -2068,7 +2054,7 @@ class ConsoleCommandHandler:
         elif spawn_type == "light":
             new_light = Light(pos=[0, 100, 0])
             new_light.properties['name'] = f"Light_{self._spawn_counter}"
-            self.editor_state.save_state()
+            self.main_window.save_state()
             self.editor_state.things.append(new_light)
             debug_log("Info", f"Spawned light at [0, 100, 0] named '{new_light.properties['name']}'")
             self.main_window.update_all_ui()
@@ -2077,7 +2063,7 @@ class ConsoleCommandHandler:
             new_changer = LevelChanger(pos=[0, 40, 0])
             new_changer.properties['name'] = f"LevelChanger_{self._spawn_counter}"
             new_changer.properties['target_map'] = "Simple_Map_Test.json"
-            self.editor_state.save_state()
+            self.main_window.save_state()
             self.editor_state.things.append(new_changer)
             debug_log("Info", f"Spawned LevelChanger at [0, 40, 0] named '{new_changer.properties['name']}'")
             self.main_window.update_all_ui()
@@ -2130,7 +2116,7 @@ class ConsoleCommandHandler:
         if not entities:
             return 0
 
-        self.editor_state.save_state()
+        self.main_window.save_state()
         deleted_brush = False
 
         # The scene mutation and all derived runtime-cache updates must be
@@ -2377,7 +2363,10 @@ class ConsoleCommandHandler:
             debug_log("Error", "reflections: no renderer yet")
             return
         arg = args.strip().lower() if args else "toggle"
-        current = bool(getattr(renderer, 'reflections_enabled', True))
+        current = getattr(renderer, 'reflections_enabled', None)
+        if current is None:             # optional (engine.renderer.RendererOptions)
+            debug_log("Info", "reflections: this renderer draws none to switch")
+            return
         if arg in ("on", "1", "true"):
             value = True
         elif arg in ("off", "0", "false"):
@@ -2401,10 +2390,13 @@ class ConsoleCommandHandler:
         if renderer is None:
             debug_log("Error", "decalfade: no renderer yet")
             return
+        fade = getattr(renderer, 'decal_reflection_fade', None)
+        if fade is None:                # optional (engine.renderer.RendererOptions)
+            debug_log("Info", "decalfade: this renderer draws no decal reflections")
+            return
         arg = args.strip()
         if not arg:
-            debug_log("Info", f"Decal reflection fade: "
-                              f"{float(renderer.decal_reflection_fade):g} units")
+            debug_log("Info", f"Decal reflection fade: {float(fade):g} units")
             return
         try:
             distance = float(arg)

@@ -885,9 +885,12 @@ class Terrain:
                 raise AttributeError(f"unknown terrain appearance option: {key}")
             setattr(a, key, value)
         if 'preset' not in options and any(
-                k not in ('layer_heights', 'layer_blend', 'slope_rock') for k in options):
+                k not in ('layer_heights', 'layer_blend', 'slope_rock')
+                + terrain_style.EDGE_OPTIONS for k in options):
             a.preset = 'custom'
         a.sanitize()
+        if all(k in terrain_style.EDGE_OPTIONS for k in options):
+            return                      # the walls only: drawn from the next frame
         self._appearance_changed(old_shape, old_grass)
 
     def set_palette_color(self, index: int, color):
@@ -1587,7 +1590,28 @@ class Terrain:
             paint_page_layers=self.PAINT_PAGE_LAYERS,
             height_page_layers=self.HEIGHT_PAGE_LAYERS,
             max_gradient_stops=self.MAX_GRADIENT_STOPS,
-            triangle_count=self.table.triangle_count())
+            triangle_count=self.table.triangle_count(),
+            skirt=self._published_skirt())
+
+    #: The strata wall at the terrain's edge reaches this far below the
+    #: lowest ground, or this share of the terrain's height range when that
+    #: is deeper.
+    SKIRT_MIN_DEPTH = 320.0
+    SKIRT_DEPTH_SHARE = 0.25
+
+    def _published_skirt(self):
+        """The terrain's sides for this frame (``TerrainFrame.skirt``), or
+        None. The heightfield's own: the Blocks look builds its walls into
+        its meshes."""
+        if not self.appearance.strata or self.appearance.terrace_mode == 'blocks':
+            return None
+        (min_x, max_x), (min_z, max_z) = self.get_terrain_bounds()
+        lo, hi = self._layer_height_range()
+        depth = max(self.SKIRT_MIN_DEPTH * self.mesh_scale,
+                    self.SKIRT_DEPTH_SHARE * (hi - lo))
+        return (float(min_x), float(max_x), float(min_z), float(max_z),
+                float(lo - depth), float(lo), float(hi),
+                int(self.appearance.strata_layers))
 
     def _released(self, slots):
         """Table slots were freed: their published products go with them. (A

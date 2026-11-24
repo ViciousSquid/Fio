@@ -20,6 +20,7 @@ pytest.importorskip("OpenGL", reason="engine.obj_loader imports PyOpenGL")
 
 from engine import obj_loader                      # noqa: E402
 from engine.obj_loader import OBJ, OBJLoader       # noqa: E402
+from engine.renderer.core import gl_state                     # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -49,7 +50,9 @@ class _NullGL(types.SimpleNamespace):
 
 @pytest.fixture
 def null_gl(monkeypatch):
-    monkeypatch.setattr(obj_loader, "gl", _NullGL())
+    fake_gl = _NullGL()
+    monkeypatch.setattr(obj_loader, "gl", fake_gl)
+    monkeypatch.setattr(gl_state, "gl", fake_gl)   # GL state is set through core.gl_state
 
 
 def _write(tmp_path, text, name="model.obj"):

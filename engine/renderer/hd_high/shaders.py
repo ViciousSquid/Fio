@@ -1,0 +1,816 @@
+"""HDHighRenderer's shader set.
+
+The forward lighting programs and their instanced variants, uniform
+preloading, the low-power variants, terrain program binding, and the sprite
+texture array the layered billboard shader samples.
+"""
+
+import re
+
+import OpenGL.GL as gl
+from engine.renderer.core import gl_state
+from OpenGL.GL.shaders import compileProgram, compileShader
+
+from engine import shaders
+from engine.shaders import DEFAULT_SHADERS, EXPLOSION_INSTANCE_FLOATS
+from engine.sprite_layers import SpriteLayers
+from ..core.resources import UniformCache, _RENDERER_PREFIX
+
+
+class ShadersMixin:
+    """HDHighRenderer's shader programs."""
+
+    # --------------------------------------------------------------------------
+    # Platform detection
+    # --------------------------------------------------------------------------
+    @staticmethod
+    def _detect_lowpower_platform():
+        """Whether this machine wants the low-power lighting shaders.
+
+        Delegates to :func:`engine.shaders.detect_low_power_arm`, which is where
+        the rule lives now — the renderer and the Settings window used to detect
+        this separately and could reach different answers about one machine.
+        """
+        return shaders.detect_low_power_arm()[0]
+
+    def _compile_common_shaders(self):
+        """Compile the shaders every pass shares."""
+        try:
+            self._compile_overlay_shader()
+
+            # sprite (billboards)
+            vs_src = self._shader_source('sprite.vert')
+            fs_src = self._shader_source('sprite.frag')
+            self.shaders['sprite'] = self.shader_loader.compile_from_source(vs_src, fs_src)
+            self.uniforms['sprite'] = UniformCache(self.shaders['sprite'])
+            self.uniforms['sprite'].preload(['projection', 'view', 'sprite_texture', 'sprite_pos_world', 'sprite_size'])
+            self.uniforms['sprite'].preload(self.ENV_UNIFORMS)
+
+            # depth_cube – renders scene depth into a point light's cube-map for
+            # omnidirectional shadow mapping (replaces the old projected shadows).
+            vs_src = self._shader_source('depth_cube.vert')
+            fs_src = self._shader_source('depth_cube.frag')
+            self.shaders['depth_cube'] = self.shader_loader.compile_from_source(vs_src, fs_src)
+            self.uniforms['depth_cube'] = UniformCache(self.shaders['depth_cube'])
+            self.uniforms['depth_cube'].preload(['model', 'lightSpaceMatrix', 'lightPos', 'far_plane'])
+
+            # water
+            vs_src = self._shader_source('water.vert')
+            fs_src = self._shader_source('water.frag')
+            self.shaders['water'] = self.shader_loader.compile_from_source(vs_src, fs_src)
+            self.uniforms['water'] = UniformCache(self.shaders['water'])
+            self._preload_water_uniforms()
+
+            # glass
+            # Glass is an optional visual effect. A driver/compiler rejection here
+            # must not abort common shader initialization and take the whole world
+            # renderer down with it; the glass pass already skips itself when no
+            # glass program is registered.
+            try:
+                vs_src = self._shader_source('glass.vert')
+                fs_src = self._shader_source('glass.frag')
+                glass_program = self.shader_loader.compile_from_source(vs_src, fs_src)
+                self.shaders['glass'] = glass_program
+                self.uniforms['glass'] = UniformCache(glass_program)
+                self.uniforms['glass'].preload([
+                    'projection', 'view', 'model', 'viewPos', 'waterColor',
+                    'distortionStrength', 'fresnelIntensity', 'glassOpacity',
+                    'refractionIndex', 'roughness', 'normalMatrix',
+                    'sceneColor', 'screenSize'
+                ])
+                self.uniforms['glass'].preload(self.ENV_UNIFORMS)
+            except Exception as e:
+                self.shaders.pop('glass', None)
+                self.uniforms.pop('glass', None)
+                print(f"Glass shader unavailable; continuing without glass: {e}")
+            # fog – use ARM‑optimised fragment shader (works everywhere)
+            fog_vert = self._shader_source('fog.vert')
+            fog_frag = self._shader_source('fog_arm.frag') or self._shader_source('fog.frag')
+            self.shaders['fog'] = self.shader_loader.compile_from_source(fog_vert, fog_frag)
+            self.uniforms['fog'] = UniformCache(self.shaders['fog'])
+            self._preload_fog_uniforms()
+
+            # terrain
+            try:
+                terrain_vs = compileShader(DEFAULT_SHADERS['terrain_indexed.vert'], gl.GL_VERTEX_SHADER)
+                # The HD path first, then the light block (it rewrites the
+                # light loops the HD path adds).
+                terrain_source = shaders.light_ubo_source(
+                    self._hd_fragment_source(DEFAULT_SHADERS['terrain_flat.frag']))
+                terrain_fs = compileShader(terrain_source, gl.GL_FRAGMENT_SHADER)
+                terrain_program = compileProgram(terrain_vs, terrain_fs, validate=False)
+                if self.hd:
+                    self._hd_program_ready(terrain_program)
+                self.shaders['terrain'] = terrain_program
+                self.uniforms['terrain'] = UniformCache(terrain_program)
+                self.uniforms['terrain'].preload([
+                    'projection', 'view', 'active_lights',
+                    'texGrass', 'texRock', 'texSand', 'texSnow',
+                ])
+                self.uniforms['terrain'].preload(self.ENV_UNIFORMS)
+                print("Terrain shader loaded")
+            except Exception as e:
+                print(f"Terrain shader error: {e}")
+                self.shaders['terrain'] = None
+
+            # lit and textured shaders (needed for forward fallback in Deferred)
+            if self.lowpower_mode:
+                self._compile_arm_shaders()
+            else:
+                self._compile_standard_shaders()
+
+            self._configure_light_ubo_programs()
+            print("Base renderer shaders compiled successfully.")
+        except Exception as e:
+            print(f"FATAL: Shader Error in Renderer: {e}")
+            self._shader_init_failed = True
+
+    def _compile_arm_shaders(self):
+        lit_vert = DEFAULT_SHADERS.get('lit_arm.vert', '')
+        lit_frag = DEFAULT_SHADERS.get('lit_arm.frag', '')
+        lit_shader = self.shader_loader.compile_from_source(lit_vert, lit_frag)
+        self.shaders['lit'] = lit_shader
+        self.uniforms['lit'] = UniformCache(lit_shader)
+        self._preload_lit_uniforms('lit')
+        self.uniforms['lit'].preload(['normalMatrix'])
+
+        tex_vert = DEFAULT_SHADERS.get('textured_arm.vert', '')
+        tex_frag = DEFAULT_SHADERS.get('textured_arm.frag', '')
+        tex_shader = self.shader_loader.compile_from_source(tex_vert, tex_frag)
+        self.shaders['textured'] = tex_shader
+        self.uniforms['textured'] = UniformCache(tex_shader)
+        self._preload_lit_uniforms('textured')
+        self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
+        self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
+        self._compile_instanced_brush_shader(tex_vert, tex_frag)
+        self._compile_geo_face_shader(tex_vert, tex_frag)
+        self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
+        self._compile_instanced_depth_shader()
+        self._compile_instanced_sprite_shader()
+        self._compile_instanced_effect_shader()
+
+    def _compile_standard_shaders(self):
+        # From the embedded sources, like every other program here. These two
+        # used to be read back from assets/shaders, which ShaderLoader only
+        # writes when the install folder is writable; a read-only Fio.app
+        # never had the files, so no 3D view was drawn there.
+        lit_shader = self.shader_loader.compile_from_source(
+            self._shader_source('lit.vert'), self._shader_source('lit.frag'))
+        self.shaders['lit'] = lit_shader
+        self.uniforms['lit'] = UniformCache(lit_shader)
+        self._preload_lit_uniforms('lit')
+        self.uniforms['lit'].preload(['normalMatrix'])
+
+        tex_shader = self.shader_loader.compile_from_source(
+            self._shader_source('textured.vert'), self._shader_source('textured.frag'))
+        self.shaders['textured'] = tex_shader
+        self.uniforms['textured'] = UniformCache(tex_shader)
+        self._preload_lit_uniforms('textured')
+        self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
+        lit_vert = DEFAULT_SHADERS.get('lit.vert', '')
+        lit_frag = DEFAULT_SHADERS.get('lit.frag', '')
+        tex_vert = DEFAULT_SHADERS.get('textured.vert', '')
+        tex_frag = DEFAULT_SHADERS.get('textured.frag', '')
+        self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
+        self._compile_instanced_brush_shader(tex_vert, tex_frag)
+        self._compile_geo_face_shader(tex_vert, tex_frag)
+        self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
+        self._compile_instanced_depth_shader()
+        self._compile_instanced_sprite_shader()
+        self._compile_instanced_effect_shader()
+
+    #: Floats per brush-face instance: a mat4 model matrix, a mat3 normal
+    #: matrix padded to three vec4 (with the face's UV rotation tucked into the
+    #: first spare w), and one vec4 of UV scale and shift.  Eight vec4s, so
+    #: attribute locations 3..10 -- 0..2 are the cube's own position, normal and
+    #: texture coordinate.
+    BRUSH_INSTANCE_FLOATS = 32
+
+    #: Attribute locations 3..10 carry one instance of a brush draw run, and
+    #: mean the same thing for every pass that uses them:
+    #:
+    #:   3..6   mat4 model
+    #:   7..9   mat3 normal matrix, padded to vec4; ``iNormal0.w`` is a spare
+    #:          scalar a pass may use (the textured pass puts the face's UV
+    #:          rotation there)
+    #:   10     vec4 payload, whose meaning is the pass's own (UV scale and
+    #:          shift for textured, colour and alpha for lit)
+    #:
+    #: One layout, one buffer and one VAO serve both passes, which is what
+    #: makes "a run describes the invariant GPU state, the instance array
+    #: describes everything that varies within it" a property of the renderer
+    #: rather than of one pass.
+    BRUSH_INSTANCE_ATTRS = """layout (location = 3) in vec4 iModel0;
+layout (location = 4) in vec4 iModel1;
+layout (location = 5) in vec4 iModel2;
+layout (location = 6) in vec4 iModel3;
+layout (location = 7) in vec4 iNormal0;
+layout (location = 8) in vec4 iNormal1;
+layout (location = 9) in vec4 iNormal2;
+layout (location = 10) in vec4 iPayload;
+
+"""
+
+    #: Vertex-shader uniforms the instanced variants drop, because the value is
+    #: per instance now rather than per draw.
+    _INSTANCED_VERT_DROP = ('uniform mat4 model;', 'uniform mat3 normalMatrix;',
+                            'uniform vec2 tex_scale', 'uniform float tex_angle',
+                            'uniform vec2 tex_shift')
+
+    def _instanced_vertex_source(self, vert, preamble, extra_out=''):
+        """A vertex shader rewritten to take its transform from instance data.
+
+        Shared by the textured and lit brush passes: both start from the
+        ordinary shader and differ only in what they pull out of the payload,
+        so neither can drift from the pass it accelerates.
+        """
+        kept = [line for line in vert.splitlines()
+                if not line.strip().startswith(self._INSTANCED_VERT_DROP)]
+        source = '\n'.join(kept)
+        if 'out vec3 FragPos;' not in source or 'void main() {' not in source:
+            return None
+        source = source.replace(
+            'out vec3 FragPos;',
+            self.BRUSH_INSTANCE_ATTRS + extra_out + 'out vec3 FragPos;', 1)
+        source = source.replace(
+            'void main() {',
+            'void main() {\n'
+            '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\n'
+            '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n'
+            + preamble, 1)
+        source = source.replace('model * vec4(aPos, 1.0)',
+                                'instanceModel * vec4(aPos, 1.0)')
+        source = source.replace('normalMatrix * aNormal',
+                                'instanceNormal * aNormal')
+        return source
+
+    def _register_instanced_shader(self, name, vertex_source, fragment_source,
+                                   extra_uniforms=()):
+        """Compile one instanced brush program, or leave it absent.
+
+        Absence is a supported state, not a failure: a driver that rejects the
+        attribute interface simply keeps the per-object path, which every pass
+        retains.
+        """
+        if not vertex_source or not fragment_source:
+            return False
+        try:
+            program = self.shader_loader.compile_from_source(vertex_source,
+                                                             fragment_source)
+        except Exception as exc:
+            print(f'[Renderer] {name} instancing disabled: {exc}')
+            return False
+        replaced = self.shaders.get(name)
+        if replaced:
+            gl_state.glDeleteProgram(replaced)    # compiled again: free the first
+        self.shaders[name] = program
+        self.uniforms[name] = UniformCache(program)
+        self._preload_lit_uniforms(name)
+        if extra_uniforms:
+            self.uniforms[name].preload(list(extra_uniforms))
+        return True
+
+    def _compile_instanced_depth_shader(self):
+        """Compile the shadow depth shader with an instanced model matrix.
+
+        The depth pass is the purest run/instance split in the renderer: the
+        only thing that varies per caster is its model matrix, and the only
+        thing that varies per run is the cube face's ``lightSpaceMatrix``. So
+        the matrix becomes instance data and the face stays a uniform, and one
+        light's six faces cost six draws instead of six times its caster count.
+
+        The vertex shader takes the same instance attributes as the brush
+        passes, so the same buffer and the same VAO serve it; the normal and
+        payload slots go unused here, which costs a little upload bandwidth and
+        buys one layout for the whole renderer.
+        """
+        vert = self._shader_source('depth_cube.vert')
+        frag = self._shader_source('depth_cube.frag')
+        if not vert or not frag:
+            return
+        vertex = self._instanced_vertex_source(vert, preamble='')
+        if vertex is None:
+            return
+        if self._register_instanced_shader(
+                'depth_cube_instanced', vertex, frag,
+                extra_uniforms=['lightSpaceMatrix', 'lightPos', 'far_plane']):
+            print(f'{_RENDERER_PREFIX} Shadow depth instancing shader compiled successfully.')
+
+    #: Per-instance attributes: centre, world size, optional locked yaw, opacity.
+    #: Per-instance attributes: centre (3), world size (2), locked yaw,
+    #: opacity, and the texture-array layer the entity pass samples.  Eight
+    #: floats; a pass that does not use a column still writes it, because the
+    #: staging array is shared and a stale value is somebody else's sprite.
+    SPRITE_INSTANCE_FLOATS = 8
+
+    #: Blood on a wounded actor's sprite. Stains what the sprite's image
+    #: already shows (it is applied to the texel, so never outside the
+    #: figure): blotches round the body's middle that grow and join as the
+    #: wound count rises. *wound* is (amount 0..1,
+    #: pattern 0..15); the pattern is the actor's own, so two actors differ.
+    SPRITE_WOUND_GLSL = """
+float woundHash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float woundNoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(woundHash(i), woundHash(i + vec2(1.0, 0.0)), f.x),
+               mix(woundHash(i + vec2(0.0, 1.0)), woundHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+vec3 woundedColour(vec3 colour, vec2 uv, vec2 wound) {
+    float amount = wound.x;
+    // In blocks, like the pixels of the sprite it is on.
+    uv = (floor(uv * 72.0) + 0.5) / 72.0;
+    vec2 seed = vec2(wound.y * 7.31, wound.y * 3.17);
+    // Blotches: two octaves; more of them pass the threshold as it falls.
+    float blot = 0.65 * woundNoise(uv * 7.0 + seed) + 0.35 * woundNoise(uv * 17.0 + seed * 2.0);
+    // Mostly the torso: the middle of the image, a little above centre.
+    vec2 d = (uv - vec2(0.5, 0.42)) * vec2(2.4, 1.7);
+    float body = exp(-dot(d, d) * mix(1.6, 0.85, amount));
+    float cover = mix(0.74, 0.47, amount);
+    float stain = smoothstep(cover, cover + 0.05, blot * body);
+    // Blood keeps the sprite's shading: dark, red, slightly wet.
+    float shade = dot(colour, vec3(0.299, 0.587, 0.114));
+    vec3 blood = vec3(0.40, 0.012, 0.012) * (0.40 + 0.85 * shade);
+    return mix(colour, blood, clamp(stain, 0.0, 1.0) * 0.92);
+}
+"""
+
+    def _compile_instanced_sprite_shader(self):
+        """Compile the billboard shader with its centre and size per instance.
+
+        The sprite pass was the last one submitting per object: one
+        ``glDrawArrays`` and two uniform uploads for every billboard in range,
+        where the brush passes had long since collapsed to one draw per state
+        run.  Instancing it is the same trade they made -- what cannot vary
+        within a draw (the texture) stays a bind, and what does (where the
+        billboard is and how big) becomes instance data.
+
+        Derived from ``sprite.vert`` by rewriting the two uniforms into
+        attributes rather than written out again, so the billboard's
+        camera-facing maths cannot drift from the path it accelerates.
+        """
+        vert = self._shader_source('sprite.vert')
+        frag = self._shader_source('sprite.frag')
+        if not vert or not frag:
+            return
+        kept = [line for line in vert.splitlines()
+                if not line.strip().startswith(('uniform vec3 sprite_pos_world',
+                                                'uniform vec2 sprite_size'))]
+        source = '\n'.join(kept)
+        if 'out vec2 TexCoords;' not in source:
+            return
+        # sprite.vert already declares the fixed-facing input for the
+        # non-instanced path. Keep that declaration and only inject the
+        # position/size instance inputs that the instanced rewrite needs.
+        instance_decls = (
+            'layout (location = 1) in vec3 iSpritePos;\n'
+            'layout (location = 2) in vec2 iSpriteSize;\n'
+            'layout (location = 4) in float iSpriteAlpha;\n'
+        )
+        if 'iSpritePos' not in source:
+            source = source.replace(
+                'out vec2 TexCoords;',
+                instance_decls + 'out vec2 TexCoords;', 1)
+        source = source.replace('sprite_pos_world', 'iSpritePos')
+        source = source.replace('sprite_size.x', 'iSpriteSize.x')
+        source = source.replace('sprite_size.y', 'iSpriteSize.y')
+        source = source.replace('sprite_fixed_yaw', 'iSpriteFixedYaw')
+        if 'iSpritePos' not in source or 'iSpriteSize.x' not in source:
+            # The shader did not look the way this rewrite assumes; leaving the
+            # program absent keeps the per-sprite path, which every caller has.
+            return
+        source = source.replace(
+            'out vec2 TexCoords;',
+            'out vec2 TexCoords;\nflat out float InstanceAlpha;\n'
+            'flat out vec2 InstanceWound;',
+            1,
+        )
+        # The opacity attribute carries blood too: alpha + 2 * (steps + 16 *
+        # pattern). A pass that writes only an opacity (0..1) gets none.
+        source = source.replace(
+            'void main() {',
+            'void main() {\n'
+            '    float packedWound = floor(iSpriteAlpha * 0.5);\n'
+            '    InstanceAlpha = iSpriteAlpha - 2.0 * packedWound;\n'
+            '    InstanceWound = vec2(mod(packedWound, 16.0) / 15.0,\n'
+            '                         floor(packedWound / 16.0));',
+            1,
+        )
+        frag = frag.replace(
+            'in highp vec3 FragPos;',
+            'in highp vec3 FragPos;\nflat in float InstanceAlpha;\n'
+            'flat in vec2 InstanceWound;\n' + self.SPRITE_WOUND_GLSL,
+            1,
+        )
+        frag = frag.replace(
+            'FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);',
+            'if (InstanceWound.x > 0.0)\n'
+            '        texColor.rgb = woundedColour(texColor.rgb, TexCoords, InstanceWound);\n'
+            '    FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a * InstanceAlpha);',
+            1,
+        )
+        # alphaCutoff (0 unless set): the depth-only pass that lets water
+        # reflect effects keeps just their solid part (draw_fire_effects_instanced).
+        cutoff = 'if(texColor.a < 0.1) discard;'
+        if cutoff in frag:
+            frag = frag.replace(
+                'uniform sampler2D sprite_texture;',
+                'uniform sampler2D sprite_texture;\nuniform float alphaCutoff;', 1)
+            frag = frag.replace(
+                cutoff, 'if(texColor.a < max(0.1, alphaCutoff)) discard;', 1)
+        if self._register_instanced_shader('sprite_instanced', source, frag,
+                                           extra_uniforms=['projection', 'view',
+                                                           'sprite_texture',
+                                                           'use_fixed_facing',
+                                                           'alphaCutoff']):
+            print(f'{_RENDERER_PREFIX} Sprite instancing shader compiled successfully.')
+        self._compile_layered_sprite_shader(source, frag)
+
+    def _compile_layered_sprite_shader(self, vertex, fragment):
+        """The instanced billboard shader, sampling a texture-array layer.
+
+        Derived from the instanced shader by rewriting its sampler, as that one
+        is derived from ``sprite.vert``: the billboard maths, fog and alpha
+        handling exist once.  The layer arrives as instance data, which is what
+        lets the entity sprite pass be one draw in depth order (see
+        :mod:`engine.sprite_layers`).
+        """
+        if ('uniform sampler2D sprite_texture;' not in fragment
+                or 'texture(sprite_texture, TexCoords)' not in fragment
+                or 'void main() {' not in vertex):
+            return
+        vertex = vertex.replace(
+            'out vec2 TexCoords;',
+            'layout (location = 5) in float iSpriteLayer;\n'
+            'flat out float InstanceLayer;\nout vec2 TexCoords;', 1)
+        vertex = vertex.replace(
+            'void main() {', 'void main() {\n    InstanceLayer = iSpriteLayer;', 1)
+        fragment = fragment.replace(
+            'uniform sampler2D sprite_texture;',
+            'uniform sampler2DArray sprite_layers;\nflat in float InstanceLayer;', 1)
+        fragment = fragment.replace(
+            'texture(sprite_texture, TexCoords)',
+            'texture(sprite_layers, vec3(TexCoords, InstanceLayer))', 1)
+        if self._register_instanced_shader('sprite_layered', vertex, fragment,
+                                           extra_uniforms=['projection', 'view',
+                                                           'sprite_layers',
+                                                           'use_fixed_facing']):
+            print(f'{_RENDERER_PREFIX} Layered sprite shader compiled successfully.')
+
+    # One EXPLOSION Effect row per instance (engine.shaders'
+    # EXPLOSION_INSTANCE_LAYOUT).
+    EFFECT_INSTANCE_FLOATS = EXPLOSION_INSTANCE_FLOATS
+
+    #: One emitter row per PARTICLES_PER_EMITTER particle instances: five
+    #: vec4s (see particle.vert's iPosSeed .. iLight).
+    PARTICLE_INSTANCE_FLOATS = 20
+
+    def _compile_instanced_effect_shader(self):
+        """Compile the EXPLOSION instance shader and the particle shader."""
+        vert = DEFAULT_SHADERS.get('effect.vert', '')
+        frag = DEFAULT_SHADERS.get('effect.frag', '')
+        if vert and frag and self._register_instanced_shader(
+            'effect_instanced',
+            vert,
+            frag,
+            extra_uniforms=['projection', 'view', 'explosion_texture',
+                            'uTime', 'uSceneDepth', 'uSoft', 'uViewport',
+                            'uDepthParams'],
+        ):
+            self.uniforms['effect_instanced'].preload(self.ENV_UNIFORMS)
+            print(f'{_RENDERER_PREFIX} Effect instancing shader compiled successfully.')
+        self._compile_instanced_particle_shader()
+
+    def _compile_instanced_particle_shader(self):
+        """Compile the stateless emitter shader ('particle_instanced')."""
+        vert = DEFAULT_SHADERS.get('particle.vert', '')
+        frag = DEFAULT_SHADERS.get('particle.frag', '')
+        if not vert or not frag:
+            return
+        if self._register_instanced_shader(
+            'particle_instanced',
+            vert,
+            frag,
+            extra_uniforms=['projection', 'view', 'uTime', 'uPresets',
+                            'uMaxScreen', 'uNearFade', 'uSceneDepth',
+                            'uSoft', 'uViewport', 'uDepthParams'],
+        ):
+            self.uniforms['particle_instanced'].preload(self.ENV_UNIFORMS)
+            # The preset table is constant: sent once per compiled program.
+            self._particle_presets_sent = None
+            print(f'{_RENDERER_PREFIX} Particle instancing shader compiled successfully.')
+
+    def _compile_instanced_lit_brush_shader(self, lit_vert, lit_frag):
+        """Compile the flat-shaded brush shader with instanced colour.
+
+        The lit pass had no texture to batch by, so every brush was its own
+        draw carrying four uniform uploads -- model, normal, colour, alpha.
+        Colour and alpha are read in the *fragment* stage, so instancing them
+        means carrying them across as a varying; the rest of the lighting,
+        shadowing and fog code is untouched.
+        """
+        if not lit_vert or not lit_frag:
+            return
+        vertex = self._instanced_vertex_source(
+            lit_vert,
+            preamble='    vInstanceColor = iPayload;\n',
+            extra_out='out vec4 vInstanceColor;\n')
+        if vertex is None:
+            return
+
+        kept = [line for line in lit_frag.splitlines()
+                if not line.strip().startswith(('uniform vec3 object_color;',
+                                                'uniform float alpha;'))]
+        fragment = '\n'.join(kept)
+        if 'in vec3 Normal;' not in fragment:
+            return
+        fragment = fragment.replace('in vec3 Normal;',
+                                    'in vec3 Normal;\nin vec4 vInstanceColor;', 1)
+        fragment, colours = re.subn(r'\bobject_color\b', 'vInstanceColor.rgb',
+                                    fragment)
+        fragment, alphas = re.subn(r'\balpha\b', 'vInstanceColor.a', fragment)
+        if not colours or not alphas:
+            # The shader did not look the way this rewrite assumes; leaving the
+            # program absent keeps the per-brush path rather than compiling
+            # something subtly wrong.
+            return
+        if self._register_instanced_shader('lit_brush_instanced', vertex,
+                                           fragment):
+            print(f'{_RENDERER_PREFIX} Lit brush instancing shader compiled successfully.')
+
+    def _compile_instanced_brush_shader(self, tex_vert, tex_frag):
+        """Compile the textured-brush shader with per-face instanced attributes.
+
+        The per-face state the pass used to upload as uniforms -- model matrix,
+        normal matrix, UV scale, rotation and shift -- becomes instance data,
+        so every face sharing a texture and a cube face index is one
+        ``glDrawArraysInstanced`` instead of one ``glDrawArrays`` and three or
+        four ``glUniform`` calls each.
+
+        The UV scale and shift ride in the payload vec4 and the rotation in the
+        spare ``iNormal0.w``; declaring locals of the shader's original uniform
+        names leaves the UV rotate/scale/shift maths in the body byte for byte
+        what the non-instanced path runs.  Both the desktop and ARM variants
+        have the same vertex interface, so one derivation serves both.
+        """
+        vertex = self._instanced_vertex_source(
+            tex_vert,
+            preamble=('    vec2 tex_scale = iPayload.xy;\n'
+                      '    vec2 tex_shift = iPayload.zw;\n'
+                      '    float tex_angle = iNormal0.w;\n'))
+        if vertex is None:
+            return
+        if self._register_instanced_shader('brush_instanced', vertex, tex_frag,
+                                           extra_uniforms=['texture_diffuse']):
+            print(f'{_RENDERER_PREFIX} Brush face instancing shader compiled successfully.')
+
+    #: Per-vertex face attributes of an angled brush's textured-pass VAO: the
+    #: face's UV scale, rotation and shift, the same on every vertex of the
+    #: face. Locations 3..5 -- 0..2 are the mesh's position, normal and UV.
+    GEO_FACE_ATTRS = """layout (location = 3) in vec2 aFaceScale;
+layout (location = 4) in float aFaceAngle;
+layout (location = 5) in vec2 aFaceShift;
+
+"""
+
+    def _geo_face_vertex_source(self, tex_vert):
+        """The textured vertex shader with its per-face UV uniforms as inputs.
+
+        Locals named after the dropped uniforms leave the UV maths in the body
+        byte for byte what the uniform path runs. None if the source does not
+        have the shape this rewrite expects.
+        """
+        drop = ('uniform vec2 tex_scale', 'uniform float tex_angle',
+                'uniform vec2 tex_shift')
+        kept = [line for line in tex_vert.splitlines()
+                if not line.strip().startswith(drop)]
+        vertex = '\n'.join(kept)
+        if (len(kept) != len(tex_vert.splitlines()) - len(drop)
+                or 'out vec3 FragPos;' not in vertex
+                or 'void main() {' not in vertex):
+            return None
+        vertex = vertex.replace('out vec3 FragPos;',
+                                self.GEO_FACE_ATTRS + 'out vec3 FragPos;', 1)
+        return vertex.replace(
+            'void main() {',
+            'void main() {\n'
+            '    vec2 tex_scale = aFaceScale;\n'
+            '    float tex_angle = aFaceAngle;\n'
+            '    vec2 tex_shift = aFaceShift;\n', 1)
+
+    def _compile_geo_face_shader(self, tex_vert, tex_frag):
+        """Compile the textured shader with its per-face UV uniforms as inputs.
+
+        An angled brush's faces each carry their own UV scale, rotation and
+        shift, which the textured pass used to upload as three uniforms before
+        every face's draw. They do not change from frame to frame, so they are
+        written once, per vertex, when the mesh is built; this variant reads
+        them from there -- the same float32 values in, the same TexCoords out.
+        Absent if the driver rejects it; the pass then keeps the uniform path.
+
+        ``geo_batched`` goes one step further for the batched submission: the
+        model and normal matrices, which differ per brush, are fetched from a
+        buffer texture at the vertex's transform slot (an integer attribute
+        written with the vertex), since OpenGL 3.3 gives a vertex no way to
+        know which draw of a batch it belongs to. Again locals carry the
+        dropped uniforms' names, so the body is unchanged.
+        """
+        vertex = self._geo_face_vertex_source(tex_vert)
+        if vertex is None:
+            return
+        if self._register_instanced_shader('geo_textured', vertex, tex_frag,
+                                           extra_uniforms=['texture_diffuse',
+                                                           'normalMatrix']):
+            print(f'{_RENDERER_PREFIX} Angled-brush face shader compiled successfully.')
+        drop = ('uniform mat4 model;', 'uniform mat3 normalMatrix;')
+        kept = [line for line in vertex.splitlines()
+                if not line.strip().startswith(drop)]
+        if len(kept) != len(vertex.splitlines()) - len(drop):
+            return
+        batched = '\n'.join(kept).replace(
+            'out vec3 FragPos;', self.GEO_BATCH_INPUTS + 'out vec3 FragPos;', 1)
+        batched = batched.replace('void main() {\n',
+                                  'void main() {\n' + self.GEO_BATCH_FETCH, 1)
+        if self._register_instanced_shader('geo_batched', batched, tex_frag,
+                                           extra_uniforms=['texture_diffuse',
+                                                           'uTransforms']):
+            print(f'{_RENDERER_PREFIX} Batched angled-brush shader compiled successfully.')
+
+    #: The batched variant's extra inputs: the vertex's transform slot and the
+    #: buffer texture of transforms (seven RGBA32F texels per slot).
+    GEO_BATCH_INPUTS = """layout (location = 6) in int aSlot;
+uniform samplerBuffer uTransforms;
+
+"""
+    GEO_BATCH_FETCH = (
+        '    int transform = aSlot * 7;\n'
+        '    mat4 model = mat4(texelFetch(uTransforms, transform),\n'
+        '                      texelFetch(uTransforms, transform + 1),\n'
+        '                      texelFetch(uTransforms, transform + 2),\n'
+        '                      texelFetch(uTransforms, transform + 3));\n'
+        '    mat3 normalMatrix = mat3(texelFetch(uTransforms, transform + 4).xyz,\n'
+        '                             texelFetch(uTransforms, transform + 5).xyz,\n'
+        '                             texelFetch(uTransforms, transform + 6).xyz);\n')
+
+    def _compile_instanced_model_shaders(self, lit_vert, lit_frag, tex_vert, tex_frag):
+        """Compile GL 3.3 model shaders whose transforms come from instanced attributes."""
+        instance_attrs = """layout (location = 3) in vec4 iModel0;
+layout (location = 4) in vec4 iModel1;
+layout (location = 5) in vec4 iModel2;
+layout (location = 6) in vec4 iModel3;
+layout (location = 7) in vec4 iNormal0;
+layout (location = 8) in vec4 iNormal1;
+layout (location = 9) in vec4 iNormal2;
+layout (location = 10) in float iInstanceAlpha;
+
+"""
+
+        def make_vertex(source):
+            if not source:
+                raise ValueError('missing model vertex shader source')
+            source = source.replace('uniform mat4 model;\n', '')
+            source = source.replace('uniform mat3 normalMatrix;\n', '')
+            if 'out vec3 FragPos;' not in source:
+                raise ValueError('unexpected model vertex shader interface')
+            source = source.replace(
+                'out vec3 FragPos;',
+                instance_attrs + 'flat out float InstanceAlpha;\nout vec3 FragPos;',
+                1,
+            )
+            source = source.replace(
+                'void main() {',
+                'void main() {\n'
+                '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\n'
+                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n'
+                '    InstanceAlpha = iInstanceAlpha;\n',
+                1,
+            )
+            source = source.replace('model * vec4(aPos, 1.0)', 'instanceModel * vec4(aPos, 1.0)')
+            source = source.replace('normalMatrix * aNormal', 'instanceNormal * aNormal')
+            return source
+        lit_instance_frag = lit_frag.replace(
+            'out vec4 FragColor;',
+            'out vec4 FragColor;\nflat in float InstanceAlpha;',
+            1,
+        ).replace(
+            'FragColor = vec4(applyFog(result, FragPos), alpha);',
+            'FragColor = vec4(applyFog(result, FragPos), alpha * InstanceAlpha);',
+            1,
+        )
+        textured_instance_frag = tex_frag.replace(
+            'out vec4 FragColor;',
+            'out vec4 FragColor;\nflat in float InstanceAlpha;',
+            1,
+        ).replace(
+            'uniform sampler2D texture_diffuse;',
+            'uniform sampler2D texture_diffuse;\nuniform float alpha;',
+            1,
+        ).replace(
+            'FragColor = vec4(applyFog(result, FragPos), texColor.a);',
+            'FragColor = vec4(applyFog(result, FragPos), texColor.a * alpha * InstanceAlpha);',
+            1,
+        )
+        try:
+            self.shaders['lit_instanced'] = self.shader_loader.compile_from_source(
+                make_vertex(lit_vert), lit_instance_frag)
+            self.uniforms['lit_instanced'] = UniformCache(self.shaders['lit_instanced'])
+            self._preload_lit_uniforms('lit_instanced')
+
+            self.shaders['textured_instanced'] = self.shader_loader.compile_from_source(
+                make_vertex(tex_vert), textured_instance_frag)
+            self.uniforms['textured_instanced'] = UniformCache(self.shaders['textured_instanced'])
+            self._preload_lit_uniforms('textured_instanced')
+            self.uniforms['textured_instanced'].preload(
+                ['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
+            print(f'{_RENDERER_PREFIX} GPU model instancing shaders compiled successfully.')
+        except Exception as exc:
+            # The ordinary model shaders remain authoritative if an older/quirky
+            # driver rejects the instanced attribute interface.
+            for name in ('lit_instanced', 'textured_instanced'):
+                self.uniforms.pop(name, None)
+                program = self.shaders.pop(name, None)
+                if program:
+                    try:
+                        gl_state.glDeleteProgram(program)
+                    except Exception:
+                        pass
+            print(f'[Renderer] GPU model instancing disabled: {exc}')
+
+    def _preload_lit_uniforms(self, shader_name):
+        uniforms = self.uniforms[shader_name]
+        uniforms.preload(['projection', 'view', 'model', 'object_color', 'alpha',
+                          'active_lights', 'emissive_factor'])
+        uniforms.preload(self.ENV_UNIFORMS)
+
+    def _preload_water_uniforms(self):
+        uniforms = self.uniforms['water']
+        uniforms.preload([
+            'projection', 'view', 'model', 'time', 'viewPos',
+            'normalMap', 'sceneColor',
+            'screenSize', 'waterOpacity', 'waterReflectivity',
+            'waterTint', 'waterEmissive', 'distortionStrength', 'refractionIndex',
+            'roughness', 'fresnelIntensity', 'normalMatrix',
+            'waveAmp', 'brushSize',
+            'sceneDepth', 'hasSceneDepth', 'ssrEnabled', 'invProjection',
+        ])
+        uniforms.preload(self.ENV_UNIFORMS)
+
+    def _preload_fog_uniforms(self):
+        uniforms = self.uniforms['fog']
+        uniforms.preload(['projection', 'view', 'model', 'viewPos', 'time', 'noiseTexture',
+                          'density', 'fogColor', 'noiseScale', 'object_color', 'alpha', 'inverseModel'])
+
+    # --------------------------------------------------------------------------
+    # Terrain
+    # --------------------------------------------------------------------------
+    def setup_terrain_shader(self, terrain):
+        if 'terrain' not in self.shaders or not self.shaders['terrain']:
+            return
+        terrain.shader_program = self.shaders['terrain']
+        terrain.uniforms = {
+            'projection': self.uniforms['terrain']['projection'],
+            'view': self.uniforms['terrain']['view'],
+            'active_lights': self.uniforms['terrain']['active_lights'],
+            'texGrass': self.uniforms['terrain']['texGrass'],
+            'texRock': self.uniforms['terrain']['texRock'],
+            'texSand': self.uniforms['terrain']['texSand'],
+            'texSnow': self.uniforms['terrain']['texSnow'],
+        }
+        for i in range(self.MAX_LIGHTS):
+            terrain.uniforms[f'lights[{i}].position'] = self.uniforms['terrain'][f'lights[{i}].position']
+            terrain.uniforms[f'lights[{i}].color'] = self.uniforms['terrain'][f'lights[{i}].color']
+            terrain.uniforms[f'lights[{i}].intensity'] = self.uniforms['terrain'][f'lights[{i}].intensity']
+            terrain.uniforms[f'lights[{i}].radius'] = self.uniforms['terrain'][f'lights[{i}].radius']
+
+    def _ensure_terrain_textures(self, terrain):
+        mappings = [('grass_tex', 'grass.jpg'), ('rock_tex', 'rock.jpg'),
+                    ('sand_tex', 'sand.jpg'), ('snow_tex', 'snow.jpg')]
+        self.load_texture('default.png', 'textures')
+        for attr, filename in mappings:
+            current_id = getattr(terrain, attr, 0)
+            if not current_id or current_id == -1:
+                new_id = self.load_texture(filename, 'textures/terrain')
+                setattr(terrain, attr, new_id)
+
+    def _describe_sprite_layers(self):
+        """The sprite texture array's state, for ``render_stats.details``."""
+        layers = self._sprite_layers
+        if layers is not None and layers.texture:
+            layer_bytes = int(layers.size * layers.size * 4 * layers.capacity * 4 / 3)
+            return (f"{layers.count} of {layers.capacity} layers "
+                    f"at {layers.size}x{layers.size}  (~{layer_bytes/1024/1024:.1f} MiB)")
+        if layers is not None and layers.disabled:
+            return "DISABLED (per-texture runs in depth order)"
+        return "not created"
+
+    def _sprite_layer_array(self):
+        """The entity sprite texture array, created on first use."""
+        if self._sprite_layers is None:
+            # Layers are square and shared, so their size is a memory
+            # decision: 512 holds every stock sprite at full resolution;
+            # low-power mode halves the edge and quarters the footprint.
+            self._sprite_layers = SpriteLayers(
+                max_size=256 if getattr(self, 'lowpower_mode', False) else 512)
+        return self._sprite_layers

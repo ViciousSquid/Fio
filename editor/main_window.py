@@ -36,6 +36,7 @@ from engine.constants import TILE_SIZE
 from engine.glasses import DEFAULT_GLASSES, normalize_glasses
 from engine import brush_faces, brush_geometry, brush_placement
 from engine import player_starts as start_rules
+from engine import hd_graphics
 from engine.change_journal import moved, touch
 from engine.spatial import set_live_flag
 from engine.fileio import write_json_atomic, write_text_atomic
@@ -567,6 +568,7 @@ class MainWindow(QMainWindow):
         """
         if getattr(self, "state", None) is not None:
             self.canonicalize_sky_image_ownership()
+            self.canonicalize_hd_sky_ownership()
         if not self.unsaved_changes:
             self.unsaved_changes = True
             self.update_title()
@@ -1602,6 +1604,9 @@ class MainWindow(QMainWindow):
         # A clone while one is still being placed drops the pending one first,
         # so repeated Shift+Space never strands half-placed duplicates.
         self.finish_clone_placement()
+        # A copy is of the object as placed, not at the angle a running
+        # preview has turned it to.
+        self.stop_mover_preview()
         self.save_state()
 
         # Offset based on the current 2D view, in grid-size steps
@@ -1890,6 +1895,13 @@ class MainWindow(QMainWindow):
             # changes page, so the Preview button it resets is the one that
             # started it, not one on the page about to be shown.
             self.stop_rotate_preview()
+        timer = getattr(self, 'preview_timer', None)
+        if (timer is not None and timer.isActive()
+                and self.preview_data.get('obj') is not primary):
+            # A mover or door preview ends with its selection too: it was
+            # stopped only by its own button and by Save, and went on moving
+            # a brush nobody was looking at.
+            self.stop_mover_preview()
         self.update_all_ui(selection_only=True)
         self.selection_changed.emit()
 
@@ -2661,6 +2673,8 @@ class MainWindow(QMainWindow):
 
             if read_ui_scale_setting(self.config) != old_ui_scale:
                 restart_required.append("UI scale")
+
+            self.apply_renderer_setting()
                 
             new_big_toolbar_buttons = self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
             if old_big_toolbar_buttons != new_big_toolbar_buttons:
@@ -2672,6 +2686,27 @@ class MainWindow(QMainWindow):
                     f"The following settings have been changed:\n\n" +
                     "\n".join(f"• {setting}" for setting in restart_required) +
                     "\n\nPlease restart the application for the changes to take effect.")
+
+    def apply_renderer_setting(self):
+        """Bring the 3D view to the renderer ``[Renderer] renderer`` names:
+        Classic or HD_High. Fio swaps renderers while it runs, in the editor
+        and in Play (QtGameView.switch_renderer), so nothing needs a
+        restart. Returns whether the wanted renderer is the active one."""
+        view = getattr(self, 'view_3d', None)
+        if view is None or getattr(view, 'renderer', None) is None:
+            return False
+        lowpower = bool(getattr(view.renderer, 'lowpower_mode', False))
+        wanted = hd_graphics.REGISTRY_NAME[
+            hd_graphics.renderer_from(self.config, lowpower=lowpower)]
+        if view.renderer_mode == wanted:
+            return True
+        return bool(view.switch_renderer(wanted))
+
+    def set_hd_preview(self, shown):
+        """View > HD preview: whether HD_High draws the editor's 3D view in
+        HD (Play always is). Nothing to the classic renderer."""
+        self.view_3d.hd_preview = bool(shown)
+        self.view_3d.update()
 
     def apply_tooltip_settings(self):
         """Settings > Editor > Tooltips: show or hide each area's tooltips.
@@ -2695,6 +2730,7 @@ class MainWindow(QMainWindow):
 
     def copy_selection(self):
         """Copy the current object/multi-selection into the editor clipboard."""
+        self.stop_mover_preview()       # as placed, not as a preview has it
         sources = list(self.state.selected_objects or [])
 
         if sources:
@@ -3309,10 +3345,12 @@ class MainWindow(QMainWindow):
         # Only once Play is certain to start: a refused Play must leave the
         # side panel on the tab the author was using.
         self._store_and_switch_to_debug_console()
-        # The game drives a model's Rotate itself: an editor preview of one
-        # ends here, the model back as placed.
-        if getattr(self, 'rotate_preview', None) is not None and self.rotate_preview.active:
-            self.stop_rotate_preview()
+        # The game drives movers and a model's Rotate itself: an editor
+        # preview of either ends here, the object back as placed (a mover
+        # preview left running drove the brush's transform during Play). A
+        # drag or a pending clone does not survive into Play either.
+        self._end_gesture()
+        self.stop_mover_preview()
 
         if hasattr(self, 'mode_label'):
             self.mode_label.setText("PLAY MODE")
@@ -3469,7 +3507,51 @@ class MainWindow(QMainWindow):
         view = getattr(self, "view_3d", None)
         if view is not None:
             view.sky_image_path = path
+            # The HD sky rides with it (engine/hd_graphics.py). Plain data:
+            # a renderer at graphics = low never reads it.
+            view.hd_sky_settings = hd_graphics.sky_settings(
+                self.hd_sky_properties_from_map(), path)
         return path
+
+    def _player_starts_in_recovery_order(self):
+        """``(primary, others)``: the Primary PlayerStart and the other
+        starts, earliest created first -- the order a legacy value stored
+        on a non-primary start is recovered in (as for sky_image)."""
+        starts = self.state.player_starts()
+        primary = self.state.resolve_player_start()
+        position = start_rules.earliest_created(
+            [start.properties for start in starts])
+        ordered = [starts[position]] if position is not None else []
+        ordered.extend(
+            start for start in starts
+            if position is None or start is not starts[position])
+        return primary, [start for start in ordered if start is not primary]
+
+    def hd_sky_properties_from_map(self):
+        """The map's effective ``hd_*`` sky properties, as stored, without
+        changing authored data: the Primary PlayerStart's, else recovered
+        from the other starts."""
+        primary, others = self._player_starts_in_recovery_order()
+        return hd_graphics.resolve_properties(
+            primary.properties if primary is not None else None,
+            [start.properties for start in others])
+
+    def canonicalize_hd_sky_ownership(self, resolved=None):
+        """Store the HD sky on the current Primary PlayerStart and clear
+        it from every other start. Called at explicit edit boundaries."""
+        primary, others = self._player_starts_in_recovery_order()
+        if primary is None:
+            return {}
+        if resolved is None:
+            resolved = self.hd_sky_properties_from_map()
+        changed = hd_graphics.canonicalise_properties(
+            primary.properties, [start.properties for start in others], resolved)
+        if changed:
+            touched = [start for start in [primary] + others
+                       if any(start.properties is properties for properties in changed)]
+            self.state.mark_world_changed(touched)
+        self.sync_sky_image_from_map()
+        return resolved
 
     def set_show_whole_world(self, shown):
         """Load every editor cell of a Big World map, or only those near the camera."""
@@ -3693,13 +3775,34 @@ class MainWindow(QMainWindow):
         self.components.invalidate()
         self.mark_as_modified() # Mark as dirty when state is saved for undo
 
+    def _end_gesture(self):
+        """Cancel a gesture in flight -- a gizmo drag, copies not yet placed.
+        Each holds objects and the undo checkpoint it took; the history or
+        the mode changing under it left it moving objects no longer in the
+        scene, and its later cancel dropped a checkpoint that was not its
+        own. True when there was one."""
+        gizmo = getattr(getattr(self, 'view_3d', None), 'gizmo', None)
+        if gizmo is not None and gizmo.dragging:
+            gizmo.cancel()
+            return True
+        if self.clone_placement:
+            self.cancel_clone_placement()
+            return True
+        return False
+
     def undo(self):
+        if self._end_gesture():
+            return                  # Ctrl+Z mid-drag takes the drag back
+        self.stop_mover_preview()   # its brush may not be in the scene after
         if self.state.undo():
             self._resync_components_after_history()
             self.mark_as_modified() # Undo changes state
             self.update_all_ui()
 
     def redo(self):
+        if self._end_gesture():
+            return
+        self.stop_mover_preview()
         if self.state.redo():
             self._resync_components_after_history()
             self.mark_as_modified() # Redo changes state
@@ -5393,6 +5496,8 @@ class MainWindow(QMainWindow):
         selected = self.with_group_mates(chosen)
         if pivot is None and len(selected) != len(chosen):
             pivot = self.selection_centre()
+        # A locked object does not turn, as it does not move or scale.
+        selected = self.movable_with_mates(chosen)
         brushes = [b for b in selected if isinstance(b, dict)]
         things = [t for t in selected if not isinstance(t, dict)]
         if not brushes and not (things and pivot is not None):
@@ -5833,6 +5938,11 @@ class MainWindow(QMainWindow):
 
         loaded = False
         open_level = None
+        # A drag, pending copies or a preview hold objects of the level that
+        # is about to go: a preview's timer went on driving a brush of the
+        # closed map.
+        self._end_gesture()
+        self.stop_mover_preview()
         try:
             # A level change during play: end the running session *before*
             # the scene is replaced.  Its teardown (movers, doors, Props, the

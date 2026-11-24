@@ -57,3 +57,25 @@ class PlayerTerrainGL(TerrainGL):
             super()._init_grass_shader()
         finally:
             module.compileShader, module.compileProgram = saved
+
+    def _ensure_skirt_program(self):
+        # The strata-wall program, likewise: the engine method compiles and
+        # looks up its uniforms; the compile goes to this host's compiler.
+        # (Its own call into desktop glCreateProgram crashed a GLES context.)
+        if self.skirt_program or 'skirt' in self._failed_programs:
+            return self.skirt_program
+        module = _engine_terrain_gl
+        saved = module.compileShader, module.compileProgram
+        module.compileShader = lambda source, _kind: source
+        module.compileProgram = (
+            lambda vertex, fragment, validate=False: self._compile_or_raise(vertex, fragment))
+        try:
+            return super()._ensure_skirt_program()
+        finally:
+            module.compileShader, module.compileProgram = saved
+
+    def _compile_or_raise(self, vertex, fragment):
+        program = self._compiler(vertex, fragment)
+        if not program:
+            raise RuntimeError("terrain skirt program did not compile")
+        return program

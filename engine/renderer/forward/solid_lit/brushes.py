@@ -9,6 +9,7 @@ brushes are drawn instanced; angled brushes one mesh at a time.
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 
 from engine import render_table
 from engine.render_keys import sort_into_runs
@@ -16,6 +17,7 @@ from ...core.diagnostics import timed_pass
 from ...core.uniform_rows import uniform_rows
 from ..instancing import (BRUSH_RUN_KEY, _OVERRIDE_COLOURS, _SELECTED_ROW,
                           _SUBTRACT_ROW, _TRIGGER_ROW)
+from ...core.raw_calls import uniform_matrix4
 
 
 class SolidLitMixin:
@@ -38,18 +40,18 @@ class SolidLitMixin:
         visible = brushes
         self.render_stats.visible_brushes += len(visible)
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('lit', lights)
         emissive_loc = uniforms['emissive_factor']
         if emissive_loc is not None and emissive_loc != -1:
-            gl.glUniform3f(emissive_loc, 0.0, 0.0, 0.0)
+            gl_state.glUniform3f(emissive_loc, 0.0, 0.0, 0.0)
         # Cache value_ptr results – avoids redundant ctypes work per draw call
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(view)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, view_ptr)
-        gl.glBindVertexArray(self.vaos['cube'])
+        uniform_matrix4(uniforms['projection'], proj_ptr)
+        uniform_matrix4(uniforms['view'], view_ptr)
+        gl_state.glBindVertexArray(self.vaos['cube'])
         display_mode        = config.get('brush_display_mode', 'Textured')
         show_triggers_solid = config.get('show_triggers_as_solid', False)
         selected            = config.get('primary_selection')
@@ -64,7 +66,7 @@ class SolidLitMixin:
             fill_mode = gl.GL_FILL if show_triggers_solid else gl.GL_LINE
         else:
             fill_mode = gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
 
         indices = range(len(visible))
         selected_slot = self._selected_slot(table, config)
@@ -96,12 +98,12 @@ class SolidLitMixin:
                 projection, view, lights, table, key, lit, selected_slot,
                 fill_mode)
             self._portal_end_cull()
-            gl.glUseProgram(shader)
+            gl_state.glUseProgram(shader)
             self._current_shader = shader
-            gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-            gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
-            gl.glBindVertexArray(self.vaos['cube'])
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
+            uniform_matrix4(uniforms['projection'], proj_ptr)
+            uniform_matrix4(uniforms['view'], view_ptr)
+            gl_state.glBindVertexArray(self.vaos['cube'])
+            gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
             indices = lit['geo_rows']
 
         cube_vao = self.vaos['cube']
@@ -119,6 +121,7 @@ class SolidLitMixin:
             upload_normal = uniform_rows('mat3', normals)
             upload_colour = uniform_rows('vec3', colours)
             upload_override = uniform_rows('vec3', _OVERRIDE_COLOURS)
+        alpha_sent = None
         for index in indices:
             slot = int(visible[index])
             upload_model(model_loc, index)
@@ -139,7 +142,9 @@ class SolidLitMixin:
                 alpha = 1.0
             has_geometry = bool(row & render_table.CLASS_HAS_GEOMETRY)
 
-            gl.glUniform1f(alpha_loc, alpha)
+            if alpha != alpha_sent:     # most rows share one opacity
+                gl_state.glUniform1f(alpha_loc, alpha)
+                alpha_sent = alpha
             # An angled brush draws from its own convex mesh, which is built
             # from the brush's plane set -- the one thing no column holds, and
             # the only place the numeric path needs an object.
@@ -148,14 +153,14 @@ class SolidLitMixin:
                 mesh = geo_meshes.get(int(table.geometry_id[slot]))
             if mesh is not None:
                 if bound_vao != mesh.vao:
-                    gl.glBindVertexArray(mesh.vao)
+                    gl_state.glBindVertexArray(mesh.vao)
                     bound_vao = mesh.vao
                     self._portal_set_cull(is_geo=True)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
                 self.render_stats.visible_tris += mesh.count // 3
             else:
                 if bound_vao != cube_vao:
-                    gl.glBindVertexArray(cube_vao)
+                    gl_state.glBindVertexArray(cube_vao)
                     bound_vao = cube_vao
                     self._portal_set_cull(is_geo=False)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
@@ -163,8 +168,8 @@ class SolidLitMixin:
             self.render_stats.draw_calls += 1
 
         self._portal_end_cull()
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        gl.glBindVertexArray(0)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glBindVertexArray(0)
 
     def _lit_derived(self, table, visible):
         """The lit pass's view of *visible*: class bits and colours by row,

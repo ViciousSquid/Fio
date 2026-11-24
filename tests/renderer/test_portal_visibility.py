@@ -24,6 +24,7 @@ from editor.things import Portal                              # noqa: E402
 from engine.entity_table import EntityTable                   # noqa: E402
 from engine.renderer.api import RenderStats                   # noqa: E402
 from engine.renderer.core.visibility import VisibilityMixin   # noqa: E402
+from engine.renderer.core import gl_state, raw_calls          # noqa: E402
 from engine.renderer.forward import portals                   # noqa: E402
 from tests.helpers.worlds import make_thing                   # noqa: E402
 
@@ -74,7 +75,16 @@ class _PortalPass(portals.PortalsMixin, VisibilityMixin):
 
 @pytest.fixture
 def renderer(monkeypatch):
-    monkeypatch.setattr(portals, 'gl', _GLRecorder())
+    recorder = _GLRecorder()
+    monkeypatch.setattr(portals, 'gl', recorder)
+    # State switches are made through core.gl_state, which sends on its own
+    # ``gl``; outside a frame it sends every call, so the recorder sees all.
+    monkeypatch.setattr(gl_state, 'gl', recorder)
+    # Matrix uniforms go through core.raw_calls, which calls GL's native entry
+    # point when it can resolve one and OpenGL.GL otherwise (Windows ARM64):
+    # its OpenGL.GL path is taken, to the recorder, on every platform.
+    monkeypatch.setattr(raw_calls, '_resolved', dict.fromkeys(raw_calls._ENTRIES))
+    monkeypatch.setattr(raw_calls, 'gl', recorder)
     return _PortalPass()
 
 

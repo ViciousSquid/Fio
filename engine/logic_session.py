@@ -193,6 +193,8 @@ class LogicSession:
             # grid is populated below so the grid indexes them by true bounds.
             logic.collision_runtime.prepare_angled_brush_collision()
 
+            # Model files are read once for the session that starts here.
+            logic.collision_runtime.forget_model_files()
             logic.collision_runtime._model_collision_brushes = (
                 logic.collision_runtime.build_model_collision_brushes()
             )
@@ -390,6 +392,7 @@ class LogicSession:
             logic.light_path_runtime.stop()
             logic.parenting_runtime._reset_parented_portals()
             logic.collision_runtime.clear_angled_brush_collision()
+            logic.collision_runtime.forget_model_files()
             logic.interaction_runtime.current_hud_message = ""
             logic.interaction_runtime.current_hud_key_name = None
             logic.timing_runtime.timer_states.clear()

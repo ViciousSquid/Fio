@@ -1254,6 +1254,25 @@ class TerrainEditorPanel(QWidget):
             self._appearance_widgets[option] = ((slider, label), 'pct')
             return row
 
+        def slider(option, lo, hi, tip=None):
+            """A whole-number option on a slider with a live readout."""
+            w = QSlider(Qt.Horizontal)
+            w.setRange(lo, hi)
+            label = QLabel(str(lo))
+            label.setMinimumWidth(28)
+            if tip:
+                w.setToolTip(tip)
+
+            def changed(v, o=option, label=label):
+                label.setText(str(v))
+                self._set_appearance(o, int(v))
+            w.valueChanged.connect(changed)
+            row = QHBoxLayout()
+            row.addWidget(w, 1)
+            row.addWidget(label)
+            self._appearance_widgets[option] = ((w, label), 'slider')
+            return row
+
         def color(option, title):
             btn = QPushButton("Choose...")
             swatch = QFrame()
@@ -1289,6 +1308,18 @@ class TerrainEditorPanel(QWidget):
         form.addRow("Block Size:", spin('block_size', 2.0, 128.0, 2.0,
                                         tip="Footprint of one column in Blocks mode"))
         form.addRow(check('skirt', "Solid sides at the terrain edge (Blocks)"))
+
+        # -- Strata ------------------------------------------------------
+        # The terrain's sides at the edge of the world: a cliff cut through
+        # the ground, its rock beds over a crystalline basement.
+        form = group("Strata")
+        strata_check = check('strata', "Strata")
+        strata_check.setToolTip(
+            "Show cliff walls of rock strata at the terrain's edge (the edge of the world)")
+        form.addRow(strata_check)
+        form.addRow("Strata Layers:", slider(
+            'strata_layers', terrain_style.STRATA_LAYERS_MIN, terrain_style.STRATA_LAYERS_MAX,
+            tip="Rock beds in the strata walls, from their foot to the top of the terrain"))
 
         # -- Colour ------------------------------------------------------
         form = group("Colour")
@@ -1452,6 +1483,10 @@ class TerrainEditorPanel(QWidget):
                     slider, label = widget
                     slider.setValue(int(round(value * 100)))
                     label.setText(f"{slider.value()}%")
+                elif kind == 'slider':
+                    w, label = widget
+                    w.setValue(int(value))
+                    label.setText(str(w.value()))
                 elif kind == 'color':
                     palette = widget.palette()
                     palette.setColor(QPalette.Window, QColor.fromRgbF(*value))

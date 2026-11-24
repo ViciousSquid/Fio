@@ -342,6 +342,15 @@ def _capture_moving_brushes(logic) -> dict:
     return out
 
 
+def _capture_rotations(logic) -> dict:
+    """Each rotating model's progress, by UUID (engine.model_rotate)."""
+    props = getattr(logic, "prop_runtime", None)
+    try:
+        return _jsonify(props.rotation_snapshot()) if props is not None else {}
+    except Exception:
+        return {}
+
+
 def _capture_light_paths(logic) -> dict:
     """Each path-following light's journey, by UUID (engine.light_paths)."""
     paths = getattr(logic, "light_path_runtime", None)
@@ -440,6 +449,7 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "pending_io_events": _capture_pending_events(logic),
         "moving_brushes": _capture_moving_brushes(logic),
         "light_paths": _capture_light_paths(logic),
+        "rotations": _capture_rotations(logic),
         "mover_path_states": {
             str(i): _jsonify(_public_state(s))
             for i, s in (logic.mover_runtime.mover_path_states or {}).items()},
@@ -876,6 +886,14 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
         paths = getattr(logic, "light_path_runtime", None)
         if paths is not None:
             paths.restore(runtime.get("light_paths"))
+    except Exception:
+        pass
+    # Rotating models: where each had turned to, or a valve opened after
+    # the save stays open -- and its solid collision with it -- after the load.
+    try:
+        props = getattr(logic, "prop_runtime", None)
+        if props is not None:
+            props.restore_rotations(runtime.get("rotations"))
     except Exception:
         pass
     if "mover_path_states" in runtime:

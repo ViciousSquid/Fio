@@ -599,7 +599,7 @@ class Light(Thing):
             self.properties.setdefault(key, value)
 
     def get_color(self):
-        color = self.properties.get('colour', [255, 255, 255])
+        color = self.properties.get('colour') or [255, 255, 255]
         return [c / 255.0 for c in color]
 
     def get_intensity(self):
@@ -705,7 +705,7 @@ class LightVolume(Thing):
         return [float(c) + o for c, o in zip(self.pos, self.get_source_offset())]
 
     def get_color(self):
-        color = self.properties.get('colour', [255, 255, 255])
+        color = self.properties.get('colour') or [255, 255, 255]
         return [c / 255.0 for c in color]
 
     def get_intensity(self):

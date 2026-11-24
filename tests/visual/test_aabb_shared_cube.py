@@ -12,7 +12,8 @@ geometry of its own. This file is the guard on that, for every stage:
   editor and play -- reads its positions from a buffer shared by all boxes
   (the cube VBO; the unit-cube edge VBO for wireframe), or from none
   (a full-screen pass); the set of buffers does not grow with the world;
-* growing the world tenfold creates no buffer and no vertex array, and the
+* growing the world tenfold creates no buffer, and a vertex array only per
+  run of boxes on the first frame after the change; the
   instanced passes (textured, flat, shadow) issue the same number of draws;
 * a box's dict is the same after a frame as before it.
 
@@ -212,8 +213,13 @@ def test_boxes_are_drawn_from_shared_geometry_alone(scene, mode, play):
     assert renderer._geo_mesh_cache == {}
     store = renderer.__dict__.get('_geo_shared_store')
     assert store is None or not [p for p in store.pages if p is not None]
-    for frame in many:
-        assert not frame.creates, dict(frame.creates)
+    # The first frame after the world changes may make a vertex array for a
+    # run of boxes that starts somewhere new in the instance buffer: one per
+    # run, never one per box, and never a buffer. The next frame makes nothing.
+    first, second = many
+    assert set(first.creates) <= {'glGenVertexArrays'}, dict(first.creates)
+    assert first.creates['glGenVertexArrays'] <= first.instanced()
+    assert not second.creates, dict(second.creates)
     assert renderer._cube_vbo in many[0].buffers()
     # Instanced (the textured, flat and shadow passes): ten times the boxes,
     # the same draws, frame for frame.

@@ -21,6 +21,7 @@ import os
 import math
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 from typing import List, Tuple, Optional, Dict, Any
 
 
@@ -788,7 +789,7 @@ class GLB:
         self.vao = gl.glGenVertexArrays(1)
         self.vbo = gl.glGenBuffers(1)
 
-        gl.glBindVertexArray(self.vao)
+        gl_state.glBindVertexArray(self.vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, vertex_data.nbytes, vertex_data, gl.GL_STATIC_DRAW)
 
@@ -812,7 +813,7 @@ class GLB:
             gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, self.ebo)
             gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, index_data.nbytes, index_data, gl.GL_STATIC_DRAW)
 
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
 
     def cleanup(self):
@@ -824,7 +825,7 @@ class GLB:
             gl.glDeleteBuffers(1, [self.vbo])
             self.vbo = None
         if self.vao:
-            gl.glDeleteVertexArrays(1, [self.vao])
+            gl_state.glDeleteVertexArrays(1, [self.vao])
             self.vao = None
         self.is_loaded = False
 

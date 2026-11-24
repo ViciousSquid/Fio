@@ -113,6 +113,9 @@ class DrawCapture:
     # -- interception -----------------------------------------------------
     def __enter__(self):
         import OpenGL.GL as gl
+        from tests.helpers.gl import wrapped_gl_calls
+        self._wrapped = wrapped_gl_calls()      # native draws come through gl too
+        self._wrapped.__enter__()
         for name in ('glDrawArrays', 'glMultiDrawArrays', 'glDrawElements'):
             self._originals[name] = getattr(gl, name)
         originals = self._originals
@@ -143,6 +146,7 @@ class DrawCapture:
         import OpenGL.GL as gl
         for name, fn in self._originals.items():
             setattr(gl, name, fn)
+        self._wrapped.__exit__(None, None, None)
         gl.glEndQuery(gl.GL_PRIMITIVES_GENERATED)
         self.primitives = _int(gl.glGetQueryObjectuiv(self._query,
                                                       gl.GL_QUERY_RESULT))

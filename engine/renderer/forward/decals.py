@@ -35,11 +35,13 @@ import os
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 
 from engine import shaders
 from engine import decal_text, decal_textures
 from engine.decal_table import IMAGE, box_inverse
 from engine.asset_archives import asset_source
+from ..core.raw_calls import buffer_sub_data, uniform_matrix4
 
 DECAL_FOLDER = os.path.join('assets', 'textures', 'decals')
 #: Side of a layer of the decal texture array; images are scaled to it.
@@ -344,14 +346,14 @@ class DecalsMixin:
             # array), so the array stays as it is.
             return self._decal_textures
         if self._decal_textures:
-            gl.glDeleteTextures(1, [self._decal_textures])
+            gl_state.glDeleteTextures(1, [self._decal_textures])
             self._decal_textures = 0
         if not layers:
             self._decal_layers = 0
             return 0
         data = np.ascontiguousarray(np.stack(layers))
         texture = int(gl.glGenTextures(1))
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
         gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
         gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_RGBA8, size, size, len(layers), 0,
@@ -362,7 +364,7 @@ class DecalsMixin:
                              (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
                              (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
             gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, pname, value)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
         self._decal_textures, self._decal_layers = texture, len(layers)
         return texture
 
@@ -393,7 +395,7 @@ class DecalsMixin:
         if self._update_sign_layers(key):
             return self._decal_image_textures
         if self._decal_image_textures:
-            gl.glDeleteTextures(1, [self._decal_image_textures])
+            gl_state.glDeleteTextures(1, [self._decal_image_textures])
             self._decal_image_textures = 0
         self._decal_image_key, self._decal_image_index = key, {}
         self._decal_image_lut = _NO_LAYERS
@@ -448,7 +450,7 @@ class DecalsMixin:
         self._decal_image_names = {layer: names[layer] for layer in self._decal_image_index}
         self._decal_image_side = side
         texture = int(gl.glGenTextures(1))
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
         gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
         # Every level from _mip_chain, as _update_sign_layers rewrites a
@@ -465,7 +467,7 @@ class DecalsMixin:
                              (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
                              (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
             gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, pname, value)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
         self._decal_image_textures = texture
         return texture
 
@@ -494,7 +496,7 @@ class DecalsMixin:
             changed.append(layer)
         side = self._decal_image_side
         cache = self._decal_image_pixels
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
         gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
         for layer in changed:
@@ -507,7 +509,7 @@ class DecalsMixin:
                 edge = data.shape[0]
                 gl.glTexSubImage3D(gl.GL_TEXTURE_2D_ARRAY, level, 0, 0, index,
                                    edge, edge, 1, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
         self._decal_image_key = key
         return True
 
@@ -517,7 +519,7 @@ class DecalsMixin:
         if not self._decal_vao:
             self._decal_vao = int(gl.glGenVertexArrays(1))
             self._decal_vbo = int(gl.glGenBuffers(1))
-            gl.glBindVertexArray(self._decal_vao)
+            gl_state.glBindVertexArray(self._decal_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._cube_vbo)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 8 * 4, None)
             gl.glEnableVertexAttribArray(0)
@@ -526,7 +528,7 @@ class DecalsMixin:
                 gl.glEnableVertexAttribArray(3 + i)
                 gl.glVertexAttribDivisor(3 + i, 1)
             self._decal_base = None
-        gl.glBindVertexArray(self._decal_vao)
+        gl_state.glBindVertexArray(self._decal_vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._decal_vbo)
         if count > self._decal_capacity:
             self._decal_capacity = max(64, count, self._decal_capacity * 2)
@@ -589,30 +591,29 @@ class DecalsMixin:
         image_count = int(image.sum())
         plain_count = count - wet_count - glow_count
         u = self._decal_uniforms
-        gl.glUseProgram(program)
+        gl_state.glUseProgram(program)
         self._current_shader = program
-        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        uniform_matrix4(u['projection'], glm.value_ptr(projection))
+        uniform_matrix4(u['view'], glm.value_ptr(view))
         inverse = glm.inverse(projection * view)        # kept alive for value_ptr
-        gl.glUniformMatrix4fv(u['invViewProjection'], 1, gl.GL_FALSE, glm.value_ptr(inverse))
-        gl.glUniform4f(u['viewport'], float(viewport[0]), float(viewport[1]),
+        uniform_matrix4(u['invViewProjection'], glm.value_ptr(inverse))
+        gl_state.glUniform4f(u['viewport'], float(viewport[0]), float(viewport[1]),
                        float(max(int(viewport[2]), 1)), float(max(int(viewport[3]), 1)))
-        gl.glUniform3f(u['viewPos'], float(camera_pos.x), float(camera_pos.y),
+        gl_state.glUniform3f(u['viewPos'], float(camera_pos.x), float(camera_pos.y),
                        float(camera_pos.z))
-        gl.glUniform1i(u['sceneDepth'], self._water_depth_texture_unit)
-        gl.glUniform1i(u['sceneColor'], self._glass_scene_texture_unit)
+        gl_state.glUniform1i(u['sceneDepth'], self._water_depth_texture_unit)
+        gl_state.glUniform1i(u['sceneColor'], self._glass_scene_texture_unit)
         inverse_projection = glm.inverse(projection)
-        gl.glUniformMatrix4fv(u['invProjection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(inverse_projection))
-        gl.glUniform1i(u['reflectionsOn'],
+        uniform_matrix4(u['invProjection'], glm.value_ptr(inverse_projection))
+        gl_state.glUniform1i(u['reflectionsOn'],
                        1 if getattr(self, 'reflections_enabled', True) else 0)
-        gl.glUniform1f(u['decalFadeEnd'], float(getattr(
+        gl_state.glUniform1f(u['decalFadeEnd'], float(getattr(
             self, 'decal_reflection_fade', shaders.REFLECTION_FADE_END)))
-        gl.glUniform1i(u['wetPass'], 0)
-        gl.glUniform4f(u['decalRanges'], *self._decal_ranges)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
-        gl.glUniform1i(u['decalTextures'], 0)
+        gl_state.glUniform1i(u['wetPass'], 0)
+        gl_state.glUniform4f(u['decalRanges'], *self._decal_ranges)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
+        gl_state.glUniform1i(u['decalTextures'], 0)
 
         self._decal_instances(count)
         staging = self._decal_staging[:count]
@@ -634,7 +635,7 @@ class DecalsMixin:
                         block = staging[start:start + rows]
                         remap_glow_rows(block, block[:, 16].astype(np.int64),
                                         self._decal_image_index, self._decal_image_lut)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, staging.nbytes, staging)
+        buffer_sub_data(gl.GL_ARRAY_BUFFER, 0, staging)
 
         # The box's far faces, untested against depth: every pixel the box
         # covers is reached once, the camera inside the box or not. The
@@ -651,26 +652,26 @@ class DecalsMixin:
         cull_mode = int(gl.glGetIntegerv(gl.GL_CULL_FACE_MODE))
         depth_test = bool(gl.glIsEnabled(gl.GL_DEPTH_TEST))
         depth_write = bool(gl.glGetBooleanv(gl.GL_DEPTH_WRITEMASK))
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_DST_COLOR, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glEnable(gl.GL_CULL_FACE)
-        gl.glCullFace(gl.GL_FRONT)
-        gl.glDisable(gl.GL_DEPTH_TEST)
-        gl.glDepthMask(gl.GL_FALSE)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_DST_COLOR, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glEnable(gl.GL_CULL_FACE)
+        gl_state.glCullFace(gl.GL_FRONT)
+        gl_state.glDisable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthMask(gl.GL_FALSE)
         try:
             if image_texture and u['imageLayerScale[0]'] != -1:
                 scales = self._decal_image_scales
-                gl.glUniform2fv(u['imageLayerScale[0]'], len(scales), scales)
+                gl_state.glUniform2fv(u['imageLayerScale[0]'], len(scales), scales)
             if image_count and image_texture:
                 # Placed images, from their full-resolution array; blood
                 # (below) from the shared one.
-                gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, image_texture)
-                gl.glUniform1i(u['useLayerScale'], 1)
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, image_texture)
+                gl_state.glUniform1i(u['useLayerScale'], 1)
                 self._decal_point(0)
                 gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, image_count)
                 self.render_stats.draw_calls += 1
-                gl.glUniform1i(u['useLayerScale'], 0)
-                gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
+                gl_state.glUniform1i(u['useLayerScale'], 0)
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
                 first_plain = image_count
             else:
                 first_plain = 0
@@ -680,18 +681,18 @@ class DecalsMixin:
                 self.render_stats.draw_calls += 1
             if glow_count:
                 # Emissive decals: their own colours, over what is there.
-                gl.glUniform1i(u['wetPass'], 2)
-                gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                gl_state.glUniform1i(u['wetPass'], 2)
+                gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
                 if image_texture:
-                    gl.glActiveTexture(gl.GL_TEXTURE0)
-                    gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, image_texture)
-                    gl.glUniform1i(u['useLayerScale'], 1)
+                    gl_state.glActiveTexture(gl.GL_TEXTURE0)
+                    gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, image_texture)
+                    gl_state.glUniform1i(u['useLayerScale'], 1)
                 self._decal_point(plain_count)
                 gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, glow_count)
                 self.render_stats.draw_calls += 1
                 if image_texture:
-                    gl.glUniform1i(u['useLayerScale'], 0)
-                    gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
+                    gl_state.glUniform1i(u['useLayerScale'], 0)
+                    gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
             if wet_count:
                 # Wet patches: over a copy of the frame so far (blood and
                 # images included), drawn plainly over what is there.
@@ -704,47 +705,47 @@ class DecalsMixin:
                     gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER,
                                        gl.GL_LINEAR_MIPMAP_LINEAR)
                     try:
-                        gl.glActiveTexture(gl.GL_TEXTURE0)
-                        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
-                        gl.glBindVertexArray(self._decal_vao)
+                        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+                        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._decal_textures)
+                        gl_state.glBindVertexArray(self._decal_vao)
                         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._decal_vbo)
-                        gl.glUseProgram(program)
-                        gl.glUniform1i(u['wetPass'], 1)
-                        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+                        gl_state.glUseProgram(program)
+                        gl_state.glUniform1i(u['wetPass'], 1)
+                        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
                         self._decal_point(plain_count + glow_count)
                         gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, wet_count)
                         self.render_stats.draw_calls += 1
                     finally:
-                        gl.glActiveTexture(gl.GL_TEXTURE0 + self._glass_scene_texture_unit)
-                        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+                        gl_state.glActiveTexture(gl.GL_TEXTURE0 + self._glass_scene_texture_unit)
+                        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
                         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER,
                                            gl.GL_LINEAR)
         finally:
-            gl.glCullFace(cull_mode)
+            gl_state.glCullFace(cull_mode)
             if not cull:
-                gl.glDisable(gl.GL_CULL_FACE)
+                gl_state.glDisable(gl.GL_CULL_FACE)
             if depth_test:
-                gl.glEnable(gl.GL_DEPTH_TEST)
-            gl.glDepthMask(gl.GL_TRUE if depth_write else gl.GL_FALSE)
-            gl.glBlendFuncSeparate(*blend_func)
+                gl_state.glEnable(gl.GL_DEPTH_TEST)
+            gl_state.glDepthMask(gl.GL_TRUE if depth_write else gl.GL_FALSE)
+            gl_state.glBlendFuncSeparate(*blend_func)
             if not blend:
-                gl.glDisable(gl.GL_BLEND)
-            gl.glBindVertexArray(0)
+                gl_state.glDisable(gl.GL_BLEND)
+            gl_state.glBindVertexArray(0)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-            gl.glActiveTexture(gl.GL_TEXTURE0)
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
         self.decals_drawn = count
         return count
 
     def _cleanup_decals(self):
         if self._decal_vao:
-            gl.glDeleteVertexArrays(1, [self._decal_vao])
+            gl_state.glDeleteVertexArrays(1, [self._decal_vao])
         if self._decal_vbo:
             gl.glDeleteBuffers(1, [self._decal_vbo])
         if self._decal_textures:
-            gl.glDeleteTextures(1, [self._decal_textures])
+            gl_state.glDeleteTextures(1, [self._decal_textures])
         if self._decal_image_textures:
-            gl.glDeleteTextures(1, [self._decal_image_textures])
+            gl_state.glDeleteTextures(1, [self._decal_image_textures])
         self._decal_vao = self._decal_vbo = self._decal_textures = 0
         self._decal_image_textures = 0
         self._decal_image_key = None

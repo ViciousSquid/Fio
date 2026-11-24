@@ -21,6 +21,10 @@ from engine.glasses import (  # noqa: E402
     glasses_sprite_key, normalize_glasses,
 )
 
+# The headless tier leaves out any module that imports PyQt5 or OpenGL
+# (one test here does); unmarked, the Qt tier deselected it too.
+pytestmark = pytest.mark.qt
+
 
 def _image(style):
     Image = pytest.importorskip("PIL.Image")

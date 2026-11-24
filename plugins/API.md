@@ -473,11 +473,28 @@ class DeferredRenderer:
     contract_version = RENDERER_CONTRACT_VERSION
 ```
 
+The declaration is required. A renderer that does not say which contract it
+was written against is refused, not taken as written for this one.
+
 When the host creates a renderer, the registry checks what the factory
-returned before anything is painted with it. Not a `Renderer` (a member
-missing or not callable), or written for a newer contract or another major
-version: `RendererContractError`, and the object's `cleanup()` is called so
-its GL objects do not outlive it. The factory could not be imported or
+returned before anything is painted with it
+(`engine.renderer.contract_violations`):
+
+- every member below is there, and reading it does not raise (a property
+  that fails is refused, with its exception);
+- each method takes the arguments the `Renderer` protocol declares: the same
+  names in the same order, with the declared defaults. A method may take
+  more, as long as they are optional;
+- each attribute holds a value of its declared type: `shadows_enabled` and
+  `ready` a `bool`, `water_quality` one of `WATER_QUALITIES`, `render_stats`
+  a `RenderStats`, `view_distance` a `ViewDistance` or `None`;
+- `contract_version` is a version string (`"1.0.0"`), not one for a newer
+  contract or another major version;
+- an optional member (`engine.renderer.RendererOptions`, below) that is
+  there takes what its declaration says.
+
+Otherwise: `RendererContractError`, naming every violation, and the object's
+`cleanup()` is called so its GL objects do not outlive it. The factory could not be imported or
 raised: `RendererInitError`, with the original exception as its cause.
 Either way the view keeps the renderer it has (`r_renderer` says why).
 
@@ -491,10 +508,20 @@ Either way the view keeps the renderer it has (`r_renderer` says why).
   `set_grid(world_size, grid_size)`
 - **resources:** `load_texture`, `set_sprite_textures`, `get_loaded_model`
 - **diagnostics:** `render_stats` (an `engine.renderer.RenderStats`)
-- **optional:** `animate_textures(clock)` -- animated (GIF) textures. The host
+- **optional** (`engine.renderer.RendererOptions`): `animate_textures(clock)` -- animated (GIF) textures. The host
   calls it before each frame with the seconds of unpaused Play (0 outside
   Play); show each animated texture's frame for that time, keeping its GL
   name. `RendererCore` implements it; a renderer without it shows GIFs still.
+  `draw_face_hover(projection, view, triangles)` -- the faint highlight of
+  the face under the cursor while another is selected.
+  `draw_lens_water(drops, viewport)` -- water on the camera's lens.
+  `RendererCore` implements all three; the host uses each one a renderer has.
+  Four optional settings the editor shows or changes, each of the type given
+  when present: `hd` (`bool`: it has an HD look, for View > HD preview),
+  `lowpower_mode` (`bool`), `reflections_enabled` (`bool`; the console's
+  `reflections`), `decal_reflection_fade` (`float`; `decalfade`). The
+  viewport, the editor and plugins read nothing from a renderer that is not
+  in `Renderer` or `RendererOptions`.
 - **post-scene drawing the viewport asks for:** `draw_billboards`,
   `draw_player_glasses`, `draw_bullet_marks`, `draw_component_overlay`, and
   three that take arrays the host builds with `engine.overlay_geometry`

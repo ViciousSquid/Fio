@@ -1307,6 +1307,62 @@ def _mesh_arrays(brush):
     return verts, normals
 
 
+# From how many triangles one NumPy bounds test selects the triangles near a
+# box, instead of each of the player's mesh passes rejecting them one by one
+# in its own loop (min/max of three vertices, then the comparison, for each
+# of the capsule's three spheres). Measured on x86, microseconds a pass:
+#
+#     triangles      4     8    16    32    64    256   1924
+#     cull         7.0   7.2   6.3   7.0  10.0   10.6   16.4
+#     loop         1.7   3.9   6.6  14.5  42.3  180.0  858.5
+#
+# They cross at about 16. Below 32 the list is handed back untouched and the
+# pass's loop does the work, as it does for the triangles the cull keeps.
+# Re-measure with timeit over triangles_near and a pass's reject loop;
+# tests/physics/test_mesh_triangle_cull.py holds the two to one answer.
+MESH_CULL_VECTOR_FROM = 32
+
+
+def _triangle_bounds(brush, triangles):
+    """``(lo, hi)``: each triangle's bounds, (n, 3) float64, for *triangles*
+    -- a mesh proxy's own list, or the list :func:`collision_shape` made for
+    where it is now -- kept on the proxy against that list."""
+    cached = brush.get('_triangle_bounds')
+    if cached is not None and cached[0] is triangles:
+        return cached[1], cached[2]
+    turned = brush.get('_turned_mesh')
+    entry = brush.get('_collision_entry')
+    if triangles is brush.get('_mesh_triangles'):
+        verts = _mesh_arrays(brush)[0]
+    elif (turned is not None and entry is not None and entry[0] is turned[0]
+          and entry[2][1] is triangles):
+        verts = turned[1]               # the array the turned list was made from
+    else:
+        verts = np.asarray([tri for tri, _normal in triangles],
+                           dtype=np.float64).reshape(-1, 3, 3)
+    lo, hi = verts.min(axis=1), verts.max(axis=1)
+    brush['_triangle_bounds'] = (triangles, lo, hi)
+    return lo, hi
+
+
+def triangles_near(brush, triangles, lo, hi):
+    """The triangles of *triangles* whose bounds meet the box *lo*..*hi*, in
+    their order: a list a mesh pass can walk in place of the whole mesh. The
+    box must hold everything the pass could accept; touching counts as
+    meeting. A short list comes back as it is (:data:`MESH_CULL_VECTOR_FROM`).
+    """
+    if len(triangles) < MESH_CULL_VECTOR_FROM:
+        return triangles
+    tlo, thi = _triangle_bounds(brush, triangles)
+    keep = np.flatnonzero(
+        (tlo[:, 0] <= hi[0]) & (thi[:, 0] >= lo[0])
+        & (tlo[:, 1] <= hi[1]) & (thi[:, 1] >= lo[1])
+        & (tlo[:, 2] <= hi[2]) & (thi[:, 2] >= lo[2]))
+    if keep.size == len(triangles):
+        return triangles
+    return [triangles[i] for i in keep.tolist()]
+
+
 def turned_mesh_array(brush, runtime):
     """``(n, 3, 3)``: a mesh proxy's triangles where *runtime* (which turns
     it) puts them, ``P + R (x - A)`` -- worked out once per transform and

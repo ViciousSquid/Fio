@@ -10,6 +10,7 @@ pytest.importorskip('OpenGL', reason='engine.glb_loader imports PyOpenGL')
 
 from engine import glb_loader
 from engine.glb_loader import GLB, GLBLoader
+from engine.renderer.core import gl_state                     # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -180,6 +181,7 @@ def test_mixed_primitives_keep_vertex_and_element_offsets_separate(tmp_path, mon
     path, _ = _load(tmp_path, document, bytes(blob))
     fake_gl = _CaptureGL()
     monkeypatch.setattr(glb_loader, 'gl', fake_gl)
+    monkeypatch.setattr(gl_state, 'gl', fake_gl)   # GL state is set through core.gl_state
     model = GLB(str(path))
     assert model.is_loaded
     assert model.groups == expected_groups

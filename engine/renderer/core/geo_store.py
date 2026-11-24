@@ -40,6 +40,7 @@ import ctypes
 
 import numpy as np
 import OpenGL.GL as gl
+from . import gl_state
 
 #: Largest page, in vertices: page-local indices then fit 16 bits.
 PAGE_VERTICES = 1 << 16
@@ -86,9 +87,9 @@ class _Page:
         gl.glBufferData(gl.GL_ARRAY_BUFFER, capacity * STRIDE, None,
                         gl.GL_STATIC_DRAW)
         self.vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(self.vao)
+        gl_state.glBindVertexArray(self.vao)
         _point_attributes(0, slot=True)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def take(self, count):
         """First fit: the start of a free range of *count*, or None."""
@@ -210,7 +211,7 @@ class GeoStore:
         # Empty: delete it, unless it is the only empty page (the spare).
         if any(other is not None and other is not held and not other.used
                for other in self.pages):
-            gl.glDeleteVertexArrays(1, [held.vao])
+            gl_state.glDeleteVertexArrays(1, [held.vao])
             gl.glDeleteBuffers(1, [held.vbo])
             self.pages[page] = None
 
@@ -222,10 +223,10 @@ class GeoStore:
         other per-mesh pass binds.
         """
         vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
+        gl_state.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.pages[page].vbo)
         _point_attributes(start, slot=False, face=face)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         return vao
 
     def page_vao(self, page):
@@ -266,9 +267,9 @@ class GeoStore:
         gl.glBufferData(gl.GL_TEXTURE_BUFFER, self.mirror.nbytes, self.mirror,
                         gl.GL_DYNAMIC_DRAW)
         self.uploads['transforms'] += self.mirror.nbytes
-        gl.glBindTexture(gl.GL_TEXTURE_BUFFER, self.transform_texture)
+        gl_state.glBindTexture(gl.GL_TEXTURE_BUFFER, self.transform_texture)
         gl.glTexBuffer(gl.GL_TEXTURE_BUFFER, gl.GL_RGBA32F, self.transform_buffer)
-        gl.glBindTexture(gl.GL_TEXTURE_BUFFER, 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_BUFFER, 0)
         gl.glBindBuffer(gl.GL_TEXTURE_BUFFER, 0)
 
     def write_transforms(self, slots, models, normals):
@@ -367,14 +368,14 @@ class GeoStore:
         try:
             for page in self.pages:
                 if page is not None:
-                    gl.glDeleteVertexArrays(1, [page.vao])
+                    gl_state.glDeleteVertexArrays(1, [page.vao])
                     gl.glDeleteBuffers(1, [page.vbo])
             for variants in self._index_lists.values():
                 for entry in variants:
                     gl.glDeleteBuffers(1, [entry[0]])
             if self.transform_buffer:
                 gl.glDeleteBuffers(1, [self.transform_buffer])
-                gl.glDeleteTextures([self.transform_texture])
+                gl_state.glDeleteTextures([self.transform_texture])
         except Exception:
             pass  # GL context may already be gone during shutdown
         self.__init__()

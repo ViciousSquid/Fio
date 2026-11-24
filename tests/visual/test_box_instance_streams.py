@@ -446,3 +446,71 @@ def test_two_renderers_in_turn_keep_their_own_streams(context):
     finally:
         a.cleanup()
         b.cleanup()
+
+
+# -- a run reads its rows through a vertex array of its own ------------------------
+
+def _pointer_calls(monkeypatch):
+    """Count instance-attribute pointer calls, however they are made."""
+    import OpenGL.GL as gl
+    from engine.renderer.core import raw_calls
+    made = []
+    real_native, real_wrapped = raw_calls.vertex_attrib_pointer, gl.glVertexAttribPointer
+
+    def native(*args):
+        made.append(args[0])
+        return real_native(*args)
+
+    def wrapped(*args):
+        made.append(args[0])
+        return real_wrapped(*args)
+    monkeypatch.setattr(raw_calls, "vertex_attrib_pointer", native)
+    monkeypatch.setattr(gl, "glVertexAttribPointer", wrapped)
+    return made
+
+
+@pytest.mark.perf
+def test_a_still_world_re_aims_no_instance_attribute(context, monkeypatch):
+    """OpenGL 3.3 has no base-instance draw, so a run that starts part way
+    through its buffer was reached by re-aiming eight attributes -- for
+    every run of every frame, though the runs of a still world start at the
+    same rows each frame. Each start has a vertex array of its own."""
+    renderer = _renderer()
+    try:
+        config = glh.render_config(all_brushes=_world(), shadows_enabled=False)
+        first = _draw(renderer, context, config)
+        made = _pointer_calls(monkeypatch)
+        frames = [_draw(renderer, context, config) for _ in range(3)]
+        assert made == [], "a still frame set vertex pointers: %r" % (made[:16],)
+        assert all(np.array_equal(frame, first) for frame in frames)
+        streams = list(renderer._brush_streams.values())
+        assert any(len(stream.run_vaos) > 1 for stream in streams), "there are runs"
+        assert all(stream.run_vaos[0] == stream.vao for stream in streams if stream.vao)
+    finally:
+        renderer.cleanup()
+
+
+def test_the_vertex_arrays_of_a_stream_are_bounded_and_released(context, monkeypatch):
+    import OpenGL.GL as gl
+    config = glh.render_config(all_brushes=_world(), shadows_enabled=False)
+    renderer = _renderer()
+    try:
+        unlimited = _draw(renderer, context, config)
+        kept = max(len(stream.run_vaos) for stream in renderer._brush_streams.values())
+        assert kept > 3
+    finally:
+        renderer.cleanup()
+    # A limit below what one frame needs: the set starts again mid-frame,
+    # and the frame is the same.
+    renderer = _renderer()
+    monkeypatch.setattr(type(renderer), "RUN_VAOS_PER_STREAM", 3)
+    try:
+        for _ in range(3):
+            assert np.array_equal(_draw(renderer, context, config), unlimited)
+        streams = list(renderer._brush_streams.values())
+        assert all(len(stream.run_vaos) <= 3 for stream in streams)
+        names = [name for stream in streams for name in stream.run_vaos.values()]
+        assert names and all(gl.glIsVertexArray(name) for name in names)
+    finally:
+        renderer.cleanup()
+    assert not any(gl.glIsVertexArray(name) for name in names), "cleanup deleted them"

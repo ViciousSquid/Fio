@@ -29,6 +29,8 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "engine" / "renderer"
 GL_MODULES = ("OpenGL", "PyQt5", "glm")
@@ -90,8 +92,78 @@ def test_importing_the_public_package_loads_no_gl():
     subprocess.run([sys.executable, "-c", code], cwd=ROOT, check=True)
 
 
-def test_core_never_reaches_into_the_forward_renderer():
-    assert not _offenders(sorted((PACKAGE / "core").rglob("*.py")), ("engine.renderer.forward",))
+#: The renderers Fio ships, each a package of its own.
+BUILT_IN = ("forward", "hd_high")
+
+#: What drives a renderer and what the world is edited and simulated in: the
+#: viewport and its parts, the logic thread and its runtimes, the editor, the
+#: plugins. A renderer is handed the frame input; it reaches for none of them.
+HOST_MODULES = (
+    "editor", "plugins", "engine.qt_game_view", "engine.threaded_game_state",
+    "engine.logic_thread", "engine.logic_render", "engine.logic_session",
+    "engine.logic_world", "engine.savegame", "engine.player", "engine.physics",
+    "engine.monster_ai", "engine.floating_windows", "engine.sysmon",
+    "engine.pause_menu", "engine.pause_menu_window")
+
+
+def _package(name):
+    return sorted((PACKAGE / name).rglob("*.py"))
+
+
+def test_core_never_reaches_into_a_renderer():
+    """``core`` is what the renderers share; it is part of neither."""
+    assert not _offenders(_package("core"),
+                          tuple("engine.renderer." + name for name in BUILT_IN))
+
+
+@pytest.mark.parametrize("name", BUILT_IN)
+def test_a_built_in_renderer_imports_nothing_of_the_other(name):
+    others = tuple("engine.renderer." + other for other in BUILT_IN if other != name)
+    assert not _offenders(_package(name), others)
+
+
+def _code_text(path):
+    """What *path* executes, as text: its names, attributes and string
+    values. Docstrings and comments, which may speak of anything, are left
+    out."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = node.body[0] if node.body else None
+            if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                docstrings.add(id(first.value))
+    words = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            words.append(node.id)
+        elif isinstance(node, ast.Attribute):
+            words.append(node.attr)
+        elif isinstance(node, ast.alias):
+            words.append(node.name)
+        elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+              and id(node) not in docstrings):
+            words.append(node.value)
+    return "\n".join(words)
+
+
+@pytest.mark.parametrize("name", BUILT_IN)
+def test_a_built_in_renderer_names_nothing_of_the_other(name):
+    """Not by import, and not by a name or a string it could look the other
+    up with while it runs."""
+    words = {"forward": ("hd_high", "HDHighRenderer", "HD_High"),
+             "hd_high": ("renderer.forward", "ForwardRenderer")}[name]
+    for path in _package(name):
+        text = _code_text(path)
+        for word in words:
+            assert word not in text, "%s names %s" % (path.relative_to(ROOT), word)
+
+
+@pytest.mark.parametrize("name", BUILT_IN + ("core",))
+def test_a_renderer_imports_nothing_of_its_host(name):
+    host_parts = tuple("engine." + part for part in HOST_PARTS)
+    assert not _offenders(_package(name), HOST_MODULES + host_parts)
 
 
 #: A renderer implementation that lives outside the package: the standalone
@@ -102,13 +174,37 @@ def test_core_never_reaches_into_the_forward_renderer():
 OUTSIDE_RENDERERS = (ROOT / "player" / "render",)
 
 
+def _core_imports_only_gl_state(path):
+    """Whether every import of ``engine.renderer.core`` in *path* is of
+    ``gl_state`` alone (``from engine.renderer.core import gl_state``)."""
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module == "engine.renderer.core":
+            if any(alias.name != "gl_state" for alias in node.names):
+                return False
+        elif isinstance(node, ast.Import):
+            if any(alias.name == "engine.renderer.core" for alias in node.names):
+                return False
+    return True
+
+
 def test_outside_code_imports_only_the_public_package():
     outside = [p for top in ("engine", "editor", "plugins", "player") for p in (ROOT / top).rglob("*.py")
                if PACKAGE not in p.parents and "tests" not in p.parts]
     private = ("engine.renderer.forward", "engine.renderer.api", "engine.renderer.registry")
     renderers = [p for p in outside if any(root in p.parents for root in OUTSIDE_RENDERERS)]
     hosts = [p for p in outside if p not in renderers]
-    assert not _offenders(hosts, private + ("engine.renderer.core",))
+    # ``core.gl_state`` is the one part of ``core`` host code may use: every
+    # module that makes GL calls during a renderer's frame (the model
+    # loaders, sprites, the viewport's own drawing) must set GL state through
+    # it, or what it remembers is wrong.
+    shared = "engine.renderer.core.gl_state"
+    hosts_core = sorted(
+        line for line in _offenders(hosts, ("engine.renderer.core",))
+        if not line.endswith(" imports " + shared)
+        and not (line.endswith(" imports engine.renderer.core")
+                 and _core_imports_only_gl_state(ROOT / line.split(" imports ")[0])))
+    assert not hosts_core
+    assert not _offenders(hosts, private)
     assert not _offenders(renderers, private)
 
 
@@ -151,26 +247,104 @@ def test_the_protocol_exposes_no_forward_renderer_internals():
     assert not any(name.startswith("_") for name in _protocol_members())
 
 
+def _renderer_uses(path):
+    """``(direct, probed)``: the names *path* reads as ``self.renderer.<name>``
+    (or through ``self.view``), and the ones it looks up with
+    ``getattr(self.renderer, '<name>', ...)``."""
+    def is_renderer(node):
+        if not (isinstance(node, ast.Attribute) and node.attr == "renderer"):
+            return False
+        owner = node.value
+        return (isinstance(owner, ast.Name) and owner.id == "self") or (
+            isinstance(owner, ast.Attribute) and owner.attr == "view"
+            and isinstance(owner.value, ast.Name) and owner.value.id == "self")
+    direct, probed = set(), set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Attribute) and is_renderer(node.value):
+            direct.add(node.attr)
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id in ("getattr", "hasattr") and len(node.args) >= 2
+              and is_renderer(node.args[0]) and isinstance(node.args[1], ast.Constant)):
+            probed.add(node.args[1].value)
+    return direct, probed
+
+
+def _options(kind):
+    tree = ast.parse((PACKAGE / "api.py").read_text(encoding="utf-8"))
+    cls = next(n for n in tree.body
+               if isinstance(n, ast.ClassDef) and n.name == "RendererOptions")
+    if kind is ast.FunctionDef:
+        return {node.name for node in cls.body if isinstance(node, ast.FunctionDef)}
+    return {node.target.id for node in cls.body if isinstance(node, ast.AnnAssign)}
+
+
+def _optional_members():
+    return _options(ast.FunctionDef)
+
+
+def _any_renderer_uses(path):
+    """The names *path* reads from, or sets on, anything it calls a renderer
+    (``renderer.<name>``, ``<x>.renderer.<name>``, and ``getattr`` /
+    ``hasattr`` / ``setattr`` of either)."""
+    def is_renderer(node):
+        return ((isinstance(node, ast.Name) and node.id == "renderer")
+                or (isinstance(node, ast.Attribute) and node.attr == "renderer"))
+    names = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Attribute) and is_renderer(node.value):
+            names.add(node.attr)
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id in ("getattr", "hasattr", "setattr") and len(node.args) >= 2
+              and is_renderer(node.args[0]) and isinstance(node.args[1], ast.Constant)):
+            names.add(node.args[1].value)
+    return names
+
+
+def test_nothing_outside_the_contract_is_read_from_a_renderer():
+    """The viewport, the editor and the plugins reach a renderer only through
+    ``Renderer`` and ``RendererOptions``. The editor read five attributes
+    neither declared (one of them, ``clear_color``, no renderer had: the
+    console command that set it changed nothing).
+
+    ``tools/`` is not held to this: its benchmarks build one named renderer
+    and measure its internals, which is what they are for."""
+    known = _protocol_members() | _options(ast.FunctionDef) | _options(ast.AnnAssign)
+    # Names of the package itself, reached as ``engine.renderer.<name>``.
+    package = {"core", "api", "registry", "forward", "hd_high"} | {
+        name for name in ast.literal_eval(next(
+            ast.unparse(node.value) for node in ast.parse(
+                (PACKAGE / "__init__.py").read_text(encoding="utf-8")).body
+            if isinstance(node, ast.Assign) and node.targets[0].id == "__all__"))}
+    outside = {}
+    for top in ("editor", "plugins", "engine"):
+        for path in sorted((ROOT / top).rglob("*.py")):
+            if PACKAGE in path.parents or "tests" in path.parts:
+                continue
+            for name in _any_renderer_uses(path) - known - package:
+                outside.setdefault(name, []).append(str(path.relative_to(ROOT)))
+    assert not outside, outside
+
+
+
 def test_the_host_uses_only_the_protocol():
-    """Every ``self.renderer.<name>`` the viewport touches is a contract member."""
+    """Every ``self.renderer.<name>`` the viewport touches is a contract
+    member, and whatever it looks up by name instead is a contract member or
+    one of the declared optional ones (``RendererOptions``)."""
     members = _protocol_members()
-    used = set()
+    used, probed = set(), set()
     # The viewport and the classes it delegates to (engine/view_*.py), which
     # reach the renderer as ``self.view.renderer``.
     for path in _host_files():
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if not (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute)
-                    and node.value.attr == "renderer"):
-                continue
-            owner = node.value.value
-            if (isinstance(owner, ast.Name) and owner.id == "self") or (
-                    isinstance(owner, ast.Attribute) and owner.attr == "view"
-                    and isinstance(owner.value, ast.Name) and owner.value.id == "self"):
-                used.add(node.attr)
+        direct, by_name = _renderer_uses(path)
+        used |= direct
+        probed |= by_name
     assert used and used <= members, sorted(used - members)
+    optional = _optional_members()
+    assert optional and not optional & members
+    assert probed - members == optional, sorted(probed - members)
 
 
-def test_the_built_in_renderer_reads_only_the_documented_frame_input():
+def _frame_input_keys():
     sys.path.insert(0, str(ROOT))
     try:
         spec = importlib.util.spec_from_file_location("_fio_renderer_api", PACKAGE / "api.py")
@@ -178,21 +352,66 @@ def test_the_built_in_renderer_reads_only_the_documented_frame_input():
         spec.loader.exec_module(api)
     finally:
         sys.path.remove(str(ROOT))
+    return set(api.FRAME_INPUT)
+
+
+def _is_frame_input(node, host):
+    """Whether *node* names the frame input: ``config`` / ``cfg`` in a
+    renderer (which takes the settings file as ``config`` only where it is
+    built, and reads it by section); ``self._render_config`` /
+    ``self.view._render_config`` in the host."""
+    if host:
+        return isinstance(node, ast.Attribute) and node.attr == "_render_config"
+    return isinstance(node, ast.Name) and node.id in ("config", "cfg")
+
+
+def _frame_keys(path, host=False):
+    """``(read, written)``: the constant keys *path* reads from and stores
+    into a frame input."""
+    read, written = set(), set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("get", "pop", "setdefault")
+                and _is_frame_input(node.func.value, host)
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            read.add(node.args[0].value)
+        elif (isinstance(node, ast.Subscript) and _is_frame_input(node.value, host)
+                and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)):
+            (written if isinstance(node.ctx, ast.Store) else read).add(node.slice.value)
+        elif (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)
+                and any(_is_frame_input(target, host) for target in node.targets)):
+            written |= {key.value for key in node.value.keys
+                        if isinstance(key, ast.Constant)}
+    return read, written
+
+
+@pytest.mark.parametrize("name", BUILT_IN + ("core",))
+def test_a_renderer_reads_only_the_documented_frame_input(name):
     read = set()
-    for path in _package_files():
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            target = None
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "get" and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id in ("config", "cfg") and node.args
-                    and isinstance(node.args[0], ast.Constant)):
-                target = node.args[0].value
-            elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
-                    and node.value.id in ("config", "cfg") and isinstance(node.slice, ast.Constant)):
-                target = node.slice.value
-            if isinstance(target, str):
-                read.add(target)
-    assert read and read <= set(api.FRAME_INPUT), sorted(read - set(api.FRAME_INPUT))
+    for path in _package(name):
+        read |= _frame_keys(path)[0]
+    documented = _frame_input_keys()
+    if name != "core":
+        assert read, "%s reads the frame input" % name
+    assert read <= documented, sorted(read - documented)
+
+
+def test_the_host_publishes_only_the_documented_frame_input():
+    """The frame input is FRAME_INPUT and nothing beside it: a key the host
+    put there without documenting it would be host state a renderer could
+    come to depend on."""
+    read, written = set(), set()
+    for path in _host_files():
+        keys = _frame_keys(path, host=True)
+        read |= keys[0]
+        written |= keys[1]
+    documented = _frame_input_keys()
+    assert len(written) > 20, "the host's publication was found"
+    assert written <= documented, sorted(written - documented)
+    assert read <= documented, sorted(read - documented)
 
 
 # -- tables all the way to GL ------------------------------------------------
@@ -210,6 +429,8 @@ AUTHORED_ATTRIBUTES = {
 RESOURCE_BUILDERS = {
     # A model's draw groups, resolved once per loaded model.
     ("core/resources.py", "_model_draw_groups"): {"materials", "groups"},
+    # HD_High's own resolution of the same groups, with their surface values.
+    ("hd_high/core_ext.py", "model_draw_groups"): {"materials", "groups"},
     # A convex brush's mesh, built when its geometry handle is first resolved
     # (only when the table's geometry_version has moved).
     ("core/geometry.py", "tessellate_geo"): {"convex"},
@@ -222,6 +443,7 @@ RESOURCE_BUILDERS = {
 AUTHORED_KEYS = {"mtl_dir", "material", "textures", "is_trigger", "is_mover"}
 AUTHORED_KEY_READERS = {
     ("core/resources.py", "_model_draw_groups"),      # group['material']
+    ("hd_high/core_ext.py", "model_draw_groups"),     # the same, for HD_High
     ("core/resources.py", "_resolve_model_texture_path"),   # on a texture miss
 }
 

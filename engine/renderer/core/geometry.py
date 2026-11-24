@@ -11,6 +11,7 @@ import weakref
 
 import numpy as np
 import OpenGL.GL as gl
+from . import gl_state
 
 from engine import brush_geometry
 from engine import render_table
@@ -262,7 +263,7 @@ class GeometryMixin:
         try:
             for vao in (mesh.vao, mesh.face_vao, mesh.edge_vao):
                 if vao:
-                    gl.glDeleteVertexArrays(1, [vao])
+                    gl_state.glDeleteVertexArrays(1, [vao])
             if mesh.edge_vbo:
                 gl.glDeleteBuffers(1, [mesh.edge_vbo])
         except Exception:
@@ -465,14 +466,14 @@ class GeometryMixin:
         # Edge lines (local space) for the selection outline.
         mesh.edge_count = data.edge_count
         mesh.edge_vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(mesh.edge_vao)
+        gl_state.glBindVertexArray(mesh.edge_vao)
         mesh.edge_vbo = gl.glGenBuffers(1)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, mesh.edge_vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, data.edges.nbytes, data.edges,
                         gl.GL_STATIC_DRAW)
         gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         return mesh
 
     def _resolve_face_run(self, face, plane_meta, record, first, count, extent):
@@ -523,7 +524,7 @@ class GeometryMixin:
             0.5,0.5,0.5, 0,1,0, 1,0,  -0.5,0.5,0.5, 0,1,0, 0,0,  -0.5,0.5,-0.5, 0,1,0, 0,1
         ], dtype=np.float32)
         vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
+        gl_state.glBindVertexArray(vao)
         vbo = gl.glGenBuffers(1)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices.nbytes, vertices, gl.GL_STATIC_DRAW)
@@ -533,20 +534,20 @@ class GeometryMixin:
         gl.glEnableVertexAttribArray(1)
         gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
         gl.glEnableVertexAttribArray(2)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self._cube_vbo = vbo
         return vao
 
     def _create_sprite_vao(self):
         vertices = np.array([-0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5], dtype=np.float32)
         vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
+        gl_state.glBindVertexArray(vao)
         vbo = gl.glGenBuffers(1)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, vertices.nbytes, vertices, gl.GL_STATIC_DRAW)
         gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self._sprite_vbo = vbo
         return vao
 

@@ -16,7 +16,8 @@ python -m pytest                     # everything except the benchmarks
 | What | Command |
 | --- | --- |
 | Everything (except benchmarks) | `python -m pytest` |
-| Headless only — no Qt, no OpenGL, no display | `python -m pytest -m "not qt and not gl and not benchmark"` |
+| Headless only — no Qt, no OpenGL, no display (CI's core tier, with `FIO_HEADLESS_TIER=1`) | `python -m pytest -m "not qt and not gl and not benchmark"` |
+| CI's Qt tier — only what is marked `qt` | `QT_QPA_PLATFORM=offscreen python -m pytest -m "qt and not gl and not benchmark"` |
 | Editor + engine (Qt, offscreen, no GPU) | `QT_QPA_PLATFORM=offscreen python -m pytest -m "not gl and not benchmark"` |
 | Renderer / visual (needs a real GL context) | `xvfb-run -a python -m pytest -m gl` |
 | Integration workflows | `python -m pytest -m integration` |
@@ -96,14 +97,16 @@ handful of tests that use real threads and real time.
 | `tests/editor/` | Component editing, selection modes, the property editor, Qt object lifetime |
 | `tests/integration/` | End-to-end workflows across the editor, runtime, plugins and renderer |
 | `tests/regression/` | One test per fixed defect, stating the invariant that was broken |
-| `tests/visual/` | The `gl` tier: a lit cube, its shadow, and a moving light |
+| `tests/visual/` | The `gl` tier: a lit cube, its shadow, and a moving light; the **Classic lock** (`test_classic_golden.py`: stock maps drawn pixel for pixel as stored, and every program's final shader source; `test_classic_lock.py`: source digests, no trace of HD_High); the **HD_High** renderer (`test_hd_high_gl.py`: sky modes, indoor brightness, daylight through a window, the 16-sampler limit, Forward+, live swapping, material maps, every stock map) |
+| `tests/tools/` | The tools: the material map generator and the stock textures' maps (`test_material_maps.py`) |
 | `tests/performance/` | Work-per-frame guards and the renderer benchmark |
 | `tests/soak/` | Opt-in soak tier: Play/Stop sessions, editor history, map round trips, physics activation, decals, sky panoramas |
 | `tests/helpers/` | Shared factories and fakes (not collected) |
 
 The plugin and player packages keep their own tests next to the code
 (`plugins/*/tests/`, `player/tests/`) because both are exported as
-self-contained packages; `pytest.ini` includes them in every run.
+self-contained packages. `pytest.ini` includes the plugins' in every run; the
+player's run against its staged runtime (see the top of this file).
 
 ## Conventions
 

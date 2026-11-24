@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QComboBox, QGridLayout, QToolButton, QButtonGroup
 )
 from PyQt5.QtCore import Qt, QSize
+from engine import hd_graphics
 from PyQt5.QtGui import QIcon, QPixmap
 import sys
 import os
@@ -237,6 +238,22 @@ class SettingsWindow(QDialog):
         )
         renderer_layout.addWidget(self.lowpower_mode_checkbox)
         
+        from engine import hd_graphics
+        renderer_row = QHBoxLayout()
+        renderer_row.addWidget(QLabel("Renderer:"))
+        self.renderer_combo = QComboBox()
+        for name in hd_graphics.RENDERERS:
+            self.renderer_combo.addItem(hd_graphics.RENDERER_LABELS[name], name)
+        self.renderer_combo.setToolTip(
+            "Classic is Fio's original renderer.\n"
+            "HD_High is a separate, physically based renderer: a sun with shadows,\n"
+            "sky light, material maps and HDR post-processing, set per map on the\n"
+            "primary PlayerStart (HD Sky).\n\n"
+            "The change applies at once: Fio swaps renderers while running.\n"
+            "Low-power Mode always uses Classic.")
+        renderer_row.addWidget(self.renderer_combo, 1)
+        renderer_layout.addLayout(renderer_row)
+
         self.shadows_enabled_checkbox = QCheckBox("Enable Dynamic Shadows")
         self.shadows_enabled_checkbox.setToolTip(
             "Enable depth cube-map shadows from lights with 'casts_shadows' enabled.\n"
@@ -646,6 +663,9 @@ class SettingsWindow(QDialog):
         default_shadows = not is_low_power
         self.lowpower_mode_checkbox.setChecked(self.config.getboolean('Renderer', 'lowpower_mode', fallback=default_lowpower_mode))
         self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
+        from engine import hd_graphics
+        self.renderer_combo.setCurrentIndex(max(0, self.renderer_combo.findData(
+            hd_graphics.renderer_from(self.config))))
 
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
         from editor.main_window import gore_level_from
@@ -766,6 +786,8 @@ class SettingsWindow(QDialog):
             self.config.add_section('Renderer')
         self.config.set('Renderer', 'lowpower_mode', str(self.lowpower_mode_checkbox.isChecked()))
         self.config.set('Renderer', 'shadows_enabled', str(self.shadows_enabled_checkbox.isChecked()))
+        self.config.set('Renderer', 'renderer',
+                        self.renderer_combo.currentData() or hd_graphics.DEFAULT_RENDERER)
         # Water quality is per water brush now; drop the old global key.
         self.config.remove_option('Renderer', 'water_quality')
         

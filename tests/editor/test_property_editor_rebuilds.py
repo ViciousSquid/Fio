@@ -335,8 +335,10 @@ def test_property_edit_marks_the_dense_render_row_dirty(panel):
     editor.update_object_prop('glass_refraction', 2.4)
 
     epoch, dirty = host.state.render_dirty_snapshot()
-    assert epoch == before_epoch + 1
-    assert id(brush) in dirty
+    assert epoch > before_epoch          # the edit, and the undo checkpoint before it
+    # The checkpoint journals the selection; with none (the panel was handed
+    # the brush directly) it journals the world, which covers the brush too.
+    assert dirty is None or id(brush) in dirty
     assert brush['glass_refraction'] == 2.4
 
     table = RenderTable()

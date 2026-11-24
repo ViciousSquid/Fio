@@ -86,3 +86,21 @@ def test_undo_after_portal_link_restores_the_old_target(console):
     assert _find(state, 'a').properties['portal_target'] == 'c'
     assert state.undo()
     assert _find(state, 'a').properties['portal_target'] == 'b'
+
+
+@pytest.mark.parametrize("command", [
+    "spawn light 0 100 0",
+    "portal_create pa pb 0 100 0",
+    "setprop lamp intensity 7",
+])
+def test_a_command_that_changes_the_scene_marks_the_map_modified(console, command):
+    """The checkpoint was taken on EditorState, which knows nothing of the
+    window's unsaved-changes flag: the scene changed, the title showed no
+    asterisk, closing did not ask, and autosave skipped the map."""
+    handler, state = console
+    window = handler.main_window
+    _light(state, 'lamp', intensity=1.0)
+    window.unsaved_changes = False
+    handler.handle_command(command)
+    assert window.unsaved_changes is True
+    window.unsaved_changes = False          # the fixture closes without asking

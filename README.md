@@ -192,6 +192,64 @@ Features include:
 * GLB assets
 * first-person and top-down camera modes
 
+### Two renderers: Classic and HD_High
+
+Fio draws through a renderer contract (`engine/renderer`), and ships two renderers that are swapped while it runs:
+
+| | **Classic** | **HD_High** |
+| --- | --- | --- |
+| What it is | Fio's original forward renderer (`engine/renderer/forward`). What Fio falls back to when no renderer is set, or HD_High cannot start. | A separate, physically based renderer (`engine/renderer/hd_high`). |
+| Lighting | Lambert per lamp, in display space | Physically based surfaces (GGX specular, energy-conserving diffuse), a sun with a filtered shadow map, sky light, Forward+ clustered lamp culling |
+| Materials | The diffuse texture | Diffuse + normal/height + AO/roughness/metalness/emission maps for every surface, parallax |
+| Frame | Straight to the display | HDR target, ambient occlusion, screen-space reflections, bloom, sun shafts, tone mapping, grading, FXAA |
+
+Choose one in **Settings > Display > Renderer** (`[Renderer] renderer = Classic | HD_High` in `settings.ini`), or switch at any moment with the console's `r_renderer Classic` / `r_renderer HD_High`. No restart: the renderers share nothing but the contract. Low-power ARM mode always uses Classic, and the Android player is Classic only.
+
+Classic is locked: HD_High is its own package and Classic's files, shaders and pixels are checked against what they were before HD_High existed (`tests/visual/test_classic_lock.py`, `tests/visual/test_classic_golden.py`, `tools/hd_golden.py`).
+
+#### A map's HD sky
+
+What an HD_High frame looks like is map data, kept where the sky image is: on the **primary PlayerStart**, under **HD Sky** in the property editor. Classic keeps these properties with the map and ignores them. All are optional.
+
+| Property | Meaning | Default |
+| --- | --- | --- |
+| `hd_sky` | `none` (indoors: the map's own lamps and ambient, nothing else), `panorama` (the sky image is the sky and lights the map) or `procedural` (an analytic sky with clouds) | `panorama` if the map has a sky image, else `none` |
+| `hd_sun`, `hd_sun_azimuth`, `hd_sun_elevation`, `hd_sun_color`, `hd_sun_intensity`, `hd_shadow_strength` | A directional sun with a shadow map. A blank colour is taken from the atmosphere. | on for `procedural`, off otherwise; 135°, 42°, 3.4, 1.0 |
+| `hd_turbidity`, `hd_rayleigh`, `hd_mie`, `hd_mie_g`, `hd_ground_color` | The procedural atmosphere | 3.5, 1.4, 0.005, 0.8 |
+| `hd_cloud_cover`, `hd_cloud_softness`, `hd_wind_x`, `hd_wind_z`, `hd_cloud_shadows` | The procedural cloud layer and its moving shadows | 0.42, 0.22, 26, 11, 0.55 |
+| `hd_haze`, `hd_haze_falloff` | Aerial perspective under a sky. A map with distance fog switched on uses its fog instead: one or the other, never both. | 0.00003, 0.0008 |
+| `hd_exposure` | Exposure compensation in stops (EV) | 0 |
+| `hd_bloom`, `hd_ao`, `hd_tint`, `hd_saturation`, `hd_contrast`, `hd_vignette`, `hd_grain` | The look of the finished frame | 0.10, 1.0, white, 1.04, 1.05, 0.22, 0.012 |
+
+How light behaves:
+
+* **A map with no sky is lit exactly by its lamps**, at the brightness Classic shows it: a lamp falls off across a room as its author saw it, and the frame is not lifted toward mid-grey.
+* **Under a sky, sky light lands only where the sky is overhead.** A courtyard is lit by the sky and the rooms beside it by their lamps; nothing leaks through a roof or a wall.
+* **Exposure is worked out, not authored**: from the sky's and sun's light outdoors, held at classic brightness indoors, and eased between the two by how much sky is over the view point. `hd_exposure` nudges it.
+* **Reflections** show the frame itself where a reflected ray finds it; otherwise the nearest ReflectionProbe, else the sky, else the map's ambient.
+* **Terrain** under a sky is shaded like every other surface (sun, sky light, shadows, its layers' normal maps).
+* Sprites, monsters, particles, effects, water and glass are not physically shaded: they keep the colours they have in Classic, through the tone curve.
+
+View > **HD preview** chooses whether the editor's 3D view is drawn in HD while HD_High is active (Play always is).
+
+#### Material maps
+
+In HD_High no surface is flat for want of maps. Beside a diffuse texture `<name>.<ext>` (png, webp or jpg):
+
+| File | Contents |
+| --- | --- |
+| `<name>_n` | Tangent-space normal map, OpenGL convention (+Y up), with the surface's **height in alpha** (or in a separate `<name>_h`) |
+| `<name>_m` | **R** ambient occlusion, **G** roughness, **B** metalness, **A** 1 − emission |
+| `<name>.mat.json` | `parallax` (relief depth in world units), `emission` (gain), and the generator's inputs |
+
+Every stock surface texture has a set, baked from its picture by `tools/make_material_maps.py` (parameters per texture in its `.mat.json`, so a result can be tuned and reproduced; hand-made maps are never overwritten). A texture with none gets them made by the same generator when it is first drawn, off the render thread, and kept in the user's cache by the picture's content. Tool textures (nodraw, trigger, the Dev grids) are flat on purpose. **Tools > HD Readiness Report** lists where each texture the open map uses gets its maps.
+
+GLB materials' roughness and metalness factors and an MTL's `Pr` / `Pm` / `Ke` are used by HD_High; Classic ignores them.
+
+#### What HD_High costs
+
+`tools/bench_hd.py` draws stock maps with both renderers and reports GPU time (whole frame and per pass), CPU time and the video memory HD_High adds. See `docs/hd_high_performance.md` for a measured table and how to read it.
+
 ### Native world portals
 
 Fio supports non-Euclidean world connections between arbitrary locations using portal rendering techniques including stencil-buffer masking and oblique near-plane clipping.

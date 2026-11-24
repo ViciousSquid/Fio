@@ -10,6 +10,7 @@ textured part of Overlay draw through here too.
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 
 from engine import render_table
 from engine.render_keys import sort_into_runs
@@ -17,6 +18,7 @@ from ...core.diagnostics import timed_pass
 from ...core.uniform_rows import uniform_rows
 from ...core.geometry import RUN_NODRAW, RUN_SKIP
 from ..instancing import GEO_BATCH_KEY, GEO_RUN_KEY
+from ...core.raw_calls import draw_elements, uniform_matrix4
 
 
 class TexturedMixin:
@@ -54,7 +56,7 @@ class TexturedMixin:
         self._submit_brush_runs('brush_instanced', projection, view, lights,
                                 derived['run_starts'], derived['run_texture'],
                                 derived['run_first'], 6, stream=stream)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
 
     @timed_pass('textured brushes')
     def draw_textured_brushes_optimized(self, projection, view, camera_pos,
@@ -75,39 +77,39 @@ class TexturedMixin:
         slots = brushes
         self.render_stats.visible_brushes += len(slots)
         shader, uniforms = self.shaders['textured'], self.uniforms['textured']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('textured', lights)
         emissive_loc = uniforms['emissive_factor']
         if emissive_loc is not None and emissive_loc != -1:
-            gl.glUniform3f(emissive_loc, 0.0, 0.0, 0.0)
+            gl_state.glUniform3f(emissive_loc, 0.0, 0.0, 0.0)
 
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(view)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['texture_diffuse'], 0)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        gl.glBindVertexArray(self.vaos['cube'])
+        uniform_matrix4(uniforms['projection'], proj_ptr)
+        uniform_matrix4(uniforms['view'], view_ptr)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glUniform1i(uniforms['texture_diffuse'], 0)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glBindVertexArray(self.vaos['cube'])
         model_loc = uniforms['model']
 
         tex_scale_loc = uniforms.get('tex_scale', -1)
         if tex_scale_loc == -1:
             loc = gl.glGetUniformLocation(shader, "tex_scale")
-            uniforms._cache['tex_scale'] = loc
+            uniforms['tex_scale'] = loc
             tex_scale_loc = loc
 
         tex_angle_loc = uniforms.get('tex_angle', -1)
         if tex_angle_loc == -1:
             loc = gl.glGetUniformLocation(shader, "tex_angle")
-            uniforms._cache['tex_angle'] = loc
+            uniforms['tex_angle'] = loc
             tex_angle_loc = loc
 
         tex_shift_loc = uniforms.get('tex_shift', -1)
         if tex_shift_loc == -1:
             loc = gl.glGetUniformLocation(shader, "tex_shift")
-            uniforms._cache['tex_shift'] = loc
+            uniforms['tex_shift'] = loc
             tex_shift_loc = loc
 
         normal_mat_loc = uniforms.get('normalMatrix', -1)
@@ -145,10 +147,10 @@ class TexturedMixin:
         if instanced:
             self._draw_face_runs_instanced(
                 projection, view, lights, table, key, derived)
-            gl.glUseProgram(shader)
+            gl_state.glUseProgram(shader)
             self._current_shader = shader
-            gl.glActiveTexture(gl.GL_TEXTURE0)
-            gl.glBindVertexArray(self.vaos['cube'])
+            gl_state.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glBindVertexArray(self.vaos['cube'])
         elif len(rows):
             # No box faces (every visible brush angled, or all caulk/nodraw):
             # nothing to draw here, and no matrices were gathered for it.
@@ -158,7 +160,7 @@ class TexturedMixin:
             for i in range(len(rows)):
                 tex_id = int(gl_tex[i])
                 if tex_id != current_tex:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                     current_tex = tex_id
                     self.render_stats.batched_draws += 1
                 row = int(rows[i])
@@ -168,12 +170,12 @@ class TexturedMixin:
                         upload_normal(normal_mat_loc, row)
                     last_row = row
                 if tex_angle_loc != -1:
-                    gl.glUniform1f(tex_angle_loc, float(angles[i]))
+                    gl_state.glUniform1f(tex_angle_loc, float(angles[i]))
                 if tex_shift_loc != -1:
-                    gl.glUniform2f(
+                    gl_state.glUniform2f(
                         tex_shift_loc, float(shifts[i, 0]), float(shifts[i, 1]))
                 if tex_scale_loc != -1:
-                    gl.glUniform2f(
+                    gl_state.glUniform2f(
                         tex_scale_loc, float(scales[i, 0]), float(scales[i, 1]))
                 gl.glDrawArrays(gl.GL_TRIANGLES, int(faces[i]) * 6, 6)
                 self.render_stats.visible_tris += 2
@@ -185,7 +187,7 @@ class TexturedMixin:
         self._draw_geo_runs(projection, view, lights, table, slots, models,
                             normals, uniforms, is_play, current_tex)
         self._portal_end_cull()
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def _geo_visible_faces(self, table, slots, is_play):
         """Every convex face the textured pass draws for *slots*, unsorted.
@@ -250,15 +252,13 @@ class TexturedMixin:
         """Bind a convex-face program and its per-pass state; its uniforms."""
         program = self.shaders[name]
         uniforms = self.uniforms[name]
-        gl.glUseProgram(program)
+        gl_state.glUseProgram(program)
         self._current_shader = program
         self._upload_lights_once(name, lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
-                              glm.value_ptr(view))
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['texture_diffuse'], 0)
+        uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
+        uniform_matrix4(uniforms['view'], glm.value_ptr(view))
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glUniform1i(uniforms['texture_diffuse'], 0)
         return uniforms
 
     def _draw_geo_runs(self, projection, view, lights, table, slots, models,
@@ -337,11 +337,11 @@ class TexturedMixin:
         bounds = np.searchsorted(starts, groups)
 
         self._begin_geo_face_pass(projection, view, lights, 'geo_batched')
-        gl.glActiveTexture(gl.GL_TEXTURE0 + self.GEO_TRANSFORM_UNIT)
-        gl.glBindTexture(gl.GL_TEXTURE_BUFFER, store.transform_texture)
-        gl.glUniform1i(self.uniforms['geo_batched']['uTransforms'],
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + self.GEO_TRANSFORM_UNIT)
+        gl_state.glBindTexture(gl.GL_TEXTURE_BUFFER, store.transform_texture)
+        gl_state.glUniform1i(self.uniforms['geo_batched']['uTransforms'],
                        self.GEO_TRANSFORM_UNIT)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
         heads = groups[:-1]
         group_tex = texture[heads].tolist()
         group_page = page[heads].tolist()
@@ -355,23 +355,23 @@ class TexturedMixin:
         for group, end in enumerate(ends):
             tex_id = group_tex[group]
             if tex_id != current_tex:
-                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 current_tex = tex_id
             vao = group_vao[group]
             if vao != bound_vao:
-                gl.glBindVertexArray(vao)
+                gl_state.glBindVertexArray(vao)
                 bound_vao = vao
             if elements:
                 # Element-array binding is VAO state: bound after the VAO.
                 gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, store.index_buffer(
                     (tex_id, group_page[group]), first[begin:end], count[begin:end]))
-                gl.glDrawElements(gl.GL_TRIANGLES, int(count[begin:end].sum()),
-                                  gl.GL_UNSIGNED_SHORT, None)
+                draw_elements(gl.GL_TRIANGLES, int(count[begin:end].sum()),
+                              gl.GL_UNSIGNED_SHORT, 0)
             else:
                 gl.glMultiDrawArrays(gl.GL_TRIANGLES, first[begin:end],
                                      count[begin:end], end - begin)
             begin = end
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self.render_stats.draw_calls += len(ends)
         self.render_stats.visible_tris += int(count.sum()) // 3
         return current_tex
@@ -433,11 +433,11 @@ class TexturedMixin:
         for group, end in enumerate(ends):
             tex_id = group_tex[group]
             if tex_id != current_tex:
-                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 current_tex = tex_id
             vao = group_vao[group]
             if vao != bound_vao:
-                gl.glBindVertexArray(vao)
+                gl_state.glBindVertexArray(vao)
                 bound_vao = vao
             row = group_row[group]
             upload_model(model_loc, row)

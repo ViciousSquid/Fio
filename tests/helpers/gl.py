@@ -260,21 +260,23 @@ def render_config(**overrides):
     config.update(overrides)
     return config
 
-def make_renderer(config=None):
-    """A :class:`engine.renderer.forward.ForwardRenderer` on the current GL context.
+def make_renderer(config=None, name="Forward"):
+    """The renderer registered as *name* (the classic
+    :class:`engine.renderer.forward.ForwardRenderer` by default) on the
+    current GL context.
 
     The texture loader returns a 1x1 white texture for everything, so the tests
     do not depend on which files happen to be in ``assets/``; lighting and
     shadowing are what is under test, not texture content.
     """
-    from engine.renderer.forward import ForwardRenderer
+    from engine.renderer import renderer_factory
 
     white = _white_texture()
 
     def _loader(texture_name, subfolder):
         return white
 
-    renderer = ForwardRenderer(config, texture_loader=_loader)
+    renderer = renderer_factory(name)(config, texture_loader=_loader)
     renderer.set_grid(4096, 64)
     renderer.set_sprite_textures({})
     return renderer
@@ -327,3 +329,19 @@ def is_blank(image, tolerance=2):
     """True when every pixel is (near enough) the same colour."""
     flat = image.reshape(-1, image.shape[-1]).astype(np.int16)
     return bool(np.all(flat.max(axis=0) - flat.min(axis=0) <= tolerance))
+
+
+@contextlib.contextmanager
+def wrapped_gl_calls():
+    """Route the renderer's native GL calls (``core.raw_calls``) through
+    PyOpenGL's wrappers, looked up on ``OpenGL.GL`` at each call -- the path
+    ``FIO_GL_DEBUG=1`` takes -- so a test that intercepts ``gl.glDrawElements``
+    and the like sees every call. The same GL calls with the same values."""
+    from engine.renderer.core import raw_calls
+    held = dict(raw_calls._resolved)
+    raw_calls._resolved.update(dict.fromkeys(raw_calls._ENTRIES))
+    try:
+        yield
+    finally:
+        raw_calls._resolved.clear()
+        raw_calls._resolved.update(held)

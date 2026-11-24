@@ -113,6 +113,12 @@ class PropSession:
 
     def _adopt(self, prop):
         prop.properties["_prop_home_pos"] = list(prop.pos)
+        # A carried model is turned with the player and keeps that facing
+        # where it is dropped (_turn_with_player writes its rotation): the
+        # facing it was placed with is put back with its place.
+        rotation = prop.properties.get("rotation")
+        if isinstance(rotation, (list, tuple)):
+            prop.properties["_prop_home_rotation"] = list(rotation)
         prop.properties.pop("_drop_requested", None)
         self._file(prop)
         if self.physics is not None:
@@ -121,6 +127,7 @@ class PropSession:
 
     def _release(self, prop, restore_home=True):
         home = prop.properties.pop("_prop_home_pos", None)
+        home_rotation = prop.properties.pop("_prop_home_rotation", None)
         prop.properties.pop("_drop_requested", None)
         self._unfile(prop)
         if self.physics is not None:
@@ -128,6 +135,10 @@ class PropSession:
             self.physics.set_kinematic(prop, False)
         if restore_home and home is not None:
             prop.pos = home
+        if (restore_home and home_rotation is not None
+                and prop.properties.get("rotation") != home_rotation):
+            prop.properties["rotation"] = home_rotation
+            touch(prop)
 
     # -- spatial membership -----------------------------------------------
 
@@ -219,6 +230,8 @@ class PropSession:
         for prop in self.props:
             self._release(prop)
             prop._respawn_fade_alpha = 1.0
+            prop._carry_sprite_yaw = None       # one still held when Play stops
+            prop._carry_turn = None
         self._stop_rotations()
         self.held = None
         self.props = []
@@ -267,7 +280,11 @@ class PropSession:
             prop._rotate_angle = 0.0
         self.rotations = {}
 
-    def _update_rotations(self, delta):
+    def update_rotations(self, delta):
+        """Step every Rotate. Called with the movers and the light paths, at
+        the head of the tick: machinery turns through a cutscene, the death
+        screen and the level-complete screen, as a mover moves through them,
+        and a solid model has turned before the player moves against it."""
         if not self.rotations:
             return
         turned = False
@@ -289,6 +306,29 @@ class PropSession:
     def _motion(self, prop):
         entry = self.rotations.get(id(prop))
         return None if entry is None else entry[1]
+
+    def rotation_snapshot(self):
+        """Every Rotate's progress, by its Prop's id (engine.savegame)."""
+        out = {}
+        for prop, motion in self.rotations.values():
+            pid = str(prop.properties.get('id') or '')
+            if pid:
+                out[pid] = motion.snapshot()
+        return out
+
+    def restore_rotations(self, saved):
+        """Carry each Rotate on from where :meth:`rotation_snapshot` found
+        it: a valve turned after the save is as it was when it was saved,
+        and so is the collision of a solid model that turned with it."""
+        if not isinstance(saved, dict):
+            return
+        for prop, motion in self.rotations.values():
+            entry = saved.get(str(prop.properties.get('id') or ''))
+            if isinstance(entry, dict) and motion.restore(entry):
+                prop._rotate_angle = motion.angle
+        groups = getattr(getattr(self.logic, 'mover_runtime', None), 'groups', None)
+        if groups is not None:
+            groups.follow_models()
 
     def start_rotate(self, prop):
         """StartRotate (Turn: turn to its Angle); fires OnRotateStarted."""
@@ -349,8 +389,6 @@ class PropSession:
     # -- interaction ------------------------------------------------------
 
     def tick(self, delta, use_pressed):
-        # Machinery turns whether or not there is a player to look at it.
-        self._update_rotations(delta)
         player = self.logic.player_runtime.player
         if player is None:
             return

@@ -2699,6 +2699,8 @@ class PropertyEditor(QWidget):
         if isinstance(thing, PlayerStart):
             self._build_player_start_primary(form, thing)
             self._build_player_start_sky_image(form, thing)
+            from editor.hd_sky_panel import build_hd_sky_section
+            build_hd_sky_section(self, form, thing, CollapsibleSection)
 
         if isinstance(thing, LevelChanger):
             self._build_destination_spawn(form, thing)
@@ -4688,9 +4690,11 @@ class PropertyEditor(QWidget):
         if self._populating or thing.primary:
             return
         sky_image = self.editor.sky_image_path_from_map()
+        hd_sky = self.editor.hd_sky_properties_from_map()
         self.editor.save_state()
         self.editor.state.set_primary_player_start(thing)
         self.editor.canonicalize_sky_image_ownership(sky_image)
+        self.editor.canonicalize_hd_sky_ownership(hd_sky)
         self.editor.mark_as_modified()
         self.editor.update_all_ui()
 
@@ -7081,16 +7085,16 @@ class PropertyEditor(QWidget):
         widget = QWidget()
         h = QHBoxLayout(widget)
         h.setContentsMargins(0, 0, 0, 0)
-        rgb = thing.properties.get(key, [255, 255, 255])
+        rgb = thing.properties.get(key) or [255, 255, 255]
         swatch = QPushButton()
         swatch.setFixedSize(200, 32)
 
         def update_swatch():
-            rgb = thing.properties.get(key, [255, 255, 255])
+            rgb = thing.properties.get(key) or [255, 255, 255]
             swatch.setStyleSheet(f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]});")
 
         def open_dialog():
-            rgb = thing.properties.get(key, [255, 255, 255])
+            rgb = thing.properties.get(key) or [255, 255, 255]
             color = QColorDialog.getColor(QColor(*rgb), self, dialog_title)
             if color.isValid():
                 self.update_object_prop(key, [color.red(), color.green(), color.blue()])
@@ -7283,9 +7287,12 @@ class PropertyEditor(QWidget):
         if self.current_object is None:
             return
         shared = self._shared_edit_targets(key)
-        if shared:
+        if not self._populating:
             # One undo step puts every object the edit reaches back -- one per
-            # gesture, not one per valueChanged.
+            # gesture, not one per valueChanged. An edit of a single object
+            # is a step too: it used to take none, so Ctrl+Z either did
+            # nothing or took the edit back together with whatever came
+            # before it.
             self._checkpoint_shared_edit(key, [self.current_object] + shared)
         if isinstance(self.current_object, dict):
             self.current_object[key] = value

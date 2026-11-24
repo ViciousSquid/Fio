@@ -132,6 +132,11 @@ def _color(v, default: Color) -> Color:
         return default
 
 
+#: The range of TerrainAppearance.strata_layers.
+STRATA_LAYERS_MIN = 4
+STRATA_LAYERS_MAX = 80
+
+
 @dataclass
 class TerrainAppearance:
     """Every look option for the terrain. Serialised with the map."""
@@ -144,6 +149,10 @@ class TerrainAppearance:
     terrace_ramp: float = 0.35      # share of each step spent on the riser
     block_size: float = 16.0        # terrain-space footprint of a block
     skirt: bool = True              # blocks: solid sides at the terrain edge
+    #: Smooth terrain: cliff walls of rock strata at the terrain's edge.
+    strata: bool = True
+    #: Rock beds a strata wall shows from its foot to the top of the terrain.
+    strata_layers: int = 24
 
     # -- Colour -------------------------------------------------------------
     color_mode: str = 'natural'
@@ -222,6 +231,9 @@ class TerrainAppearance:
         self.block_size = float(np.clip(_num(self.block_size, 16.0), 2.0, 128.0))
         self.band_height = float(np.clip(_num(self.band_height, 12.0), 1.0, 200.0))
         self.skirt = bool(self.skirt)
+        self.strata = bool(self.strata)
+        self.strata_layers = int(np.clip(_num(self.strata_layers, 24), STRATA_LAYERS_MIN,
+                                         STRATA_LAYERS_MAX))
         if self.layer_heights is not None:
             try:
                 lh = sorted(_clamp01(v) for v in list(self.layer_heights)[:3])
@@ -353,12 +365,18 @@ PRESETS: Dict[str, dict] = {
 }
 
 
+#: The strata walls at the terrain's edge: part of the appearance, but not of
+#: a look -- a preset keeps them, and changing them leaves the preset chosen.
+EDGE_OPTIONS = ('strata', 'strata_layers')
+
+
 def apply_preset(appearance: TerrainAppearance, name: str) -> TerrainAppearance:
-    """Reset every look option to ``name``'s values. Texture layers are kept."""
+    """Reset every look option to ``name``'s values. Texture layers and the
+    strata walls are kept."""
     if name not in PRESETS:
         raise KeyError(name)
     keep = {k: getattr(appearance, k)
-            for k in ('layer_heights', 'layer_blend', 'slope_rock')}
+            for k in ('layer_heights', 'layer_blend', 'slope_rock') + EDGE_OPTIONS}
     fresh = TerrainAppearance()
     for key, value in PRESETS[name].items():
         setattr(fresh, key, value)

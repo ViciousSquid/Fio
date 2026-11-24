@@ -129,6 +129,36 @@ def test_a_module_that_needs_pyqt5_is_in_the_qt_tier(path):
             % _rel(path))
 
 
+def _imports_qt_or_gl(tree):
+    """Whether the module imports PyQt5 or OpenGL anywhere, inside a function
+    included: the rule the headless tier leaves a module out by
+    (``pytest_ignore_collect`` in the root conftest)."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split(".")[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            roots = [node.module.split(".")[0]] if node.module else []
+        else:
+            continue
+        if "PyQt5" in roots or "OpenGL" in roots:
+            return True
+    return False
+
+
+@pytest.mark.parametrize("path", ALL_MODULES, ids=_rel)
+def test_a_module_the_headless_tier_leaves_out_is_in_a_desktop_tier(path):
+    """The headless tier does not collect a module that imports PyQt5 or
+    OpenGL anywhere, even in one function; the Qt and GL tiers select by
+    marker. Unmarked, such a module is collected by neither: six modules, 72
+    tests, ran in no CI job."""
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    if _imports_qt_or_gl(tree):
+        assert _module_is_in_a_desktop_tier(tree), (
+            "%s imports PyQt5/OpenGL, so the headless tier leaves it out, but "
+            "it is not marked `pytestmark = pytest.mark.qt` (or gl), so no "
+            "test tier runs it" % _rel(path))
+
+
 @pytest.mark.parametrize("path", ALL_MODULES, ids=_rel)
 def test_every_test_module_defines_at_least_one_test(path):
     """A module that parses but declares nothing is coverage that is not there."""

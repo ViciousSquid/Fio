@@ -181,7 +181,11 @@ class ViewGizmo:
         drag = self._start(handle, lay, x, y)
         if drag is None:
             return False
-        self.editor.save_state()            # one undo step for the drag
+        # One undo step for the drag. Taken on the state: the map is marked
+        # modified when the drag is released having changed something, not
+        # by a click on a handle.
+        self.editor.state.save_state()
+        self.editor.components.invalidate()
         self.drag = drag
         self.hover = handle
         self.view.update()
@@ -306,7 +310,7 @@ class ViewGizmo:
         if not self._changed(drag):
             self.editor.state.discard_last_checkpoint()
         else:
-            self.editor.unsaved_changes = True
+            self.editor.mark_as_modified()
             self.editor.state.mark_lighting_dirty()
             primary = self.editor.primary_selection()
             editor_panel = getattr(self.editor, 'property_editor', None)
@@ -434,7 +438,7 @@ class ViewGizmo:
         axis = [float(v) for v in axis]
         pivot = [float(v) for v in drag['pivot']]
         self.editor.apply_rotation_to_selection(angle, axis, undoable=False, pivot=pivot)
-        for obj in self.editor.with_group_mates(self.editor.selected_objects_list()):
+        for obj in self.editor.movable_with_mates(self.editor.selected_objects_list()):
             if isinstance(obj, dict):
                 continue
             props = obj.properties

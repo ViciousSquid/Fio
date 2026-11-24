@@ -7,6 +7,10 @@ import pytest
 from editor import decal_handles as dh
 from editor.things import Decal
 
+# The headless tier leaves out any module that imports PyQt5 or OpenGL
+# (one test here does); unmarked, the Qt tier deselected it too.
+pytestmark = pytest.mark.qt
+
 # The 2D views' axes: top (x, z), front (x, y), side (z, y).
 TOP, FRONT, SIDE = (0, 2), (0, 1), (2, 1)
 

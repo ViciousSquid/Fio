@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent, QThread, pyqtSignal
 from PyQt5.QtGui import QOpenGLContext, QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
@@ -29,7 +30,8 @@ from editor.things import (
 from engine.sdl_runtime import init_input as init_sdl_input
 from engine.player import Player
 
-from engine.renderer import DEFAULT_RENDERER, available_renderers, create_renderer
+from engine.renderer import (
+    DEFAULT_RENDERER, available_renderers, canonical_name, create_renderer)
 from editor.selection_overlay import describe_selection
 _HUD_FONT_FILES = {
     1: "Rushfordclean-rgz89.otf",
@@ -165,7 +167,6 @@ class QtGameView(QOpenGLWidget):
         self.debug_console_window = DebugConsole.get_instance()
         self.grid_size, self.world_size = 16, 2048
         self.grid_dirty = True
-        self.culling_enabled = True
         self.show_sprites_in_play_mode = False
         # Cache keys for per-frame expensive rebuilds
         self._io_conn_cache       = None   # last _gather_io_connections result
@@ -245,6 +246,12 @@ class QtGameView(QOpenGLWidget):
         self.renderer = None
         #: Panorama authored on the current map's Primary PlayerStart.
         self.sky_image_path = ""
+        #: The map's HD sky (engine.hd_graphics.sky_settings), from the
+        #: Primary PlayerStart like the panorama; None is the defaults.
+        self.hd_sky_settings = None
+        #: View > HD preview: whether the editor view draws HD in an HD
+        #: tier (Play always does).
+        self.hd_preview = True
         #: Registry name of the renderer initializeGL creates and switch_renderer replaces.
         self._renderer_mode = DEFAULT_RENDERER
 
@@ -321,11 +328,9 @@ class QtGameView(QOpenGLWidget):
         self.start_time = time.perf_counter()
 
         self._render_config = {
-            "culling_enabled": True,
             "brush_display_mode": "Textured",
             "render_mode": 0,
             "show_triggers_as_solid": False,
-            "show_caulk": True,
             "play_mode": False,
             "splitscreen_active": False,
             "primary_selection": None,
@@ -543,9 +548,9 @@ class QtGameView(QOpenGLWidget):
         width = max(1, int(self.width() * ratio))
         height = max(1, int(self.height() * ratio))
         viewport = (0, 0, width // 2, height) if splitscreen else (0, 0, width, height)
-        # Optional, like animate_textures and draw_face_hover: a renderer that
-        # does not offer it (it is not in the locked contract) shows none.
-        # The built-in one has it from engine.renderer.core.
+        # Optional (engine.renderer.RendererOptions), like animate_textures
+        # and draw_face_hover: a renderer that does not offer it shows none.
+        # The built-in ones have it from engine.renderer.core.
         draw = getattr(self.renderer, 'draw_lens_water', None)
         if draw is not None:
             draw(drops, viewport)
@@ -632,12 +637,31 @@ class QtGameView(QOpenGLWidget):
         gl.glClearColor(*self.view_distance.fog_color, 1.0)
         self._log_gl_context()
         config = self.editor.config
+        # Classic unless settings.ini asks for HD_High ([Renderer] renderer).
+        # A renderer that cannot start here leaves Classic running.
+        wanted = self._configured_renderer(config)
         self._renderer_mode = DEFAULT_RENDERER
-        self.renderer = create_renderer(DEFAULT_RENDERER, config)
+        self.renderer = None
+        if wanted != DEFAULT_RENDERER:
+            try:
+                candidate = create_renderer(wanted, config)
+                if candidate.ready:
+                    self.renderer, self._renderer_mode = candidate, wanted
+                else:
+                    candidate.cleanup()
+            except Exception as exc:
+                print(f"[QtGameView] Renderer '{wanted}' failed to start ({exc}); "
+                      f"using {DEFAULT_RENDERER}.")
+        if self.renderer is None:
+            self.renderer = create_renderer(DEFAULT_RENDERER, config)
         if not self.renderer.ready:
             debug_log("Error", "3D view: the renderer's shaders did not build, so "
                                "the view stays empty; the error is in the "
                                "terminal output.")
+        # Qt calls this again when it replaces the widget's context (a move
+        # to another top-level window): the renderer made above is new, and
+        # has no grid until it is given one.
+        self.grid_dirty = True
         self.set_cull_distance(self.cull_distance)
         self.load_all_sprite_textures()
         self.preload_level_textures()
@@ -1001,7 +1025,7 @@ class QtGameView(QOpenGLWidget):
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.defaultFramebufferObject())
             gl.glViewport(0, 0, width, height)
             gl.glScissor(0, 0, width, height)
-            gl.glDisable(gl.GL_SCISSOR_TEST)
+            gl_state.glDisable(gl.GL_SCISSOR_TEST)
         finally:
             self.doneCurrent()
 
@@ -1356,7 +1380,25 @@ class QtGameView(QOpenGLWidget):
         # QPainter owns the GL state again before any HUD/overlay drawing.
         painter = QPainter(self._paint_device())
         painter.beginNativePainting()
+        self._native_painting = True
+        try:
+            self._draw_frame(painter, render_state)
+        except BaseException:
+            # A frame that fails must still end its painter, here, while the
+            # context is current. Left active, it lives on in the traceback
+            # the interpreter keeps (sys.last_exc) and is destroyed when that
+            # is next replaced -- by any later exception, in any Qt callback
+            # -- with whatever context is current then, or none: a segfault
+            # long after the frame that caused it.
+            if self._native_painting:
+                painter.endNativePainting()
+            if painter.isActive():
+                painter.end()
+            raise
 
+    def _draw_frame(self, painter, render_state):
+        """The frame :meth:`_paint_frame` opened *painter* for: the world
+        inside native painting, then the 2D overlay."""
         if render_state:
             self._cached_health = render_state.player_health
             self._cached_max_health = render_state.player_max_health
@@ -1433,7 +1475,6 @@ class QtGameView(QOpenGLWidget):
             _set_fov(self.camera.fov)
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
         self._view_ptr = glm.value_ptr(self.view_matrix)
-        self._render_config["culling_enabled"] = self.culling_enabled
         # The Display box is published as-is while editing. In Play the game
         # is drawn textured; only the debug views (Wireframe, Overlay)
         # carry over.
@@ -1505,6 +1546,10 @@ class QtGameView(QOpenGLWidget):
         _pmgr = self.logic_thread.plugins if self.logic_thread is not None else None
         # The map's Primary PlayerStart owns the panorama in both editor and Play.
         self.renderer.set_background_image(self.sky_image_path)
+        # The map's HD sky rides in the frame input like everything else a
+        # renderer is told: plain data, for a renderer that lights from it.
+        self._render_config["hd_sky"] = self.hd_sky_settings
+        self._render_config["hd_preview"] = self.hd_preview
         if _pmgr is not None and _pmgr.has_listeners("render.pre_scene"):
             _pmgr.emit("render.pre_scene", viewport=self, renderer=self.renderer,
                        projection=self.projection_matrix, view=self.view_matrix,
@@ -1516,18 +1561,18 @@ class QtGameView(QOpenGLWidget):
             _asp = _half / _h if _h > 0 else 1.0
             _split_proj = perspective_projection(self.camera.fov, _asp, 0.1, _far)
 
-            gl.glDisable(gl.GL_SCISSOR_TEST)
-            gl.glDepthMask(gl.GL_TRUE)
+            gl_state.glDisable(gl.GL_SCISSOR_TEST)
+            gl_state.glDepthMask(gl.GL_TRUE)
             
             gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
 
-            gl.glEnable(gl.GL_SCISSOR_TEST)
+            gl_state.glEnable(gl.GL_SCISSOR_TEST)
             gl.glScissor(0, 0, _half, _h)
             gl.glViewport(0, 0, _half, _h)
-            gl.glDepthMask(gl.GL_TRUE)
-            gl.glDepthFunc(gl.GL_LESS)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glDisable(gl.GL_STENCIL_TEST)
+            gl_state.glDepthMask(gl.GL_TRUE)
+            gl_state.glDepthFunc(gl.GL_LESS)
+            gl_state.glDisable(gl.GL_BLEND)
+            gl_state.glDisable(gl.GL_STENCIL_TEST)
 
             self._publish_terrain(_split_proj, self.view_matrix, camera_pos)
             self.renderer.render_scene(
@@ -1559,10 +1604,10 @@ class QtGameView(QOpenGLWidget):
 
             gl.glScissor(_half, 0, _half, _h)
             gl.glViewport(_half, 0, _half, _h)
-            gl.glDepthMask(gl.GL_TRUE)
-            gl.glDepthFunc(gl.GL_LESS)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glDisable(gl.GL_STENCIL_TEST)
+            gl_state.glDepthMask(gl.GL_TRUE)
+            gl_state.glDepthFunc(gl.GL_LESS)
+            gl_state.glDisable(gl.GL_BLEND)
+            gl_state.glDisable(gl.GL_STENCIL_TEST)
 
             _p2_view = render_state.player2_view_matrix
             _p2_cam_pos = render_state.player2_pos
@@ -1600,7 +1645,7 @@ class QtGameView(QOpenGLWidget):
                 )
 
 
-            gl.glDisable(gl.GL_SCISSOR_TEST)
+            gl_state.glDisable(gl.GL_SCISSOR_TEST)
             gl.glViewport(0, 0, _w, _h)
         else:
             self._publish_terrain(self.projection_matrix, self.view_matrix, camera_pos)
@@ -1713,13 +1758,14 @@ class QtGameView(QOpenGLWidget):
         # starts from the widget's 2D framebuffer, not that native state.
         # Normalize the native state while native painting is still active;
         # endNativePainting() then hands the context back to Qt cleanly.
-        gl.glDisable(gl.GL_SCISSOR_TEST)
-        gl.glDisable(gl.GL_DEPTH_TEST)
-        gl.glDisable(gl.GL_STENCIL_TEST)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glDisable(gl.GL_CULL_FACE)
+        gl_state.glDisable(gl.GL_SCISSOR_TEST)
+        gl_state.glDisable(gl.GL_DEPTH_TEST)
+        gl_state.glDisable(gl.GL_STENCIL_TEST)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glDisable(gl.GL_CULL_FACE)
         gl.glViewport(0, 0, max(1, int(self.width())), max(1, int(self.height())))
         painter.endNativePainting()
+        self._native_painting = False
         # Do not let native rendering leak QPainter state into the first 2D
         # overlay draw. Individual HUD elements still use save()/restore().
         painter.setOpacity(1.0)
@@ -2046,6 +2092,20 @@ class QtGameView(QOpenGLWidget):
         if self.renderer:
             self.renderer.view_distance = self.view_distance
 
+    @staticmethod
+    def _configured_renderer(config):
+        """The registry name of the renderer settings.ini asks to start
+        with; Classic (the default renderer) on a low-power machine."""
+        from engine import hd_graphics
+        from engine import shaders as engine_shaders
+        try:
+            is_low_power, _ = engine_shaders.detect_low_power_arm()
+            lowpower = config.getboolean('Renderer', 'lowpower_mode', fallback=is_low_power)
+        except Exception:
+            lowpower = False
+        name = hd_graphics.REGISTRY_NAME[hd_graphics.renderer_from(config, lowpower=lowpower)]
+        return name if name in available_renderers() else DEFAULT_RENDERER
+
     @property
     def renderer_mode(self):
         """The registry name of the active renderer."""
@@ -2064,6 +2124,7 @@ class QtGameView(QOpenGLWidget):
         old renderer's textures die with it. Returns True when *mode* is the
         active renderer afterwards.
         """
+        mode = canonical_name(mode)         # "Classic" is the Forward renderer
         if self.renderer is not None and mode == self._renderer_mode:
             return True
         if mode not in available_renderers():
@@ -2294,7 +2355,9 @@ class QtGameView(QOpenGLWidget):
                 self.editor.select_terrain()
                 self.update()
             elif obj:
-                self.editor.save_state()
+                # A selection changes nothing in the map: no undo checkpoint
+                # (one here dropped the redo history and marked the map
+                # modified on every click), as in the 2D views.
                 self.editor.set_selected_objects([obj])
                 self.update()
             return

@@ -186,3 +186,87 @@ def test_the_gizmo_is_hidden_without_a_selection_and_in_play(main_window):
     main_window.state.brushes[:] = [brush]
     main_window.set_selected_objects([brush])
     assert gizmo.active()
+
+
+# -- a drag and the history ---------------------------------------------------------
+
+def _public(brush):
+    """A brush without the caches kept on it."""
+    return {k: v for k, v in brush.items() if not k.startswith('_')}
+
+
+def _history(main_window):
+    state = main_window.state
+    return len(state.undo_stack), len(state.redo_stack)
+
+
+def test_undo_during_a_drag_takes_the_drag_back_and_nothing_else(main_window):
+    """Ctrl+Z mid-drag undid an older step under the drag: the drag went on
+    moving a brush no longer in the scene, and its Esc then dropped a
+    checkpoint that was not its own."""
+    brush = box_brush("crate", (0, 0, 0), (128, 128, 128))
+    gizmo = _setup(main_window, [brush])
+    main_window.save_state()                    # an earlier edit, to be kept
+    brush['pos'] = [0.0, 0.0, 64.0]
+    earlier = copy.deepcopy(brush)
+    history = _history(main_window)
+
+    _drag(gizmo, _arrow_point(gizmo, 1), _screen_dir(gizmo, 1) * 60, release=False)
+    assert gizmo.dragging and brush['pos'] != earlier['pos']
+    main_window.undo()
+    assert not gizmo.dragging
+    assert main_window.state.brushes[0] is brush, "the scene still holds the brush"
+    assert _public(brush) == earlier, "the drag is taken back; the earlier edit stands"
+    assert _history(main_window) == history
+
+    main_window.undo()                          # and now the earlier edit
+    assert main_window.state.brushes[0]['pos'] == [0.0, 0.0, 0.0]
+
+
+def test_redo_and_play_end_a_drag_too(main_window, monkeypatch):
+    brush = box_brush("crate", (0, 0, 0), (128, 128, 128))
+    gizmo = _setup(main_window, [brush])
+    before = copy.deepcopy(brush)
+    history = _history(main_window)
+    _drag(gizmo, _arrow_point(gizmo, 1), _screen_dir(gizmo, 1) * 60, release=False)
+    main_window.redo()
+    assert not gizmo.dragging and _public(brush) == before and _history(main_window) == history
+
+    _drag(gizmo, _arrow_point(gizmo, 1), _screen_dir(gizmo, 1) * 60, release=False)
+    assert main_window._end_gesture() is True
+    assert not gizmo.dragging and _public(brush) == before and _history(main_window) == history
+    assert main_window._end_gesture() is False
+
+
+def test_a_click_on_a_handle_does_not_mark_the_map_modified(main_window):
+    brush = box_brush("crate", (0, 0, 0), (128, 128, 128))
+    gizmo = _setup(main_window, [brush])
+    main_window.unsaved_changes = False
+    x, y = _arrow_point(gizmo, 1)
+    assert gizmo.press(x, y)
+    gizmo.release()                             # a click: nothing moved
+    assert main_window.unsaved_changes is False
+
+    assert gizmo.press(x, y)
+    gizmo.drag_to(x + 40, y - 40)
+    gizmo.cancel()                              # Esc
+    assert main_window.unsaved_changes is False
+
+    _drag(gizmo, _arrow_point(gizmo, 1), _screen_dir(gizmo, 1) * 60)
+    assert main_window.unsaved_changes is True
+    main_window.unsaved_changes = False
+
+
+def test_a_locked_object_does_not_turn(main_window):
+    """Move and Scale skipped a locked object; Rotate turned it, and made a
+    locked box brush an angled one."""
+    free = box_brush("free", (0, 0, 0), (128, 128, 128))
+    locked = box_brush("locked", (200, 0, 0), (64, 64, 64))
+    locked['lock'] = True
+    gizmo = _setup(main_window, [free, locked], tg.ROTATE)
+    before = copy.deepcopy(locked)
+    ring = _ring_point(gizmo, 1)
+    _drag(gizmo, ring, (60, 0))
+    assert _public(locked) == before
+    assert free.get('geometry') is not None or free['pos'] != [0, 0, 0], "the free one turned"
+    main_window.unsaved_changes = False

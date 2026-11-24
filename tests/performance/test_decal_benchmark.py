@@ -26,7 +26,7 @@ import time
 import numpy as np
 import pytest
 
-pytestmark = [pytest.mark.benchmark, pytest.mark.slow]
+pytestmark = [pytest.mark.benchmark, pytest.mark.slow, pytest.mark.qt]
 
 COUNTS = (10, 100, 1000, 10000)
 

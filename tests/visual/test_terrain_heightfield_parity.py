@@ -63,6 +63,10 @@ def map_terrain():
     t = Terrain()
     with open(os.path.join(ROOT, "maps", "BigWorld_streaming_test.json")) as f:
         t.from_dict(json.load(f)["terrain_data"])
+    # The ground's surface is under test: the strata walls at the terrain's
+    # edge are not in the frozen reference meshes (tests/visual/
+    # test_terrain_strata.py covers them).
+    t.set_appearance(strata=False)
     return t
 
 
@@ -494,8 +498,17 @@ def test_each_chunk_draws_with_its_own_height_grid_and_paint(context, monkeypatc
     held = terrain_draw.scene_gl(renderer)
     recorder = _RecordingGL(gl, held.uniforms["uPaintEnabled"],
                             held.uniforms["uPaintLayer"])
+    from engine.renderer.core import gl_state, raw_calls
     monkeypatch.setattr(terrain_gl_module, "gl", recorder)
-    painted_frame = frame()                       # uploads, then draws
+    monkeypatch.setattr(raw_calls, "gl", recorder)     # the chunk draws go here
+    # Bindings and uniforms are set through core.gl_state, which sends on
+    # its own ``gl``; it is told to forget what programs hold, so the
+    # recorded frame sends every uniform it sets rather than skipping one
+    # an earlier frame left in place.
+    monkeypatch.setattr(gl_state, "gl", recorder)
+    gl_state.forget()
+    with glh.wrapped_gl_calls():
+        painted_frame = frame()                   # uploads, then draws
     monkeypatch.undo()
     # The renderer frees these with itself: keep what the frame drew with.
     height_pages, page_layers = list(held._height_pages), held._page_layers

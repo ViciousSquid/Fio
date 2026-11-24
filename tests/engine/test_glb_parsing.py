@@ -26,6 +26,7 @@ pytest.importorskip("OpenGL", reason="engine.glb_loader imports PyOpenGL")
 
 from engine import glb_loader                      # noqa: E402
 from engine.glb_loader import GLB, GLBLoader       # noqa: E402
+from engine.renderer.core import gl_state                     # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -99,7 +100,9 @@ class _NullGL(types.SimpleNamespace):
 def _model(tmp_path, monkeypatch, gltf, blob=b""):
     path = tmp_path / "model.glb"
     path.write_bytes(_glb(gltf, blob))
-    monkeypatch.setattr(glb_loader, "gl", _NullGL())
+    fake_gl = _NullGL()
+    monkeypatch.setattr(glb_loader, "gl", fake_gl)
+    monkeypatch.setattr(gl_state, "gl", fake_gl)   # GL state is set through core.gl_state
     return GLB(str(path))
 
 

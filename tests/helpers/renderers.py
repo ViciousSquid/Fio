@@ -5,7 +5,7 @@ Neither shares anything with ``ForwardRenderer``: they implement the
 replacement renderer needs nothing from Fio's built-in one.
 """
 
-from engine.renderer import RenderStats
+from engine.renderer import RENDERER_CONTRACT_VERSION, RenderStats
 
 #: The colour FlatRenderer fills a view with.
 MAGENTA = (255, 0, 255)
@@ -13,6 +13,8 @@ MAGENTA = (255, 0, 255)
 
 class StubRenderer:
     """The smallest conforming renderer: every member, no technique, no GL."""
+
+    contract_version = RENDERER_CONTRACT_VERSION
 
     def __init__(self, config):
         self.config = config
@@ -100,3 +102,27 @@ class FlatRenderer(StubRenderer):
         self.render_stats.reset()
         gl.glClearColor(*(c / 255.0 for c in MAGENTA), 1.0)
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+
+
+def conforming_renderer(**members):
+    """An instance of a new class with every member of the contract, which
+    counts its clean-ups in ``cleaned``; *members* replace members of that
+    class, and one given as None is left out of it.
+
+    The class shares nothing with :class:`StubRenderer` but a copy of its
+    methods, so a member left out is absent, not inherited.
+    """
+    body = {name: value for name, value in vars(StubRenderer).items()
+            if name not in ('__dict__', '__weakref__', '__init__')}
+
+    def cleanup(self):
+        self.cleaned += 1
+    body.update(cleanup=cleanup, cleaned=0, view_distance=None,
+                shadows_enabled=True, water_quality='expensive',
+                render_stats=RenderStats())
+    for name, value in members.items():
+        if value is None:
+            body.pop(name, None)
+        else:
+            body[name] = value
+    return type('Conforming', (), body)()
