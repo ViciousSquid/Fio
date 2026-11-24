@@ -1629,11 +1629,8 @@ class Player:
                         _resolve_models=False, terrain=terrain
                 ):
                     return "retry"
-                if aabb_brushes:
-                    for axis in ("x", "y", "z"):
-                        if self._resolve_collision(
-                                aabb_brushes, axis=axis, delta=0.0, cover=cover):
-                            return "retry"
+                if aabb_brushes and self._push_out_of_boxes(aabb_brushes, cover):
+                    return "retry"
                 after = (float(self.pos.x), float(self.pos.y), float(self.pos.z))
                 if sum((after[i] - before[i]) ** 2 for i in range(3)) <= 1e-8:
                     break
@@ -2611,6 +2608,52 @@ class Player:
             return False
 
         return True
+
+    def _push_out_of_boxes(self, brushes, cover=None):
+        """Push the player out of each box it overlaps, the short way.
+
+        For a position some other correction produced (a slide along a model
+        mesh), not for one a move along an axis produced: there is no axis
+        the overlap is known to be on, so each box is left along the axis it
+        is entered least on. An axis pass here would take a hull that a mesh
+        contact pressed a fraction of a unit into the floor and move it out
+        of the floor brush's nearest *side* -- the width of the floor away.
+
+        Returns True when *cover* no longer holds, as :meth:`_resolve_collision`
+        does.
+        """
+        half = self._half
+        for brush in brushes:
+            if brush.get('_collision_mode') == 'mesh':
+                continue
+            b = brush_aabb_bounds(brush)
+            pos = self.pos
+            enters = (
+                (pos.x + half.x - b[0], 0, -1.0), (b[3] - (pos.x - half.x), 0, 1.0),
+                (pos.y + half.y - b[1], 1, -1.0), (b[4] - (pos.y - half.y), 1, 1.0),
+                (pos.z + half.z - b[2], 2, -1.0), (b[5] - (pos.z - half.z), 2, 1.0),
+            )
+            depth, axis, sign = min(enters)
+            if not depth > 0.0:
+                continue                    # apart, or only touching, on an axis
+            if axis == 1 and sign > 0.0:
+                self.pos.y += depth
+                self.velocity.y = 0
+                self.on_ground = True
+                self.ground_object = brush
+            elif axis == 1:
+                self.pos.y -= depth + 0.001
+                if self.velocity.y > 0:
+                    self.velocity.y = 0
+            elif axis == 0:
+                self.pos.x += sign * (depth + 0.001)
+                self.velocity.x = 0
+            else:
+                self.pos.z += sign * (depth + 0.001)
+                self.velocity.z = 0
+            if cover is not None and not cover.holds(self.pos.x, self.pos.y, self.pos.z):
+                return True
+        return False
 
     def _resolve_collision(self, brushes, axis, delta, ignore_brush=None, cover=None):
         """Push the player out of any overlapping brush on one axis.
