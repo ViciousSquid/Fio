@@ -44,6 +44,29 @@ show. These are the findings, ranked:
 | 19 | The PR adds 32 MB of lossless `_n`/`_m` WebP maps (+62% of `assets/`, more than the diffuse images they belong to). The Android/GLES package exporter ships them too, though that player never reads them. | `assets/`, `editor/package_exporter.py` | Size | Recommendation |
 
 
+## Before and after
+
+`tools/bench_hd.py`, 1280x720, 12 frames, same machine and driver. The "before" column is `7828755`. GPU ms is
+the whole frame.
+
+| Map | GPU ms before | GPU ms after | Change | Scene pass before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Office_Corridor | 58.6 | 53.8 | −8% | 24.9 → 21.7 |
+| _SHOWCASE | 148.1 | 113.9 | −23% | 106.6 → 74.5 (−30%) |
+| MonsterTest | 87.6 | 68.4 | −22% | 44.9 → 27.9 (−38%) |
+| Terrain_Test_small2 | 31.5 | 30.1 | −4% | 6.8 → 6.0 |
+
+At 160x90, where what is left is mostly CPU, frames were within noise: Office_Corridor 5.6 → 4.9 ms, _SHOWCASE
+13.0 → 13.3, MonsterTest 9.0 → 9.1, Terrain 4.8 → 4.3. The prepass's second brush submission costs about what the
+other CPU trims save.
+
+The "extra VRAM" column of `bench_hd.py` grows on maps with shadow-casting point lights (_SHOWCASE 75 → 87 MB)
+because the point shadow array is now counted at all. Its real size halved.
+
+Frames against the unchanged renderer (Office_Corridor, _SHOWCASE, MonsterTest, Terrain_Test_small2, Light_Test,
+Glass_Test): mean difference 0.41–0.66 / 255, at most 45 pixels above 8 in a 1280x720 frame, none above 24. That is
+the same as two frames of the unchanged renderer.
+
 ## What changed
 
 * **Adaptive depth prepass** (`renderer.py` `_draw_opaque_brushes_hd`, `surface.py` mode 4).
