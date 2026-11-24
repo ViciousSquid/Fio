@@ -91,6 +91,10 @@ def sends(request, monkeypatch):
     module = importlib.import_module(request.param)
     recorder = RecordingGL()
     monkeypatch.setattr(module, "gl", recorder)
+    # The sends go through core.gl_state, on its own ``gl``; outside a frame
+    # it remembers nothing and sends every call.
+    from engine.renderer.core import gl_state
+    monkeypatch.setattr(gl_state, "gl", recorder)
     return module._ModelSends(), recorder
 
 
@@ -186,9 +190,9 @@ def test_the_blend_state_is_asked_for_once_a_pass(sends):
 def test_both_renderers_draw_their_models_through_it():
     """No group loop sends these three uniforms directly any more.
 
-    Classic's instanced pass is not among them: it consumes a prepared plan
-    (``tests/visual/test_model_plan.py``) and keeps what it has sent each
-    program itself.
+    Neither renderer's instanced pass is among them: each consumes a
+    prepared plan (``tests/visual/test_model_plan.py``) and keeps what it has
+    sent each program itself.
     """
     import ast
     import inspect
@@ -197,7 +201,7 @@ def test_both_renderers_draw_their_models_through_it():
         for method in ("draw_models_instanced", "_draw_dense_model_single"):
             source = inspect.getsource(getattr(module.PassesMixin, method))
             if "_model_plan(" in source:
-                assert ".forward." in name and method == "draw_models_instanced"
+                assert method == "draw_models_instanced"
                 continue
             tree = ast.parse("class _:\n" + source)
             sent = [ast.unparse(node) for node in ast.walk(tree)

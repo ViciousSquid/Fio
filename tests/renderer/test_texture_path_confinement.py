@@ -20,6 +20,7 @@ from PIL import Image                                         # noqa: E402
 from engine import asset_paths                                # noqa: E402
 from engine.asset_archives import prepare_asset_archives      # noqa: E402
 from engine.renderer.core import resources                    # noqa: E402
+from engine.renderer.core import gl_state                     # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -72,6 +73,7 @@ def project(tmp_path, monkeypatch):
     prepare_asset_archives(str(root))
     fake = _FakeGL()
     monkeypatch.setattr(resources, "gl", fake)
+    monkeypatch.setattr(gl_state, "gl", fake)     # bindings go through core.gl_state
     monkeypatch.setattr(asset_paths, "_warned", set())
     opened = []
     real_open = Image.open
