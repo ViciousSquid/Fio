@@ -23,6 +23,7 @@ import math
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 from ..core.raw_calls import uniform_matrix4
 # The raw entry point: PyOpenGL's wrapper has no array handler for the packed
 # depth-stencil pixel type, and these allocations pass no pixels anyway.
@@ -463,7 +464,7 @@ def query_result(query):
 def _texture(internal, width, height, pixel_format, pixel_type, *, linear=True,
              mipmaps=False):
     texture = int(gl.glGenTextures(1))
-    gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+    gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture)
     _raw_tex_image(gl.GL_TEXTURE_2D, 0, internal, width, height, 0,
                    pixel_format, pixel_type, None)
     filtering = gl.GL_LINEAR if linear else gl.GL_NEAREST
@@ -565,7 +566,7 @@ class PostFXMixin:
         textures = list(self._postfx_textures.values()) + [b[0] for b in self._postfx_bloom]
         fbos = list(self._postfx_fbos.values()) + [b[1] for b in self._postfx_bloom]
         if textures:
-            gl.glDeleteTextures(textures)
+            gl_state.glDeleteTextures(textures)
         if fbos:
             gl.glDeleteFramebuffers(len(fbos), fbos)
         self._postfx_textures = {}
@@ -626,25 +627,25 @@ class PostFXMixin:
         if self._hd_marks is not None:
             self._hd_marks = {}
             self._hd_mark('begin')
-        gl.glDisable(gl.GL_SCISSOR_TEST)
+        gl_state.glDisable(gl.GL_SCISSOR_TEST)
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._postfx_fbos['scene'])
         gl.glViewport(0, 0, width, height)
         return True
 
     def _postfx_pass_state(self):
-        gl.glDisable(gl.GL_DEPTH_TEST)
-        gl.glDepthMask(gl.GL_FALSE)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glDisable(gl.GL_STENCIL_TEST)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glDisable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthMask(gl.GL_FALSE)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glDisable(gl.GL_CULL_FACE)
+        gl_state.glDisable(gl.GL_STENCIL_TEST)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
 
     @staticmethod
     def _postfx_bind(program, name, unit, texture):
-        gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
-        gl.glUniform1i(program[name], unit)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + unit)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture)
+        gl_state.glUniform1i(program[name], unit)
 
     def _postfx_matrices(self, program, projection):
         # Held in a local: value_ptr points into the matrix it is given.
@@ -659,11 +660,11 @@ class PostFXMixin:
                  and max(abs(p[0][1]), abs(p[1][0]), abs(p[3][0]), abs(p[3][1]),
                          abs(p[0][2]), abs(p[1][2]), abs(p[0][3]), abs(p[1][3])) < 1e-9)
         if plain:
-            gl.glUniform4f(program['uUnprojectA'], 2.0 / p[0][0], 2.0 / p[1][1],
+            gl_state.glUniform4f(program['uUnprojectA'], 2.0 / p[0][0], 2.0 / p[1][1],
                            (p[2][0] - 1.0) / p[0][0], (p[2][1] - 1.0) / p[1][1])
-            gl.glUniform3f(program['uUnprojectB'], p[2][2], p[3][2], 1.0)
+            gl_state.glUniform3f(program['uUnprojectB'], p[2][2], p[3][2], 1.0)
         else:
-            gl.glUniform3f(program['uUnprojectB'], 0.0, 0.0, 0.0)
+            gl_state.glUniform3f(program['uUnprojectB'], 0.0, 0.0, 0.0)
 
     def _postfx_resolve(self, projection, view):
         """Ambient occlusion and reflections onto the opaque frame, before
@@ -693,33 +694,33 @@ class PostFXMixin:
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['ao'])
             gl.glViewport(0, 0, half_w, half_h)
             program = self._postfx_program('ao', AO_FRAG)
-            gl.glUseProgram(program.id)
+            gl_state.glUseProgram(program.id)
             self._postfx_matrices(program, projection)
             self._postfx_bind(program, 'uDepth', 0, tex['depth'])
-            gl.glUniform4f(program['uParams'], env.ao_radius, env.ao_radius * 0.04,
+            gl_state.glUniform4f(program['uParams'], env.ao_radius, env.ao_radius * 0.04,
                            1.0, projection[1][1] * height * 0.5)
-            gl.glUniform2f(program['uPixel'], 1.0 / width, 1.0 / height)
+            gl_state.glUniform2f(program['uPixel'], 1.0 / width, 1.0 / height)
             taps = max(4, min(16, int(env.ao_taps)))
-            gl.glUniform1i(program['uTaps'], taps)
+            gl_state.glUniform1i(program['uTaps'], taps)
             turn = 2.0 * math.pi * 5.0 / taps
-            gl.glUniform4f(program['uTurn'], math.cos(turn), math.sin(turn),
+            gl_state.glUniform4f(program['uTurn'], math.cos(turn), math.sin(turn),
                            math.cos(turn * 0.5), math.sin(turn * 0.5))
             self._env_fullscreen()
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['ao_blur'])
             program = self._postfx_program('ao_blur', AO_BLUR_FRAG)
-            gl.glUseProgram(program.id)
+            gl_state.glUseProgram(program.id)
             self._postfx_bind(program, 'uAO', 1, tex['ao'])
             self._env_fullscreen()
         self._hd_mark('ambient occlusion')
         if reflect:
             # Blurrier levels of the frame, for rough reflections.
-            gl.glActiveTexture(gl.GL_TEXTURE0)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, tex['colour'])
+            gl_state.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex['colour'])
             gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['resolved'])
         gl.glViewport(0, 0, width, height)
         program = self._postfx_program('resolve', RESOLVE_FRAG)
-        gl.glUseProgram(program.id)
+        gl_state.glUseProgram(program.id)
         self._postfx_matrices(program, projection)
         inverse_view = glm.inverse(view)
         uniform_matrix4(program['uView'], glm.value_ptr(view))
@@ -732,14 +733,14 @@ class PostFXMixin:
                           self._env_reflection_texture())
         levels = math.floor(math.log2(max(width, height)))
         probe = self._env_probe_reflections
-        gl.glUniform4f(program['uParams'], env.ambient_occlusion if occlude else 0.0,
+        gl_state.glUniform4f(program['uParams'], env.ambient_occlusion if occlude else 0.0,
                        1.0 if reflect else 0.0,
                        math.log2(512.0) - (3.0 if probe else 2.0), min(6.0, float(levels)))
-        gl.glUniform4f(program['uParams2'], 1.0 if probe else 0.0,
+        gl_state.glUniform4f(program['uParams2'], 1.0 if probe else 0.0,
                        float(max(8, min(48, int(env.ssr_steps)))),
                        self._env_reflection_gain(), 0.0)
-        gl.glUniform3f(program['uIndoor'], *self._env_indoor_colour)
-        gl.glUniform3f(program['uFallback'], *self._env_reflect_fallback())
+        gl_state.glUniform3f(program['uIndoor'], *self._env_indoor_colour)
+        gl_state.glUniform3f(program['uFallback'], *self._env_reflect_fallback())
         self._env_fullscreen()
         # The result becomes the scene target's colour (whose depth the
         # blended passes test) and the old colour the next frame's result:
@@ -751,15 +752,15 @@ class PostFXMixin:
         gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
                                   gl.GL_TEXTURE_2D, tex['colour'], 0)
         self._postfx_restore_units()
-        gl.glUseProgram(0)
+        gl_state.glUseProgram(0)
         self._current_shader = None
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LESS)
-        gl.glDepthMask(gl.GL_TRUE)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthFunc(gl.GL_LESS)
+        gl_state.glDepthMask(gl.GL_TRUE)
         if cull:
-            gl.glEnable(gl.GL_CULL_FACE)
+            gl_state.glEnable(gl.GL_CULL_FACE)
         if stencil:
-            gl.glEnable(gl.GL_STENCIL_TEST)
+            gl_state.glEnable(gl.GL_STENCIL_TEST)
         self._hd_mark('reflections')
 
     def _postfx_restore_units(self):
@@ -767,12 +768,12 @@ class PostFXMixin:
         follow expect their own textures on 0..3 to be theirs to bind, and
         the environment's on their units."""
         for unit in (3, 2, 1):
-            gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.ENV_MAP_UNIT)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_reflection_texture())
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0 + unit)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + surface.ENV_MAP_UNIT)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._env_reflection_texture())
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
         # Units 2 and 3 are also where the glass and water passes keep their
         # copies of the frame; they bind them again when they next draw.
         self.shadow_units_changed()
@@ -826,36 +827,36 @@ class PostFXMixin:
         env = self.environment
         source_w, source_h = width, height
         down = self._postfx_program('bloom_down', BLOOM_DOWN_FRAG)
-        gl.glUseProgram(down.id)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, source)
-        gl.glUniform1i(down['uSource'], 0)
+        gl_state.glUseProgram(down.id)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, source)
+        gl_state.glUniform1i(down['uSource'], 0)
         for index, (texture, framebuffer, w, h) in enumerate(self._postfx_bloom):
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, framebuffer)
             gl.glViewport(0, 0, w, h)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, source)
-            gl.glUniform2f(down['uTexel'], 1.0 / source_w, 1.0 / source_h)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, source)
+            gl_state.glUniform2f(down['uTexel'], 1.0 / source_w, 1.0 / source_h)
             # The threshold is of the exposed picture.
             threshold = env.bloom_threshold / max(exposure, 1e-6)
-            gl.glUniform4f(down['uParams'], 1.0 if index == 0 else 0.0,
+            gl_state.glUniform4f(down['uParams'], 1.0 if index == 0 else 0.0,
                            threshold, max(threshold * 0.5, 1e-3), 0.0)
             self._env_fullscreen()
             source, source_w, source_h = texture, w, h
         up = self._postfx_program('bloom_up', BLOOM_UP_FRAG)
-        gl.glUseProgram(up.id)
-        gl.glUniform1i(up['uSource'], 0)
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_ONE, gl.GL_ONE)
+        gl_state.glUseProgram(up.id)
+        gl_state.glUniform1i(up['uSource'], 0)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_ONE, gl.GL_ONE)
         for index in range(len(self._postfx_bloom) - 1, 0, -1):
             texture, _framebuffer_, w, h = self._postfx_bloom[index]
             _target_tex, target_fbo, target_w, target_h = self._postfx_bloom[index - 1]
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target_fbo)
             gl.glViewport(0, 0, target_w, target_h)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
-            gl.glUniform2f(up['uTexel'], 1.0 / w, 1.0 / h)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture)
+            gl_state.glUniform2f(up['uTexel'], 1.0 / w, 1.0 / h)
             self._env_fullscreen()
-        gl.glDisable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
     def _postfx_finish(self, projection, view, exposure, bloom, target, viewport, scissor):
         """Sun shafts, tone mapping and grade, FXAA, into the view's own
@@ -870,9 +871,9 @@ class PostFXMixin:
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['shafts'])
             gl.glViewport(0, 0, max(1, width // 2), max(1, height // 2))
             program = self._postfx_program('shafts', SHAFTS_FRAG)
-            gl.glUseProgram(program.id)
+            gl_state.glUseProgram(program.id)
             self._postfx_bind(program, 'uDepth', 0, tex['depth'])
-            gl.glUniform4f(program['uSun'], sun[0][0], sun[0][1],
+            gl_state.glUniform4f(program['uSun'], sun[0][0], sun[0][1],
                            env.sun_shafts * sun[1], width / float(height))
             self._env_fullscreen()
         self._hd_mark('sun shafts')
@@ -887,41 +888,41 @@ class PostFXMixin:
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
             gl.glViewport(*viewport)
         program = self._postfx_program('compose', COMPOSE_FRAG)
-        gl.glUseProgram(program.id)
+        gl_state.glUseProgram(program.id)
         self._postfx_bind(program, 'uColor', 0, tex['colour'])
         self._postfx_bind(program, 'uBloom', 1, self._postfx_bloom[0][0])
         self._postfx_bind(program, 'uShafts', 2, tex['shafts'])
         self._postfx_bind(program, 'uNoise', surface.NOISE_UNIT, self._env_noise())
-        gl.glUniform4f(program['uParams'], exposure,
+        gl_state.glUniform4f(program['uParams'], exposure,
                        env.bloom * BLOOM_GAIN if bloom else 0.0, env.saturation, env.contrast)
-        gl.glUniform1f(program['uOpaque'], 0.0 if fxaa else 1.0)
-        gl.glUniform4f(program['uParams2'], env.vignette, env.grain, 1.0 if shafts else 0.0,
+        gl_state.glUniform1f(program['uOpaque'], 0.0 if fxaa else 1.0)
+        gl_state.glUniform4f(program['uParams2'], env.vignette, env.grain, 1.0 if shafts else 0.0,
                        self._env_time % 64.0)
-        gl.glUniform3f(program['uTint'], *env.tint)
-        gl.glUniform3f(program['uSunColor'], *self._env_sun_rgb)
+        gl_state.glUniform3f(program['uTint'], *env.tint)
+        gl_state.glUniform3f(program['uSunColor'], *self._env_sun_rgb)
         self._env_fullscreen()
         if fxaa:
             # Anti-alias into the framebuffer the view asked for.
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
             gl.glViewport(*viewport)
             program = self._postfx_program('fxaa', FXAA_FRAG)
-            gl.glUseProgram(program.id)
+            gl_state.glUseProgram(program.id)
             self._postfx_bind(program, 'uSource', 0, tex['ldr'])
-            gl.glUniform2f(program['uTexel'], 1.0 / width, 1.0 / height)
-            gl.glUniform1i(program['uEnabled'], 1)
+            gl_state.glUniform2f(program['uTexel'], 1.0 / width, 1.0 / height)
+            gl_state.glUniform1i(program['uEnabled'], 1)
             self._env_fullscreen()
         # What the view draws next (its own overlays) is depth-tested
         # against the world: give its framebuffer the frame's depth.
         self._postfx_blit_depth(fbo['scene'], target, width, height, viewport)
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
         self._postfx_restore_units()
-        gl.glUseProgram(0)
+        gl_state.glUseProgram(0)
         self._current_shader = None
         if scissor:
-            gl.glEnable(gl.GL_SCISSOR_TEST)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LESS)
+            gl_state.glEnable(gl.GL_SCISSOR_TEST)
+        gl_state.glDepthMask(gl.GL_TRUE)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthFunc(gl.GL_LESS)
         if self._hd_marks is not None:
             self._hd_mark('compose')
             self._hd_mark_frames.append(self._hd_marks)

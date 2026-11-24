@@ -27,6 +27,7 @@ import time
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 from OpenGL.GL.shaders import compileProgram, compileShader
 
 from engine import hd_graphics
@@ -287,7 +288,7 @@ class _Program:
 
     def delete(self):
         if self.id:
-            gl.glDeleteProgram(self.id)
+            gl_state.glDeleteProgram(self.id)
             self.id = 0
 
 
@@ -348,7 +349,7 @@ def upload_data_texture(decoded, anisotropy=0.0):
         return 0
     width, height, pixels = decoded
     texture = int(gl.glGenTextures(1))
-    gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+    gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture)
     gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
     gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
     gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER,
@@ -593,20 +594,20 @@ class EnvironmentMixin:
             program = self.shaders.get(name)
             if not program:
                 continue
-            gl.glUseProgram(program)
+            gl_state.glUseProgram(program)
             uniforms = self.uniforms[name]
             if uniforms['uSurfaceMode'] == -1:
                 continue
             for sampler, unit in surface.SURFACE_SAMPLERS:
                 location = uniforms[sampler]
                 if location != -1:
-                    gl.glUniform1i(location, unit)
+                    gl_state.glUniform1i(location, unit)
             if name == 'terrain':
                 for layer in range(4):
                     location = gl.glGetUniformLocation(program, "uLayerNormal[%d]" % layer)
                     if location != -1:
-                        gl.glUniform1i(location, surface.TERRAIN_NORMAL_UNIT + layer)
-        gl.glUseProgram(0)
+                        gl_state.glUniform1i(location, surface.TERRAIN_NORMAL_UNIT + layer)
+        gl_state.glUseProgram(0)
 
     def _env_program(self, name, vertex, fragment):
         program = self._env_programs.get(name)
@@ -618,9 +619,9 @@ class EnvironmentMixin:
         """Draw one triangle over the whole viewport."""
         if not self._env_vao:
             self._env_vao = int(gl.glGenVertexArrays(1))
-        gl.glBindVertexArray(self._env_vao)
+        gl_state.glBindVertexArray(self._env_vao)
         gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def _env_max_anisotropy(self):
         if self._env_anisotropy is None:
@@ -640,7 +641,7 @@ class EnvironmentMixin:
             rng = np.random.default_rng(20261123)
             data = rng.integers(0, 256, size=(256, 256, 4), dtype=np.uint8)
             self._env_noise_tex = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_noise_tex)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._env_noise_tex)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
@@ -924,23 +925,23 @@ class EnvironmentMixin:
         except Exception as exc:
             print(f"[Environment] sky light off: {exc}")
             self._env_skylight_ready = False
-        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.SUN_SHADOW_UNIT)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_shadow_tex)
-        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.SKY_LIGHT_UNIT)
-        gl.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_tex_or_blank())
-        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.ENV_MAP_UNIT)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_reflection_texture())
-        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.NOISE_UNIT)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_noise())
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + surface.SUN_SHADOW_UNIT)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._env_shadow_tex)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + surface.SKY_LIGHT_UNIT)
+        gl_state.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_tex_or_blank())
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + surface.ENV_MAP_UNIT)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._env_reflection_texture())
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + surface.NOISE_UNIT)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._env_noise())
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
 
     def _env_cloud_uniforms(self, program):
         env = self.environment
         size = max(float(env.cloud_size), 1.0)
-        gl.glUniform4f(program['uCloud'], env.cloud_cover, max(env.cloud_softness, 0.01),
+        gl_state.glUniform4f(program['uCloud'], env.cloud_cover, max(env.cloud_softness, 0.01),
                        env.cloud_height, 1.0 / size)
         t = self._env_time
-        gl.glUniform2f(program['uCloudOffset'],
+        gl_state.glUniform2f(program['uCloudOffset'],
                        (env.wind[0] * t / size) % 256.0, (env.wind[1] * t / size) % 256.0)
 
     # ------------------------------------------------------------------
@@ -948,19 +949,19 @@ class EnvironmentMixin:
     # ------------------------------------------------------------------
     def _env_sky_uniforms(self, program, mode, camera):
         env = self.environment
-        gl.glUniform1i(program['uMode'], mode)
-        gl.glUniform3f(program['uSunDir'], *self._env_sun_dir)
-        gl.glUniform3f(program['uSunColor'], *self._env_sun_rgb)
-        gl.glUniform4f(program['uSkyParams'], env.turbidity, env.rayleigh, env.mie, env.mie_g)
-        gl.glUniform4f(program['uSkyParams2'], env.sky_intensity, env.sun_disc,
+        gl_state.glUniform1i(program['uMode'], mode)
+        gl_state.glUniform3f(program['uSunDir'], *self._env_sun_dir)
+        gl_state.glUniform3f(program['uSunColor'], *self._env_sun_rgb)
+        gl_state.glUniform4f(program['uSkyParams'], env.turbidity, env.rayleigh, env.mie, env.mie_g)
+        gl_state.glUniform4f(program['uSkyParams2'], env.sky_intensity, env.sun_disc,
                        env.cloud_brightness, 0.0)
-        gl.glUniform3f(program['uGroundColor'], *self._env_ground)
-        gl.glUniform3f(program['uCamPos'], *camera)
+        gl_state.glUniform3f(program['uGroundColor'], *self._env_ground)
+        gl_state.glUniform3f(program['uCamPos'], *camera)
         self._env_cloud_uniforms(program)
-        gl.glUniform1i(program['uNoise'], surface.NOISE_UNIT)
-        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.NOISE_UNIT)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_noise())
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glUniform1i(program['uNoise'], surface.NOISE_UNIT)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + surface.NOISE_UNIT)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._env_noise())
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
 
     def _env_draws_sky(self):
         """Whether this HD frame's background is the procedural sky (any
@@ -983,14 +984,14 @@ class EnvironmentMixin:
         whole frame."""
         program = self._env_program('sky', FULLSCREEN_VERT, SKY_FRAG)
         if behind:
-            gl.glEnable(gl.GL_DEPTH_TEST)
-            gl.glDepthFunc(gl.GL_LEQUAL)
+            gl_state.glEnable(gl.GL_DEPTH_TEST)
+            gl_state.glDepthFunc(gl.GL_LEQUAL)
         else:
-            gl.glDisable(gl.GL_DEPTH_TEST)
-        gl.glDepthMask(gl.GL_FALSE)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        gl.glUseProgram(program.id)
+            gl_state.glDisable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthMask(gl.GL_FALSE)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glUseProgram(program.id)
         # Held in locals: value_ptr points into the matrix it is given.
         inverse_projection = glm.inverse(projection)
         inverse_view = glm.inverse(view)
@@ -998,11 +999,11 @@ class EnvironmentMixin:
         uniform_matrix4(program['uInvView'], glm.value_ptr(inverse_view))
         self._env_sky_uniforms(program, 0, self._frame_camera_pos)
         self._env_fullscreen()
-        gl.glUseProgram(0)
+        gl_state.glUseProgram(0)
         self._current_shader = None
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LESS)
+        gl_state.glDepthMask(gl.GL_TRUE)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthFunc(gl.GL_LESS)
 
     def _env_map_target(self):
         """The environment map (equirectangular, linear, mip-mapped) and
@@ -1016,7 +1017,7 @@ class EnvironmentMixin:
     @staticmethod
     def _env_equirect_texture(width, height):
         texture = int(gl.glGenTextures(1))
-        gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture)
         gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA16F, width, height, 0,
                         gl.GL_RGBA, gl.GL_FLOAT, None)
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
@@ -1095,18 +1096,18 @@ class EnvironmentMixin:
         previous_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
         previous_viewport = [int(v) for v in gl.glGetIntegerv(gl.GL_VIEWPORT)]
         scissor = bool(gl.glIsEnabled(gl.GL_SCISSOR_TEST))
-        gl.glDisable(gl.GL_SCISSOR_TEST)
+        gl_state.glDisable(gl.GL_SCISSOR_TEST)
         try:
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._env_map_fbo)
             gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
                                       gl.GL_TEXTURE_2D, self._env_map, 0)
             gl.glDrawBuffers(1, [gl.GL_COLOR_ATTACHMENT0])
             gl.glViewport(0, 0, width, height)
-            gl.glDisable(gl.GL_DEPTH_TEST)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glDepthMask(gl.GL_FALSE)
+            gl_state.glDisable(gl.GL_DEPTH_TEST)
+            gl_state.glDisable(gl.GL_BLEND)
+            gl_state.glDepthMask(gl.GL_FALSE)
             gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+            gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
             if mode == hd_graphics.SKY_NONE:
                 previous_clear = [float(v) for v in gl.glGetFloatv(gl.GL_COLOR_CLEAR_VALUE)]
                 gl.glClearColor(*self._env_ground, 1.0)
@@ -1114,7 +1115,7 @@ class EnvironmentMixin:
                 gl.glClearColor(*previous_clear)
             else:
                 program = self._env_program('sky', FULLSCREEN_VERT, SKY_FRAG)
-                gl.glUseProgram(program.id)
+                gl_state.glUseProgram(program.id)
                 if mode == hd_graphics.SKY_PANORAMA:
                     self._env_image_uniforms(
                         program, panorama,
@@ -1122,18 +1123,18 @@ class EnvironmentMixin:
                 else:
                     self._env_sky_uniforms(program, 1, camera)
                 self._env_fullscreen()
-            gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_map)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._env_map)
             gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
         finally:
-            gl.glUseProgram(0)
+            gl_state.glUseProgram(0)
             self._current_shader = None
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-            gl.glDepthMask(gl.GL_TRUE)
-            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl_state.glDepthMask(gl.GL_TRUE)
+            gl_state.glEnable(gl.GL_DEPTH_TEST)
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, previous_fbo)
             gl.glViewport(*previous_viewport)
             if scissor:
-                gl.glEnable(gl.GL_SCISSOR_TEST)
+                gl_state.glEnable(gl.GL_SCISSOR_TEST)
         self._env_map_key = key
         self._env_map_age = 0
         self._env_drift = self._env_drift_now()
@@ -1142,12 +1143,12 @@ class EnvironmentMixin:
     def _env_image_uniforms(self, program, texture, gain, flip):
         """Sky program, mode 2: an equirectangular display image (the
         panorama, a reflection probe) into the environment map, linear."""
-        gl.glUniform1i(program['uMode'], 2)
-        gl.glUniform4f(program['uSourceParams'], gain, 1.0 if flip else 0.0, 0.0, 0.0)
-        gl.glUniform1i(program['uSource'], 0)
-        gl.glUniform1i(program['uNoise'], surface.NOISE_UNIT)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, int(texture))
+        gl_state.glUniform1i(program['uMode'], 2)
+        gl_state.glUniform4f(program['uSourceParams'], gain, 1.0 if flip else 0.0, 0.0, 0.0)
+        gl_state.glUniform1i(program['uSource'], 0)
+        gl_state.glUniform1i(program['uNoise'], surface.NOISE_UNIT)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, int(texture))
 
     def _env_measure_procedural(self):
         """Sky light on surfaces facing up, sideways and down, and the
@@ -1217,39 +1218,39 @@ class EnvironmentMixin:
         previous_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
         previous_viewport = [int(v) for v in gl.glGetIntegerv(gl.GL_VIEWPORT)]
         scissor = bool(gl.glIsEnabled(gl.GL_SCISSOR_TEST))
-        gl.glDisable(gl.GL_SCISSOR_TEST)
+        gl_state.glDisable(gl.GL_SCISSOR_TEST)
         try:
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._env_map_fbo)
             gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
                                       gl.GL_TEXTURE_2D, self._env_reflect_map, 0)
             gl.glDrawBuffers(1, [gl.GL_COLOR_ATTACHMENT0])
             gl.glViewport(0, 0, width, height)
-            gl.glDisable(gl.GL_DEPTH_TEST)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glDepthMask(gl.GL_FALSE)
+            gl_state.glDisable(gl.GL_DEPTH_TEST)
+            gl_state.glDisable(gl.GL_BLEND)
+            gl_state.glDepthMask(gl.GL_FALSE)
             gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+            gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
             program = self._env_program('sky', FULLSCREEN_VERT, SKY_FRAG)
-            gl.glUseProgram(program.id)
+            gl_state.glUseProgram(program.id)
             # Stored as the probe's own (linear) picture; brought into the
             # frame's units where it is read (_env_reflection_gain).
             self._env_image_uniforms(program, texture, 1.0, flip=False)
             self._env_fullscreen()
-            gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_reflect_map)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._env_reflect_map)
             gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
         finally:
-            gl.glUseProgram(0)
+            gl_state.glUseProgram(0)
             self._current_shader = None
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-            gl.glDepthMask(gl.GL_TRUE)
-            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl_state.glDepthMask(gl.GL_TRUE)
+            gl_state.glEnable(gl.GL_DEPTH_TEST)
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._env_map_fbo)
             gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
                                       gl.GL_TEXTURE_2D, self._env_map, 0)
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, previous_fbo)
             gl.glViewport(*previous_viewport)
             if scissor:
-                gl.glEnable(gl.GL_SCISSOR_TEST)
+                gl_state.glEnable(gl.GL_SCISSOR_TEST)
 
     # ------------------------------------------------------------------
     # The sun's shadow map
@@ -1262,11 +1263,11 @@ class EnvironmentMixin:
             return
         for texture in (self._env_shadow_tex, self._env_shadow_static_tex):
             if texture:
-                gl.glDeleteTextures([texture])
+                gl_state.glDeleteTextures([texture])
         textures = []
         for compare in (True, False):
             texture = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture)
             gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_DEPTH_COMPONENT24, size, size, 0,
                             gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
             filtering = gl.GL_LINEAR if compare else gl.GL_NEAREST
@@ -1281,7 +1282,7 @@ class EnvironmentMixin:
                                    gl.GL_COMPARE_REF_TO_TEXTURE)
                 gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_COMPARE_FUNC, gl.GL_LEQUAL)
             textures.append(texture)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
         self._env_shadow_tex, self._env_shadow_static_tex = textures
         if not self._env_shadow_fbo:
             self._env_shadow_fbo = int(gl.glGenFramebuffers(1))
@@ -1421,12 +1422,12 @@ class EnvironmentMixin:
             return self._env_skylight_tex
         if not self._env_skylight_blank:
             self._env_skylight_blank = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_blank)
+            gl_state.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_blank)
             for name in (gl.GL_TEXTURE_MIN_FILTER, gl.GL_TEXTURE_MAG_FILTER):
                 gl.glTexParameteri(gl.GL_TEXTURE_3D, name, gl.GL_NEAREST)
             gl.glTexImage3D(gl.GL_TEXTURE_3D, 0, gl.GL_RG16, 1, 1, 1, 0, gl.GL_RG,
                             gl.GL_UNSIGNED_SHORT, np.full((1, 1, 1, 2), 65535, dtype=np.uint16))
-            gl.glBindTexture(gl.GL_TEXTURE_3D, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_3D, 0)
         return self._env_skylight_blank
 
     #: While the map is being edited the volume is rebuilt at most this
@@ -1476,7 +1477,7 @@ class EnvironmentMixin:
             texels = skylight.texels(light, solid)
             if not self._env_skylight_tex:
                 self._env_skylight_tex = int(gl.glGenTextures(1))
-                gl.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_tex)
+                gl_state.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_tex)
                 for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
                                     (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
                                     (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
@@ -1484,13 +1485,13 @@ class EnvironmentMixin:
                                     (gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)):
                     gl.glTexParameteri(gl.GL_TEXTURE_3D, name, value)
             else:
-                gl.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_tex)
+                gl_state.glBindTexture(gl.GL_TEXTURE_3D, self._env_skylight_tex)
             gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
             nx, ny, nz = grid.shape
             gl.glTexImage3D(gl.GL_TEXTURE_3D, 0, gl.GL_RG16, nx, ny, nz, 0,
                             gl.GL_RG, gl.GL_UNSIGNED_SHORT, texels)
             gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
-            gl.glBindTexture(gl.GL_TEXTURE_3D, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_3D, 0)
             self._env_skylight_grid = grid
             self._env_skylight_sig = (grid.key, keys)
             self._env_skylight_built = now
@@ -1577,13 +1578,13 @@ class EnvironmentMixin:
         stats = self.sun_shadow_stats
         try:
             gl.glViewport(0, 0, size, size)
-            gl.glDisable(gl.GL_SCISSOR_TEST)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glEnable(gl.GL_DEPTH_TEST)
-            gl.glDepthMask(gl.GL_TRUE)
-            gl.glDepthFunc(gl.GL_LESS)
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-            gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
+            gl_state.glDisable(gl.GL_SCISSOR_TEST)
+            gl_state.glDisable(gl.GL_BLEND)
+            gl_state.glEnable(gl.GL_DEPTH_TEST)
+            gl_state.glDepthMask(gl.GL_TRUE)
+            gl_state.glDepthFunc(gl.GL_LESS)
+            gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+            gl_state.glEnable(gl.GL_POLYGON_OFFSET_FILL)
             if redraw_static:
                 gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._env_shadow_static_fbo)
                 gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
@@ -1602,10 +1603,10 @@ class EnvironmentMixin:
             stats['dynamic'] += 1
             stats['casters'] += len(moving) + len(in_models)
             # Models need not be closed: both sides, pushed back a little more.
-            gl.glUseProgram(plain.id)
+            gl_state.glUseProgram(plain.id)
             uniform_matrix4(plain['lightSpaceMatrix'], matrix_ptr)
             model_loc = plain['model']
-            gl.glDisable(gl.GL_CULL_FACE)
+            gl_state.glDisable(gl.GL_CULL_FACE)
             gl.glPolygonOffset(2.5, 4.0)
             recipes = entity_table.model_recipes()
             resolved = []
@@ -1623,26 +1624,26 @@ class EnvironmentMixin:
                 upload = uniform_rows('mat4', bases)
                 for index, (_slot, model) in enumerate(resolved):
                     upload(model_loc, index)
-                    gl.glBindVertexArray(model.vao)
+                    gl_state.glBindVertexArray(model.vao)
                     if getattr(model, 'ebo', None) is not None and getattr(model, 'index_count', 0):
                         gl.glDrawElements(gl.GL_TRIANGLES, model.index_count,
                                           gl.GL_UNSIGNED_INT, None)
                     else:
                         gl.glDrawArrays(gl.GL_TRIANGLES, 0, model.vertex_count)
         finally:
-            gl.glBindVertexArray(0)
-            gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
-            gl.glCullFace(gl.GL_BACK)
+            gl_state.glBindVertexArray(0)
+            gl_state.glDisable(gl.GL_POLYGON_OFFSET_FILL)
+            gl_state.glCullFace(gl.GL_BACK)
             if cull:
-                gl.glEnable(gl.GL_CULL_FACE)
+                gl_state.glEnable(gl.GL_CULL_FACE)
             else:
-                gl.glDisable(gl.GL_CULL_FACE)
-            gl.glUseProgram(0)
+                gl_state.glDisable(gl.GL_CULL_FACE)
+            gl_state.glUseProgram(0)
             self._current_shader = None
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, previous_fbo)
             gl.glViewport(*previous_viewport)
             if scissor:
-                gl.glEnable(gl.GL_SCISSOR_TEST)
+                gl_state.glEnable(gl.GL_SCISSOR_TEST)
 
     def _env_draw_brush_casters(self, table, in_brushes, plain, instanced, matrix_ptr, key):
         """Brush casters into the bound depth map."""
@@ -1652,29 +1653,29 @@ class EnvironmentMixin:
         # the sun puts the stored depth behind every lit face, which then
         # cannot shadow itself. Cube brushes are wound clockwise-outward,
         # convex meshes counter-clockwise (see PortalsMixin).
-        gl.glEnable(gl.GL_CULL_FACE)
-        gl.glCullFace(gl.GL_BACK)
+        gl_state.glEnable(gl.GL_CULL_FACE)
+        gl_state.glCullFace(gl.GL_BACK)
         gl.glPolygonOffset(1.0, 1.0)
         cube_slots, geo_slots, stream = self._prepare_shadow_instances(
             table, in_brushes, instanced is not None, key=key)
         cube_vao = self.vaos['cube']
         if len(cube_slots) and stream is not None:
-            gl.glUseProgram(instanced.id)
+            gl_state.glUseProgram(instanced.id)
             uniform_matrix4(instanced['lightSpaceMatrix'], matrix_ptr)
-            gl.glBindVertexArray(stream.vao)                 # reads from row 0
+            gl_state.glBindVertexArray(stream.vao)                 # reads from row 0
             gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, len(cube_slots))
-        gl.glUseProgram(plain.id)
+        gl_state.glUseProgram(plain.id)
         uniform_matrix4(plain['lightSpaceMatrix'], matrix_ptr)
         model_loc = plain['model']
         if len(cube_slots) and stream is None:
             cube_models, _ = self._frame_transforms(table, cube_slots)
             upload = uniform_rows('mat4', cube_models)
-            gl.glBindVertexArray(cube_vao)
+            gl_state.glBindVertexArray(cube_vao)
             for index in range(len(cube_slots)):
                 upload(model_loc, index)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
         if len(geo_slots):
-            gl.glCullFace(gl.GL_FRONT)
+            gl_state.glCullFace(gl.GL_FRONT)
             meshes = self._prepare_geo_meshes(table, geo_slots)
             geo_models, _ = self._frame_transforms(table, geo_slots)
             upload = uniform_rows('mat4', geo_models)
@@ -1683,7 +1684,7 @@ class EnvironmentMixin:
                 if mesh is None:
                     continue
                 upload(model_loc, index)
-                gl.glBindVertexArray(mesh.vao)
+                gl_state.glBindVertexArray(mesh.vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
 
     # ------------------------------------------------------------------
@@ -1704,59 +1705,59 @@ class EnvironmentMixin:
         state = self._env_surface_state.get(shader_name)
         if not self._env_active:
             if state is not None and state[0] != 0:
-                gl.glUniform1i(mode_loc, 0)
+                gl_state.glUniform1i(mode_loc, 0)
                 self._env_surface_state[shader_name] = (0, None, None)
             return
         env = self.environment
         mode = self._env_phase
         if state is None or state[0] != mode:
-            gl.glUniform1i(mode_loc, mode)
+            gl_state.glUniform1i(mode_loc, mode)
         frame = (self._env_map_key, self._env_shadow_ready, self._env_reflect_key,
                  self._env_probe_reflections, self._env_base_exposure,
                  self._env_skylight_ready, self._env_skylight_sig,
                  self._env_indoor_colour, self._env_reflect_fallback())
         if state is None or state[1] != frame:
             ambient = self._env_ambient
-            gl.glUniform3f(uniforms['uSunDir'], *self._env_sun_dir)
-            gl.glUniform3f(uniforms['uSunColor'], *self._env_sun_rgb)
-            gl.glUniform3f(uniforms['uAmbientSky'], *ambient[0])
-            gl.glUniform3f(uniforms['uAmbientHorizon'], *ambient[1])
-            gl.glUniform3f(uniforms['uAmbientGround'], *ambient[2])
+            gl_state.glUniform3f(uniforms['uSunDir'], *self._env_sun_dir)
+            gl_state.glUniform3f(uniforms['uSunColor'], *self._env_sun_rgb)
+            gl_state.glUniform3f(uniforms['uAmbientSky'], *ambient[0])
+            gl_state.glUniform3f(uniforms['uAmbientHorizon'], *ambient[1])
+            gl_state.glUniform3f(uniforms['uAmbientGround'], *ambient[2])
             probe = self._env_probe_reflections
             top_mip = math.log2(ENV_MAP_SIZE[0]) - (3.0 if probe else 2.0)
-            gl.glUniform4f(uniforms['uEnvParams'], top_mip,
+            gl_state.glUniform4f(uniforms['uEnvParams'], top_mip,
                            0.0 if self._postfx_reflects() else 1.0,
                            env.emissive_gain, env.point_light_gain)
             # With a probe on the environment unit, the haze cannot take its
             # colour from there: it gets the sky's horizon light instead.
-            gl.glUniform4f(uniforms['uEnvParams2'], 1.0 if probe else 0.0,
+            gl_state.glUniform4f(uniforms['uEnvParams2'], 1.0 if probe else 0.0,
                            1.0 if probe else 0.0, self._env_reflection_gain(), 0.0)
             grid = self._env_skylight_grid if self._env_skylight_ready else None
             if grid is None:
-                gl.glUniform4f(uniforms['uSkyLightScale'], 1.0, 1.0, 1.0, 0.0)
+                gl_state.glUniform4f(uniforms['uSkyLightScale'], 1.0, 1.0, 1.0, 0.0)
             else:
                 extent = grid.extent
                 # A point is first moved this far off its surface, into the
                 # room it faces.
-                gl.glUniform4f(uniforms['uSkyLightOrigin'], grid.origin[0], grid.origin[1],
+                gl_state.glUniform4f(uniforms['uSkyLightOrigin'], grid.origin[0], grid.origin[1],
                                grid.origin[2], grid.cell * skylight.SURFACE_OFFSET)
-                gl.glUniform4f(uniforms['uSkyLightScale'], 1.0 / extent[0], 1.0 / extent[1],
+                gl_state.glUniform4f(uniforms['uSkyLightScale'], 1.0 / extent[0], 1.0 / extent[1],
                                1.0 / extent[2], 2.0 if grid.follows else 1.0)
-            gl.glUniform3f(uniforms['uHazeColor'], *self._env_ambient[1])
-            gl.glUniform3f(uniforms['uReflectIndoor'], *self._env_indoor_colour)
-            gl.glUniform3f(uniforms['uReflectFallback'], *self._env_reflect_fallback())
+            gl_state.glUniform3f(uniforms['uHazeColor'], *self._env_ambient[1])
+            gl_state.glUniform3f(uniforms['uReflectIndoor'], *self._env_indoor_colour)
+            gl_state.glUniform3f(uniforms['uReflectFallback'], *self._env_reflect_fallback())
             fog = self._env_fog
             if fog is None:
-                gl.glUniform4f(uniforms['uHdrFog'], 0.0, 0.0, 0.0, 0.0)
+                gl_state.glUniform4f(uniforms['uHdrFog'], 0.0, 0.0, 0.0, 0.0)
             else:
-                gl.glUniform4f(uniforms['uHdrFog'], fog[0], fog[1], fog[2], 1.0)
-            gl.glUniform4f(uniforms['uSurfaceDefault'], env.roughness, env.metalness, 0.0, 0.0)
+                gl_state.glUniform4f(uniforms['uHdrFog'], fog[0], fog[1], fog[2], 1.0)
+            gl_state.glUniform4f(uniforms['uSurfaceDefault'], env.roughness, env.metalness, 0.0, 0.0)
             self._env_surface_default.pop(shader_name, None)
-            gl.glUniform4f(uniforms['uAtmosphere'],
+            gl_state.glUniform4f(uniforms['uAtmosphere'],
                            0.0 if self._env_fog is not None else env.haze,
                            env.haze_falloff,
                            env.cloud_shadows if env.cloud_cover > 0.0 else 0.0, 0.0)
-            gl.glUniform4f(uniforms['uMaterial'], 0.0, 0.0, 0.0, 0.0)
+            gl_state.glUniform4f(uniforms['uMaterial'], 0.0, 0.0, 0.0, 0.0)
             self._env_material_bound[shader_name] = None
         # The shadow matrix follows the view in a large world, and the
         # clouds drift: both every frame.
@@ -1765,26 +1766,26 @@ class EnvironmentMixin:
                   self._env_shadow_ready)
         if state is None or state[2] != self._env_frame:
             gl.glUniformMatrix4fv(uniforms['uSunMatrix'], 1, gl.GL_FALSE, shadow[0])
-            gl.glUniform4f(uniforms['uSunShadowParams'], 1.0 / size, size,
+            gl_state.glUniform4f(uniforms['uSunShadowParams'], 1.0 / size, size,
                            self._env_sun_texel * 1.6,
                            env.shadow_strength if self._env_shadow_ready else 0.0)
             cloud_size = max(float(env.cloud_size), 1.0)
             t = self._env_time
-            gl.glUniform4f(uniforms['uCloud'], env.cloud_cover,
+            gl_state.glUniform4f(uniforms['uCloud'], env.cloud_cover,
                            max(env.cloud_softness, 0.01), env.cloud_height, 1.0 / cloud_size)
-            gl.glUniform2f(uniforms['uCloudOffset'],
+            gl_state.glUniform2f(uniforms['uCloudOffset'],
                            (env.wind[0] * t / cloud_size) % 256.0,
                            (env.wind[1] * t / cloud_size) % 256.0)
         self._env_surface_state[shader_name] = (mode, frame, self._env_frame)
         self._env_light_grid(shader_name, uniforms)
         if shader_name in self._env_surface_default:
             # A model's own roughness and metalness, from its last draw.
-            gl.glUniform4f(uniforms['uSurfaceDefault'], env.roughness, env.metalness, 0.0, 0.0)
+            gl_state.glUniform4f(uniforms['uSurfaceDefault'], env.roughness, env.metalness, 0.0, 0.0)
             del self._env_surface_default[shader_name]
         # A program that draws without materials of its own (models, glow
         # brushes) must not keep the last brush's maps.
         if self._env_material_bound.get(shader_name) is not None:
-            gl.glUniform4f(uniforms['uMaterial'], 0.0, 0.0, 0.0, 0.0)
+            gl_state.glUniform4f(uniforms['uMaterial'], 0.0, 0.0, 0.0, 0.0)
             self._env_material_bound[shader_name] = None
 
     #: Forward+ pays when there are enough lamps that most of them cannot
@@ -1830,8 +1831,8 @@ class EnvironmentMixin:
                     self._env_grid_params = self._env_build_light_grid(count)
             params = self._env_grid_params
         if self._env_grid_sent.get(shader_name) != params:
-            gl.glUniform4f(location, *params[:4])
-            gl.glUniform2f(uniforms['uLightGridHeight'], params[4], params[5])
+            gl_state.glUniform4f(location, *params[:4])
+            gl_state.glUniform2f(uniforms['uLightGridHeight'], params[4], params[5])
             self._env_grid_sent[shader_name] = params
         self.light_grid_stats['on'] = params[3] > 0.5
 
@@ -1891,8 +1892,8 @@ class EnvironmentMixin:
         created = not self._env_grid_tex
         if created:
             self._env_grid_tex = int(gl.glGenTextures(1))
-        gl.glActiveTexture(gl.GL_TEXTURE0 + surface.LIGHT_GRID_UNIT)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_grid_tex)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + surface.LIGHT_GRID_UNIT)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._env_grid_tex)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
         if created:
             # The table's shape is fixed (surface.LIGHT_GRID_*): made once,
@@ -1907,7 +1908,7 @@ class EnvironmentMixin:
             gl.glTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, table.shape[1], table.shape[0],
                                gl.GL_RED_INTEGER, gl.GL_UNSIGNED_BYTE, table.tobytes())
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
         return (corner[0], corner[2], 1.0 / size, 1.0, corner[1], 1.0 / height)
 
     def hd_memory(self):
@@ -1936,11 +1937,11 @@ class EnvironmentMixin:
             if not found:
                 continue
             for texture in found[:2]:
-                gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture)
                 w = gl.glGetTexLevelParameteriv(gl.GL_TEXTURE_2D, 0, gl.GL_TEXTURE_WIDTH)
                 h = gl.glGetTexLevelParameteriv(gl.GL_TEXTURE_2D, 0, gl.GL_TEXTURE_HEIGHT)
                 maps += int(w) * int(h) * 4 * 4 // 3
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
         # The point lights' shadow array (lighting.py): six 16-bit layers a
         # slot, every slot at the largest light's size.
         point = 0
@@ -1963,13 +1964,13 @@ class EnvironmentMixin:
         for index, name in enumerate(('sand_tex', 'grass_tex', 'rock_tex', 'snow_tex')):
             texture = int(getattr(terrain_gl, name, 0) or 0)
             maps = self._material_for(texture) if texture else None
-            gl.glActiveTexture(gl.GL_TEXTURE0 + surface.TERRAIN_NORMAL_UNIT + index)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, maps[0] if maps else 0)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0 + surface.TERRAIN_NORMAL_UNIT + index)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, maps[0] if maps else 0)
             bound.append(1.0 if maps else 0.0)
             rough.append((0.92, 0.9, 0.82, 0.6)[index])    # sand, grass, rock, snow
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform4f(uniforms['uLayerMaps'], *bound)
-        gl.glUniform4f(uniforms['uLayerRough'], *rough)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glUniform4f(uniforms['uLayerMaps'], *bound)
+        gl_state.glUniform4f(uniforms['uLayerRough'], *rough)
 
     def _model_surface(self, shader_name, surface):
         """A model draw group's own ``(roughness, metalness)``, or None for
@@ -1984,10 +1985,10 @@ class EnvironmentMixin:
             return
         env = self.environment
         if surface is None:
-            gl.glUniform4f(location, env.roughness, env.metalness, 0.0, 0.0)
+            gl_state.glUniform4f(location, env.roughness, env.metalness, 0.0, 0.0)
             del self._env_surface_default[shader_name]
         else:
-            gl.glUniform4f(location, surface[0], surface[1], 0.0, 0.0)
+            gl_state.glUniform4f(location, surface[0], surface[1], 0.0, 0.0)
             self._env_surface_default[shader_name] = surface
 
     # ------------------------------------------------------------------
@@ -2140,14 +2141,14 @@ class EnvironmentMixin:
             normal = upload_data_texture(decoded[0], anisotropy)
             material = upload_data_texture(decoded[1], anisotropy)
             # Loading put the maps on the diffuse texture's unit: give it back.
-            gl.glBindTexture(gl.GL_TEXTURE_2D, int(texture))
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, int(texture))
             if normal and material:
                 found = (normal, material, parallax, emission)
                 _set_anisotropy(anisotropy)     # the diffuse was loaded without it
             else:
                 stray = [t for t in (normal, material) if t]
                 if stray:
-                    gl.glDeleteTextures(stray)
+                    gl_state.glDeleteTextures(stray)
         self._material_maps[texture] = found
         return found
 
@@ -2191,11 +2192,11 @@ class EnvironmentMixin:
             return
         maps = self._material_for(texture)
         if maps is not None and self._env_units_material is not maps:
-            gl.glActiveTexture(gl.GL_TEXTURE0 + surface.NORMAL_MAP_UNIT)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, maps[0])
-            gl.glActiveTexture(gl.GL_TEXTURE0 + surface.MATERIAL_MAP_UNIT)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, maps[1])
-            gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0 + surface.NORMAL_MAP_UNIT)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, maps[0])
+            gl_state.glActiveTexture(gl.GL_TEXTURE0 + surface.MATERIAL_MAP_UNIT)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, maps[1])
+            gl_state.glActiveTexture(gl.GL_TEXTURE0)
             self._env_units_material = maps
         # w: the diffuse has no alpha channel, so the depth prepass need not
         # sample it (surface._TEXTURED_MAIN).
@@ -2230,7 +2231,7 @@ class EnvironmentMixin:
         location = uniforms['uMaterial']
         if location == -1:
             return
-        gl.glUniform4f(location, *value)
+        gl_state.glUniform4f(location, *value)
         self._env_material_bound[shader_name] = value
 
     # ------------------------------------------------------------------
@@ -2257,7 +2258,7 @@ class EnvironmentMixin:
             if maps:
                 textures += [maps[0], maps[1]]
         if textures:
-            gl.glDeleteTextures(textures)
+            gl_state.glDeleteTextures(textures)
         framebuffers = [f for f in (self._env_shadow_fbo, self._env_shadow_static_fbo,
                                     self._env_map_fbo) if f]
         self._env_skylight_tex = self._env_skylight_blank = 0
@@ -2273,7 +2274,7 @@ class EnvironmentMixin:
             if program is not None:
                 program.delete()
         if self._env_vao:
-            gl.glDeleteVertexArrays(1, [self._env_vao])
+            gl_state.glDeleteVertexArrays(1, [self._env_vao])
         self._env_programs = {}
         self._material_maps = {}
         self._env_shadow_tex = self._env_noise_tex = self._env_map = 0

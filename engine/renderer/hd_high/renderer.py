@@ -15,6 +15,7 @@ import weakref
 
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 
 from engine.renderer.api import RENDERER_CONTRACT_VERSION
 
@@ -280,6 +281,8 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         #: The shared light-cookie texture array (engine.light_cookies),
         #: created the first time a light with a cookie is uploaded.
         self._light_cookies = None
+        # What each program's uniforms hold (core.gl_state).
+        self._uniform_store = gl_state.UniformStore()
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
@@ -377,7 +380,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             self.effect_explosion_texture = self.load_texture(
                 'explosion.png', 'textures/effects')
             if self.effect_explosion_texture:
-                gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
                 gl.glTexParameteri(
                     gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
                 gl.glTexParameteri(
@@ -444,10 +447,10 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         self._background_image_path = path
         self._background_failed_path = None
         if self._background_image_texture:
-            gl.glDeleteTextures([self._background_image_texture])
+            gl_state.glDeleteTextures([self._background_image_texture])
             self._background_image_texture = 0
         if self._background_cube_texture:
-            gl.glDeleteTextures([self._background_cube_texture])
+            gl_state.glDeleteTextures([self._background_cube_texture])
             self._background_cube_texture = 0
 
     def _load_background_image(self):
@@ -483,7 +486,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             with Image.open(source) as image:
                 rgba = image.convert("RGBA")
             texture = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
@@ -495,7 +498,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
                     gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, rgba.tobytes())
             finally:
                 gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
             self._background_cube_texture = self._build_sky_cube(texture)
             self._background_image_texture = texture
             if self.hd:
@@ -505,8 +508,8 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             return True
         except Exception as exc:
             if texture:
-                gl.glDeleteTextures([texture])
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+                gl_state.glDeleteTextures([texture])
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
             print(f"[Renderer] Could not load background panorama '{path}': {exc}")
             self._background_failed_path = path
             return False
@@ -534,7 +537,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         fbo = int(gl.glGenFramebuffers(1))
         vao = int(gl.glGenVertexArrays(1))
         try:
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cube)
+            gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cube)
             for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
                                 (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
                                 (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
@@ -544,38 +547,38 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             for face in range(6):
                 gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, gl.GL_RGBA8,
                                 size, size, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo)
             gl.glViewport(0, 0, size, size)
             for cap in enabled:
-                gl.glDisable(cap)
-            gl.glUseProgram(program)
-            gl.glActiveTexture(gl.GL_TEXTURE0)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, panorama)
-            gl.glUniform1i(gl.glGetUniformLocation(program, 'u_panorama'), 0)
+                gl_state.glDisable(cap)
+            gl_state.glUseProgram(program)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, panorama)
+            gl_state.glUniform1i(gl.glGetUniformLocation(program, 'u_panorama'), 0)
             face_loc = gl.glGetUniformLocation(program, 'u_face')
-            gl.glBindVertexArray(vao)
+            gl_state.glBindVertexArray(vao)
             for face in range(6):
                 gl.glFramebufferTexture2D(
                     gl.GL_FRAMEBUFFER, gl.GL_COLOR_ATTACHMENT0,
                     gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cube, 0)
-                gl.glUniform1i(face_loc, face)
+                gl_state.glUniform1i(face_loc, face)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
         except Exception:
-            gl.glDeleteTextures([cube])
+            gl_state.glDeleteTextures([cube])
             raise
         finally:
-            gl.glBindVertexArray(0)
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-            gl.glUseProgram(0)
+            gl_state.glBindVertexArray(0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl_state.glUseProgram(0)
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, previous_fbo)
             gl.glViewport(*previous_viewport)
             for cap, on in enabled.items():
                 if on:
-                    gl.glEnable(cap)
+                    gl_state.glEnable(cap)
             gl.glDeleteFramebuffers(1, [fbo])
-            gl.glDeleteVertexArrays(1, [vao])
+            gl_state.glDeleteVertexArrays(1, [vao])
         return cube
 
     # -- reflection probes ----------------------------------------------
@@ -585,7 +588,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         Play started: what is around the probes may have changed)."""
         for texture in self._probe_textures.values():
             if texture:
-                gl.glDeleteTextures([texture])
+                gl_state.glDeleteTextures([texture])
         self._probe_textures = {}
         self._probe_frame = None
 
@@ -619,7 +622,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         for key in [k for k in self._probe_textures if k not in wanted]:
             texture = self._probe_textures.pop(key)
             if texture:
-                gl.glDeleteTextures([texture])
+                gl_state.glDeleteTextures([texture])
         self._probe_frame = None
         for key, position in zip(keys, positions):
             if key not in self._probe_textures:
@@ -663,7 +666,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         fbo = int(gl.glGenFramebuffers(1))
         equirect = 0
         try:
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cube)
+            gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cube)
             for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
                                 (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
                                 (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
@@ -673,7 +676,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             for face in range(6):
                 gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, gl.GL_RGBA8,
                                 size, size, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
             gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, depth)
             gl.glRenderbufferStorage(gl.GL_RENDERBUFFER, gl.GL_DEPTH24_STENCIL8, size, size)
             gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, 0)
@@ -698,7 +701,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         except Exception as exc:
             print(f"[Renderer] Reflection probe snapshot failed: {exc}")
             if equirect:
-                gl.glDeleteTextures([equirect])
+                gl_state.glDeleteTextures([equirect])
             equirect = 0
         finally:
             self._probe_capture_pass = False
@@ -707,7 +710,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             gl.glViewport(*previous_viewport)
             gl.glDeleteFramebuffers(1, [fbo])
             gl.glDeleteRenderbuffers(1, [depth])
-            gl.glDeleteTextures([cube])
+            gl_state.glDeleteTextures([cube])
         return equirect
 
     def _probe_cube_to_equirect(self, cube, size, fbo, compileProgram, compileShader):
@@ -720,7 +723,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
                 validate=False)
         width, height = 4 * size, 2 * size
         texture = int(gl.glGenTextures(1))
-        gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture)
         for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
                             (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR),
                             (gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT),
@@ -728,7 +731,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             gl.glTexParameteri(gl.GL_TEXTURE_2D, name, value)
         gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, width, height, 0,
                         gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
         enabled = {cap: bool(gl.glIsEnabled(cap)) for cap in (
             gl.GL_DEPTH_TEST, gl.GL_BLEND, gl.GL_CULL_FACE, gl.GL_SCISSOR_TEST,
             gl.GL_STENCIL_TEST)}
@@ -741,23 +744,23 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
                                          gl.GL_RENDERBUFFER, 0)
             gl.glViewport(0, 0, width, height)
             for cap in enabled:
-                gl.glDisable(cap)
-            gl.glUseProgram(self._probe_equirect_program)
-            gl.glActiveTexture(gl.GL_TEXTURE0)
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cube)
-            gl.glUniform1i(gl.glGetUniformLocation(self._probe_equirect_program, 'u_cube'), 0)
-            gl.glBindVertexArray(vao)
-            gl.glEnable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
+                gl_state.glDisable(cap)
+            gl_state.glUseProgram(self._probe_equirect_program)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cube)
+            gl_state.glUniform1i(gl.glGetUniformLocation(self._probe_equirect_program, 'u_cube'), 0)
+            gl_state.glBindVertexArray(vao)
+            gl_state.glEnable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
-            gl.glDisable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
+            gl_state.glDisable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
         finally:
-            gl.glBindVertexArray(0)
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
-            gl.glUseProgram(0)
+            gl_state.glBindVertexArray(0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+            gl_state.glUseProgram(0)
             for cap, on in enabled.items():
                 if on:
-                    gl.glEnable(cap)
-            gl.glDeleteVertexArrays(1, [vao])
+                    gl_state.glEnable(cap)
+            gl_state.glDeleteVertexArrays(1, [vao])
         return texture
 
     def _background_panorama_texture(self):
@@ -800,46 +803,46 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         inv_projection_loc, inv_view_loc, sky_loc = self._background_image_uniforms
         if behind:
             # The triangle is at the far plane: depth 1.0, as cleared.
-            gl.glEnable(gl.GL_DEPTH_TEST)
-            gl.glDepthFunc(gl.GL_LEQUAL)
+            gl_state.glEnable(gl.GL_DEPTH_TEST)
+            gl_state.glDepthFunc(gl.GL_LEQUAL)
         else:
-            gl.glDisable(gl.GL_DEPTH_TEST)
-        gl.glDepthMask(gl.GL_FALSE)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glUseProgram(self._background_image_program)
+            gl_state.glDisable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthMask(gl.GL_FALSE)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glUseProgram(self._background_image_program)
         uniform_matrix4(inv_projection_loc, glm.value_ptr(inverse_projection))
         uniform_matrix4(inv_view_loc, glm.value_ptr(inverse_view))
-        gl.glUniform1i(sky_loc, 0)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, self._background_cube_texture)
-        gl.glBindVertexArray(self._background_image_vao)
+        gl_state.glUniform1i(sky_loc, 0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, self._background_cube_texture)
+        gl_state.glBindVertexArray(self._background_image_vao)
         # Filtered across the cube's face edges for this draw only: it is
         # global state, and the shadow cube maps are left as they were.
-        gl.glEnable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
+        gl_state.glEnable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
         gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
-        gl.glDisable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
-        gl.glBindVertexArray(0)
-        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-        gl.glUseProgram(0)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LESS)
+        gl_state.glDisable(gl.GL_TEXTURE_CUBE_MAP_SEAMLESS)
+        gl_state.glBindVertexArray(0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        gl_state.glUseProgram(0)
+        gl_state.glDepthMask(gl.GL_TRUE)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthFunc(gl.GL_LESS)
 
     def _cleanup_background_image(self):
         """Release panorama GL objects with the rest of this renderer."""
         if self._background_image_texture:
-            gl.glDeleteTextures([self._background_image_texture])
+            gl_state.glDeleteTextures([self._background_image_texture])
         if self._background_cube_texture:
-            gl.glDeleteTextures([self._background_cube_texture])
+            gl_state.glDeleteTextures([self._background_cube_texture])
         if self._background_image_vao:
-            gl.glDeleteVertexArrays(1, [self._background_image_vao])
+            gl_state.glDeleteVertexArrays(1, [self._background_image_vao])
         if self._background_image_program:
-            gl.glDeleteProgram(self._background_image_program)
+            gl_state.glDeleteProgram(self._background_image_program)
         if self._sky_cube_program:
-            gl.glDeleteProgram(self._sky_cube_program)
+            gl_state.glDeleteProgram(self._sky_cube_program)
         if self._probe_equirect_program:
-            gl.glDeleteProgram(self._probe_equirect_program)
+            gl_state.glDeleteProgram(self._probe_equirect_program)
         self.invalidate_reflection_probes()
         self._background_image_texture = 0
         self._background_cube_texture = 0
@@ -850,6 +853,17 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         self._background_image_uniforms = None
 
     def render_scene(self, projection, view, camera_pos,
+                     primary_selection, config, clear=True, brush_slots=None):
+        """Draw one view (:meth:`_render_view`), as a frame of
+        ``core.gl_state``: within it, GL is not told what it already holds."""
+        gl_state.begin_frame(self._uniform_store)
+        try:
+            return self._render_view(projection, view, camera_pos, primary_selection,
+                                     config, clear, brush_slots)
+        finally:
+            gl_state.end_frame()
+
+    def _render_view(self, projection, view, camera_pos,
                      primary_selection, config, clear=True, brush_slots=None):
         """Draw one view.
 
@@ -880,8 +894,8 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         # 'Wireframe': geometry drawn as lines for depth, then coloured by
         # distance in one pass over the frame (draw_distance_pass).
         look = self._distance_look(config, current_mode)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LESS)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthFunc(gl.GL_LESS)
         if look:
             gl.glClearColor(0.0, 0.0, 0.0, 1.0)     # what was not hit is black
         if clear:
@@ -930,14 +944,14 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         self._light_ubo_bound = False
         self._current_shader = None
         if current_mode == RENDER_MODE_WIREFRAME:
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+            gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         elif current_mode == RENDER_MODE_VERTEX:
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_POINT)
+            gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_POINT)
             # Clamped: a point size the driver does not support is a GL error,
             # not a silent clamp, and would take the whole frame with it.
             self._set_point_size(4.0)
         else:
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+            gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         if not look:            # Wireframe draws it after
             self.draw_grid(projection, view, self.grid_indices_count,
                            config.get('play_mode', False), config.get('grid_visible', True))
@@ -1079,7 +1093,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             glow_brushes = water_brushes = glass_brushes = fog_volumes = (
                 np.empty(0, dtype=np.int32))
         if look == 'Wireframe':
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)   # terrain
+            gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)   # terrain
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
             # The same planes the entity passes cull against. Their far plane
@@ -1112,8 +1126,8 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
                     lambda view_state, cfg: self._draw_portal_scene(
                         view_state, cfg, camera_pos),
                 )
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glDisable(gl.GL_BLEND)
+        gl_state.glDepthMask(gl.GL_TRUE)
+        gl_state.glDisable(gl.GL_BLEND)
         brush_display_mode = config.get('brush_display_mode', 'Textured')
         #: 'Solid Lit': nothing textured -- brushes, models and terrain are
         #: shaded in their colours, and decals are not drawn.
@@ -1186,7 +1200,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
                 editor_model_slots = editor_model_slots[~inside]
             if len(opaque_model_slots):
                 if look == 'Wireframe':
-                    gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+                    gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
                 self.draw_models_instanced(
                     projection, view, camera_pos, etable, opaque_model_slots,
                     lights, config)
@@ -1200,7 +1214,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
                 projection, view,
                 np.concatenate((opaque_brushes, glow_brushes)), _tbl)
         if look:
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+            gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
             gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
             if not self.draw_distance_pass(projection, view, camera_pos):
                 # No depth to read back: the brushes' edges in their colours.
@@ -1219,8 +1233,8 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             # The opaque world is complete: occlusion and reflections onto
             # it, before anything blended is drawn over.
             self._postfx_resolve(projection, view)
-        gl.glEnable(gl.GL_BLEND)
-        gl.glDepthMask(gl.GL_FALSE)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glDepthMask(gl.GL_FALSE)
         # The sprite renderer has one path: dense EntityTable columns -> GL
         # instanced draws. Missing projection data is a caller error, not a
         # reason to resurrect the object renderer.
@@ -1277,15 +1291,15 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         # probes and issue this frame's, against exactly the geometry the
         # brushes were hidden behind (renderer/forward/occlusion.py).
         self._occlusion_end_of_frame(projection, view, camera_pos, config)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glDisable(gl.GL_DEPTH_TEST)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glDepthMask(gl.GL_TRUE)
+        gl_state.glDisable(gl.GL_DEPTH_TEST)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         if primary_selection:
             self._draw_selection_overlays(
                 projection, view, primary_selection, _tbl)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glUseProgram(0)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glUseProgram(0)
         if environment:
             self._postfx_end(projection, view)
 
@@ -1370,8 +1384,8 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             stats.visible_brushes, stats.visible_tris = counted
             # Same programs, same vertices: the shaded pass meets exactly the
             # depth the prepass wrote.
-            gl.glDepthFunc(gl.GL_LEQUAL)
-            gl.glDepthMask(gl.GL_FALSE)
+            gl_state.glDepthFunc(gl.GL_LEQUAL)
+            gl_state.glDepthMask(gl.GL_FALSE)
         try:
             self.draw_textured_brushes_optimized(projection, view, camera_pos, textured,
                                                  lights, config, table)
@@ -1382,11 +1396,12 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
                 gl.glEndQuery(gl.GL_SAMPLES_PASSED)
                 self._overdraw_pending = True
             if prepass:
-                gl.glDepthMask(gl.GL_TRUE)
-                gl.glDepthFunc(gl.GL_LESS)
+                gl_state.glDepthMask(gl.GL_TRUE)
+                gl_state.glDepthFunc(gl.GL_LESS)
 
     def cleanup(self):
         """Release HDHighRenderer's own GL resources, then RendererCore's."""
+        self._uniform_store.clear()
         if self._overdraw_query:
             gl.glDeleteQueries(1, [self._overdraw_query])
             self._overdraw_query = 0
@@ -1400,7 +1415,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         for attr in ('_glass_scene_texture', '_water_depth_texture'):
             tex = getattr(self, attr, 0)
             if tex:
-                gl.glDeleteTextures([tex])
+                gl_state.glDeleteTextures([tex])
                 setattr(self, attr, 0)
         self._glass_scene_size = (0, 0)
         self._water_depth_size = (0, 0)
@@ -1421,7 +1436,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
             self._terrain_gl_state = None
         if self._shadow_cubemaps:
             try:
-                gl.glDeleteTextures(self._shadow_cubemaps)
+                gl_state.glDeleteTextures(self._shadow_cubemaps)
                 self.shadow_units_changed()
             except Exception:
                 pass
@@ -1453,7 +1468,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         cookie_cache = self.__dict__.get('_cookie_gl_cache')
         if cookie_cache:
             from engine.light_cookies import release_placeholder
-            release_placeholder(gl, cookie_cache)
+            release_placeholder(gl_state, cookie_cache)
         # Instance streams: one buffer and one vertex array per pass.
         self._release_brush_streams()
         self._slot_transform_caches.clear()
@@ -1465,7 +1480,7 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         for vao in (self._sprite_instance_vao, self._effect_instance_vao,
                     self._particle_instance_vao):
             if vao:
-                gl.glDeleteVertexArrays(1, [vao])
+                gl_state.glDeleteVertexArrays(1, [vao])
         for vbo in (self._sprite_instance_vbo, self._effect_instance_vbo,
                     self._particle_instance_vbo):
             if vbo:
@@ -1482,22 +1497,22 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         self._particle_uploaded = None
         # Portal resources. The mask and rim programs are not in ``shaders``.
         if self._portal_quad_vao:
-            gl.glDeleteVertexArrays(1, [self._portal_quad_vao])
+            gl_state.glDeleteVertexArrays(1, [self._portal_quad_vao])
         if self._portal_quad_vbo:
             gl.glDeleteBuffers(1, [self._portal_quad_vbo])
         for program in (self._portal_mask_shader, self._portal_rim_shader,
                         self._portal_fade_shader):
             if program:
-                gl.glDeleteProgram(program)
+                gl_state.glDeleteProgram(program)
         self._portal_mask_shader = self._portal_rim_shader = None
         self._portal_fade_shader = None
         if self._portal_behind_texture:
-            gl.glDeleteTextures([self._portal_behind_texture])
+            gl_state.glDeleteTextures([self._portal_behind_texture])
         self._portal_behind_texture = 0
         self._portal_behind_size = (0, 0)
         self._portal_gl_ready = False
         # The 3D noise texture is not in the texture cache RendererCore frees.
         if self.noise_texture_id:
-            gl.glDeleteTextures([self.noise_texture_id])
+            gl_state.glDeleteTextures([self.noise_texture_id])
             self.noise_texture_id = 0
         super().cleanup()

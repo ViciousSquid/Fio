@@ -13,6 +13,7 @@ from contextlib import contextmanager
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 
 from engine import render_table
 from engine import shaders
@@ -46,16 +47,16 @@ def _set_model_tint(uniforms, tint):
     location = uniforms['model_tint']
     if location != -1:
         if tint:
-            gl.glUniform4f(location, tint[0], tint[1], tint[2], 1.0)
+            gl_state.glUniform4f(location, tint[0], tint[1], tint[2], 1.0)
         else:
-            gl.glUniform4f(location, 0.0, 0.0, 0.0, 0.0)
+            gl_state.glUniform4f(location, 0.0, 0.0, 0.0, 0.0)
 
 
 def _set_model_emissive(uniforms, emissive):
     """Set the glTF material's linear emissiveFactor for this model draw."""
     location = uniforms['emissive_factor']
     if location is not None and location != -1:
-        gl.glUniform3f(location, emissive[0], emissive[1], emissive[2])
+        gl_state.glUniform3f(location, emissive[0], emissive[1], emissive[2])
 
 
 
@@ -94,17 +95,17 @@ class _ModelSends:
             return
         value = (float(emissive[0]), float(emissive[1]), float(emissive[2]))
         if self._changed(uniforms, 'emissive_factor', value):
-            gl.glUniform3f(location, *value)
+            gl_state.glUniform3f(location, *value)
 
     def colour(self, uniforms, colour):
         value = (float(colour[0]), float(colour[1]), float(colour[2]))
         if self._changed(uniforms, 'object_color', value):
-            gl.glUniform3f(uniforms['object_color'], *value)
+            gl_state.glUniform3f(uniforms['object_color'], *value)
 
     def alpha(self, uniforms, alpha):
         value = float(alpha)
         if self._changed(uniforms, 'alpha', value):
-            gl.glUniform1f(uniforms['alpha'], value)
+            gl_state.glUniform1f(uniforms['alpha'], value)
 
     @contextmanager
     def material(self, uniforms, alpha):
@@ -125,16 +126,16 @@ class _ModelSends:
                     gl.GL_BLEND_SRC_RGB, gl.GL_BLEND_DST_RGB,
                     gl.GL_BLEND_SRC_ALPHA, gl.GL_BLEND_DST_ALPHA)])
         blend, depth_write, blend_func = state
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glDepthMask(gl.GL_FALSE)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glDepthMask(gl.GL_FALSE)
         try:
             yield
         finally:
-            gl.glDepthMask(depth_write)
-            gl.glBlendFuncSeparate(*blend_func)
+            gl_state.glDepthMask(depth_write)
+            gl_state.glBlendFuncSeparate(*blend_func)
             if not blend:
-                gl.glDisable(gl.GL_BLEND)
+                gl_state.glDisable(gl.GL_BLEND)
 
 
 
@@ -178,7 +179,7 @@ class PassesMixin:
         """
         self._begin_instanced_pass(program_name, projection, view, lights)
         # GL_LINE when the lit pass draws the Wireframe display mode.
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
         # Each run reads the stream from the row it starts at, through the
         # vertex array kept for that row (_brush_run_vao).
         run_vaos = stream.run_vaos
@@ -192,7 +193,7 @@ class PassesMixin:
                 continue
             tex_id = int(run_texture[run])
             if tex_id and tex_id != current_tex:
-                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 current_tex = tex_id
                 self.render_stats.batched_draws += 1
                 if self._env_active:
@@ -200,18 +201,18 @@ class PassesMixin:
             vao = run_vaos.get(begin)
             if vao is None:
                 vao = self._brush_run_vao(stream, begin)
-            gl.glBindVertexArray(vao)
+            gl_state.glBindVertexArray(vao)
             gl.glDrawArraysInstanced(gl.GL_TRIANGLES, int(run_first[run]),
                                      vertex_count, length)
             self.render_stats.draw_calls += 1
             self.render_stats.visible_tris += triangles * length
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def _begin_instanced_pass(self, name, projection, view, lights):
         """Bind an instanced brush program and its per-pass uniform state."""
         program = self.shaders[name]
         uniforms = self.uniforms[name]
-        gl.glUseProgram(program)
+        gl_state.glUseProgram(program)
         self._current_shader = program
         self._upload_lights_once(name, lights)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
@@ -241,7 +242,7 @@ class PassesMixin:
         if len(brushes) == 0 or 'lit' not in self.shaders:
             return
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('lit', lights)
         proj_ptr = glm.value_ptr(projection)
@@ -249,8 +250,8 @@ class PassesMixin:
         uniform_matrix4(uniforms['projection'], proj_ptr)
         uniform_matrix4(uniforms['view'], view_ptr)
         _set_model_emissive(uniforms, (0.0, 0.0, 0.0))
-        gl.glBindVertexArray(self.vaos['cube'])
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glBindVertexArray(self.vaos['cube'])
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         model_loc      = uniforms['model']
         color_loc      = uniforms['object_color']
         alpha_loc      = uniforms['alpha']
@@ -298,27 +299,27 @@ class PassesMixin:
             if emissive is not None and lights_loc != -1:
                 wanted = 0 if emissive[index] else lights_on
                 if wanted != lights_now:
-                    gl.glUniform1i(lights_loc, wanted)
+                    gl_state.glUniform1i(lights_loc, wanted)
                     lights_now = wanted
             has_geometry = bool(geometry[index])
-            gl.glUniform1f(alpha_loc, 1.0)
+            gl_state.glUniform1f(alpha_loc, 1.0)
             mesh = None
             if has_geometry:
                 mesh = geo_meshes.get(int(table.geometry_id[int(brushes[index])]))
             if mesh is not None:
                 if bound_vao != mesh.vao:
-                    gl.glBindVertexArray(mesh.vao)
+                    gl_state.glBindVertexArray(mesh.vao)
                     bound_vao = mesh.vao
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
             else:
                 if bound_vao != cube_vao:
-                    gl.glBindVertexArray(cube_vao)
+                    gl_state.glBindVertexArray(cube_vao)
                     bound_vao = cube_vao
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             self.render_stats.draw_calls += 1
         if lights_now != lights_on:
-            gl.glUniform1i(lights_loc, lights_on)       # as the pass found it
-        gl.glBindVertexArray(0)
+            gl_state.glUniform1i(lights_loc, lights_on)       # as the pass found it
+        gl_state.glBindVertexArray(0)
 
     # --------------------------------------------------------------------------
     # Terrain
@@ -359,12 +360,12 @@ class PassesMixin:
         # light UBO, so the terrain program must be current before that call.
         # Without this, glUniform1i/uFogEnabled can raise GL_INVALID_OPERATION
         # when terrain follows a pass that has left another program bound.
-        gl.glUseProgram(terrain_gl.shader_program)
+        gl_state.glUseProgram(terrain_gl.shader_program)
         self._current_shader = terrain_gl.shader_program
         self._upload_lights_once('terrain', terrain_lights)
         self._bind_terrain_layers(terrain_gl)
         active_lights_count = len(terrain_lights[1])
-        gl.glDisable(gl.GL_CULL_FACE)
+        gl_state.glDisable(gl.GL_CULL_FACE)
         stats = self.render_stats
         stats.visible_tris += terrain.triangle_count
         terrain_gl.render(
@@ -420,7 +421,7 @@ class PassesMixin:
         # geometry, but OBJ winding is authored per asset and must not make a
         # valid model vanish in the entity pass.
         cull_was_enabled = gl.glIsEnabled(gl.GL_CULL_FACE)
-        gl.glDisable(gl.GL_CULL_FACE)
+        gl_state.glDisable(gl.GL_CULL_FACE)
 
         count = len(slots)
         if count == 1 and float(table.render_alpha[int(slots[0])]) >= 1.0:
@@ -429,9 +430,9 @@ class PassesMixin:
             drawn = 1 if self._draw_dense_model_single(
                 projection, view, table, slots[0], lights) else 0
             if cull_was_enabled:
-                gl.glEnable(gl.GL_CULL_FACE)
+                gl_state.glEnable(gl.GL_CULL_FACE)
             else:
-                gl.glDisable(gl.GL_CULL_FACE)
+                gl_state.glDisable(gl.GL_CULL_FACE)
             return drawn
         if len(self._model_recipe_scratch) < count:
             grown = max(64, len(self._model_recipe_scratch) * 2, count)
@@ -470,7 +471,7 @@ class PassesMixin:
             run_slots = sorted_slots[start:end]
             self.render_stats.visible_tris += (obj.vertex_count // 3) * len(run_slots)
             self._ensure_model_instance_vao(obj.vao)
-            gl.glBindVertexArray(obj.vao)
+            gl_state.glBindVertexArray(obj.vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, stream.vbo)
             self._point_model_instances_at(start)
 
@@ -488,7 +489,7 @@ class PassesMixin:
                     continue
                 u = self.uniforms[shader_name]
                 sends.emissive(u, (0.0, 0.0, 0.0))
-                gl.glBindTexture(
+                gl_state.glBindTexture(
                     gl.GL_TEXTURE_2D,
                     self._manual_model_texture_id(manual_texture))
                 sends.alpha(u, 1.0)
@@ -541,7 +542,7 @@ class PassesMixin:
                 if self._env_active:
                     self._model_surface(shader_name, group.surface)
                 if shader_kind == 'textured':
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, group.texture)
+                    gl_state.glBindTexture(gl.GL_TEXTURE_2D, group.texture)
                     if self._env_active:
                         self._bind_material_maps(shader_name, group.texture)
                     if tint:
@@ -561,11 +562,11 @@ class PassesMixin:
                 self.render_stats.draw_calls += 1
                 self.render_stats.batched_draws += 1
 
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         if cull_was_enabled:
-            gl.glEnable(gl.GL_CULL_FACE)
+            gl_state.glEnable(gl.GL_CULL_FACE)
         else:
-            gl.glDisable(gl.GL_CULL_FACE)
+            gl_state.glDisable(gl.GL_CULL_FACE)
         return count
 
     def _draw_dense_model_single(self, projection, view, table, slot, lights):
@@ -605,7 +606,7 @@ class PassesMixin:
                 return 0
             u = self.uniforms[shader_name]
             if shader_kind == 'textured':
-                gl.glBindTexture(
+                gl_state.glBindTexture(
                     gl.GL_TEXTURE_2D,
                     self._manual_model_texture_id(manual_texture))
             else:
@@ -651,7 +652,7 @@ class PassesMixin:
             sends.emissive(
                 u, group.emissive if group is not None else (0.0, 0.0, 0.0))
             if shader_kind == 'textured':
-                gl.glBindTexture(
+                gl_state.glBindTexture(
                     gl.GL_TEXTURE_2D,
                     group.texture if group is not None
                     else self._manual_model_texture_id(manual_texture))
@@ -667,7 +668,7 @@ class PassesMixin:
                 gl.glUniformMatrix3fv(
                     normal_loc, 1, gl.GL_FALSE, normal)
 
-            gl.glBindVertexArray(obj.vao)
+            gl_state.glBindVertexArray(obj.vao)
             with sends.material(u, alpha):
                 if group is None:
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
@@ -683,7 +684,7 @@ class PassesMixin:
             self.render_stats.draw_calls += 1
             draws += 1
 
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         return draws
 
     def _prepare_model_shader(self, shader_name, projection, view, lights, current_shader):
@@ -691,20 +692,20 @@ class PassesMixin:
         if not program:
             return current_shader
         if current_shader != shader_name:
-            gl.glUseProgram(program)
+            gl_state.glUseProgram(program)
             u = self.uniforms[shader_name]
             uniform_matrix4(u['projection'], glm.value_ptr(projection))
             uniform_matrix4(u['view'], glm.value_ptr(view))
             self._upload_lights_once(shader_name, lights)
             if shader_name.startswith('textured'):
-                gl.glActiveTexture(gl.GL_TEXTURE0)
-                gl.glUniform1i(u['texture_diffuse'], 0)
+                gl_state.glActiveTexture(gl.GL_TEXTURE0)
+                gl_state.glUniform1i(u['texture_diffuse'], 0)
                 if u.get('tex_scale', -1) != -1:
-                    gl.glUniform2f(u['tex_scale'], 1.0, 1.0)
+                    gl_state.glUniform2f(u['tex_scale'], 1.0, 1.0)
                 if u.get('tex_angle', -1) != -1:
-                    gl.glUniform1f(u['tex_angle'], 0.0)
+                    gl_state.glUniform1f(u['tex_angle'], 0.0)
                 if u.get('tex_shift', -1) != -1:
-                    gl.glUniform2f(u['tex_shift'], 0.0, 0.0)
+                    gl_state.glUniform2f(u['tex_shift'], 0.0, 0.0)
             current_shader = shader_name
         return current_shader
 
@@ -881,40 +882,40 @@ class PassesMixin:
 
         program = 'sprite_layered' if layers is not None else 'sprite_instanced'
         shader, uniforms = self.shaders[program], self.uniforms[program]
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         # Billboards are unlit, so they never reach _upload_lights_once -- they
         # still need fogging, exactly as the per-sprite path does.
         self._upload_env_uniforms(program)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['use_fixed_facing'], 1)
-        gl.glBindVertexArray(self._ensure_sprite_instance_vao())
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glUniform1i(uniforms['use_fixed_facing'], 1)
+        gl_state.glBindVertexArray(self._ensure_sprite_instance_vao())
 
         if layers is not None:
-            gl.glUniform1i(uniforms['sprite_layers'], 0)
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._sprite_layers.texture)
+            gl_state.glUniform1i(uniforms['sprite_layers'], 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._sprite_layers.texture)
             self._point_sprite_instances_at(0)
             gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
             self.render_stats.draw_calls += 1
             self.render_stats.batched_draws += 1
         else:
             # No array (a driver without the blit path, or more sprite images
             # than it allows layers): one draw per equal-texture stretch *of
             # the depth-ordered sequence*, which costs draws but never order.
-            gl.glUniform1i(uniforms['sprite_texture'], 0)
+            gl_state.glUniform1i(uniforms['sprite_texture'], 0)
             run_starts = runs_in_order(ordered_textures)
             for run in range(len(run_starts) - 1):
                 begin = int(run_starts[run])
                 length = int(run_starts[run + 1]) - begin
-                gl.glBindTexture(gl.GL_TEXTURE_2D, int(ordered_textures[begin]))
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D, int(ordered_textures[begin]))
                 self.render_stats.batched_draws += 1
                 self._point_sprite_instances_at(begin)
                 gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, length)
                 self.render_stats.draw_calls += 1
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         return count
 
     def draw_billboards(self, projection, view, positions, size, tex_id):
@@ -938,19 +939,19 @@ class PassesMixin:
         self._upload_sprite_instances(data)
         shader, uniforms = (self.shaders['sprite_instanced'],
                             self.uniforms['sprite_instanced'])
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         self._upload_env_uniforms('sprite_instanced')
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['sprite_texture'], 0)
-        gl.glUniform1i(uniforms['use_fixed_facing'], 0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, int(tex_id))
-        gl.glBindVertexArray(self._ensure_sprite_instance_vao())
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glUniform1i(uniforms['sprite_texture'], 0)
+        gl_state.glUniform1i(uniforms['use_fixed_facing'], 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, int(tex_id))
+        gl_state.glBindVertexArray(self._ensure_sprite_instance_vao())
         self._point_sprite_instances_at(0)
         gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self.render_stats.draw_calls += 1
         return count
 
@@ -981,19 +982,19 @@ class PassesMixin:
 
         shader = self.shaders['sprite']
         uniforms = self.uniforms['sprite']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['sprite_texture'], 0)
-        gl.glBindVertexArray(vao)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glUniform1i(uniforms['sprite_texture'], 0)
+        gl_state.glBindVertexArray(vao)
 
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LESS)
-        gl.glDepthMask(gl.GL_FALSE)
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthFunc(gl.GL_LESS)
+        gl_state.glDepthMask(gl.GL_FALSE)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         pos_loc = uniforms['sprite_pos_world']
         size_loc = uniforms['sprite_size']
 
@@ -1005,20 +1006,20 @@ class PassesMixin:
                 key = sprites[i] if i < len(sprites) else None
                 tex_id = int(self.sprite_textures.get(key) or default_tex)
                 if tex_id != bound:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                     bound = tex_id
                 try:
                     px, py, pz = float(pos.x), float(pos.y), float(pos.z)
                 except AttributeError:
                     px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
-                gl.glUniform3f(pos_loc, px, py + float(lift), pz)
-                gl.glUniform2f(size_loc, float(width), float(height))
+                gl_state.glUniform3f(pos_loc, px, py + float(lift), pz)
+                gl_state.glUniform2f(size_loc, float(width), float(height))
                 gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
                 count += 1
         finally:
-            gl.glDepthMask(gl.GL_TRUE)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glBindVertexArray(0)
+            gl_state.glDepthMask(gl.GL_TRUE)
+            gl_state.glDisable(gl.GL_BLEND)
+            gl_state.glBindVertexArray(0)
         return count
 
     # --------------------------------------------------------------------------
@@ -1083,12 +1084,12 @@ class PassesMixin:
 
         shader = self.shaders['effect_instanced']
         uniforms = self.uniforms['effect_instanced']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         self._upload_env_uniforms('effect_instanced')
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glUniform1f(uniforms['uTime'], float(
+        gl_state.glUniform1f(uniforms['uTime'], float(
             (time.perf_counter() - _CLOCK_ORIGIN) % EXPLOSION_TIME_WRAP))
 
         prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
@@ -1096,10 +1097,10 @@ class PassesMixin:
         # scene's when the particles draw: _bind_scene_depth leaves it marked
         # current for them.
         self._bind_scene_depth(uniforms, projection)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
         if self.effect_explosion_texture:
-            gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
-        gl.glUniform1i(uniforms['explosion_texture'], 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
+        gl_state.glUniform1i(uniforms['explosion_texture'], 0)
 
         blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
         cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
@@ -1108,27 +1109,27 @@ class PassesMixin:
         blend_func = tuple(int(gl.glGetIntegerv(name)) for name in (
             gl.GL_BLEND_SRC_RGB, gl.GL_BLEND_DST_RGB,
             gl.GL_BLEND_SRC_ALPHA, gl.GL_BLEND_DST_ALPHA))
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthMask(gl.GL_FALSE)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glDisable(gl.GL_CULL_FACE)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthMask(gl.GL_FALSE)
         try:
-            gl.glBindVertexArray(vao)
+            gl_state.glBindVertexArray(vao)
             gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
             self.render_stats.draw_calls += 1
             self.render_stats.batched_draws += 1
         finally:
-            gl.glBindVertexArray(0)
-            gl.glBlendFuncSeparate(*blend_func)
+            gl_state.glBindVertexArray(0)
+            gl_state.glBlendFuncSeparate(*blend_func)
             if not blend_was:
-                gl.glDisable(gl.GL_BLEND)
+                gl_state.glDisable(gl.GL_BLEND)
             if cull_was:
-                gl.glEnable(gl.GL_CULL_FACE)
+                gl_state.glEnable(gl.GL_CULL_FACE)
             if not depth_test_was:
-                gl.glDisable(gl.GL_DEPTH_TEST)
-            gl.glDepthMask(gl.GL_TRUE if depth_mask_was else gl.GL_FALSE)
-            gl.glActiveTexture(prev_active_texture)
+                gl_state.glDisable(gl.GL_DEPTH_TEST)
+            gl_state.glDepthMask(gl.GL_TRUE if depth_mask_was else gl.GL_FALSE)
+            gl_state.glActiveTexture(prev_active_texture)
         return count
 
     def _bind_scene_depth(self, uniforms, projection):
@@ -1145,16 +1146,16 @@ class PassesMixin:
         if soft:
             self._scene_depth_current = True
         unit = self._water_depth_texture_unit
-        gl.glUniform1i(uniforms['uSoft'], 1 if soft else 0)
-        gl.glUniform1i(uniforms['uSceneDepth'], unit)
+        gl_state.glUniform1i(uniforms['uSoft'], 1 if soft else 0)
+        gl_state.glUniform1i(uniforms['uSceneDepth'], unit)
         if soft:
-            gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0 + unit)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
             viewport = getattr(self, '_frame_viewport', None) or gl.glGetIntegerv(gl.GL_VIEWPORT)
-            gl.glUniform4f(uniforms['uViewport'], float(viewport[0]),
+            gl_state.glUniform4f(uniforms['uViewport'], float(viewport[0]),
                            float(viewport[1]), float(max(int(viewport[2]), 1)),
                            float(max(int(viewport[3]), 1)))
-            gl.glUniform2f(uniforms['uDepthParams'], float(projection[3][2]),
+            gl_state.glUniform2f(uniforms['uDepthParams'], float(projection[3][2]),
                            float(projection[2][2]))
         return soft
 
@@ -1265,18 +1266,18 @@ class PassesMixin:
 
         shader = self.shaders['particle_instanced']
         uniforms = self.uniforms['particle_instanced']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         self._upload_env_uniforms('particle_instanced')
         if self._particle_presets_sent != shader:
             table_rows = self._PARTICLE_PRESET_TABLE
-            gl.glUniform4fv(uniforms['uPresets'], len(table_rows), table_rows)
+            gl_state.glUniform4fv(uniforms['uPresets'], len(table_rows), table_rows)
             self._particle_presets_sent = shader
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glUniform1f(uniforms['uTime'], float((now - _CLOCK_ORIGIN) % wrap))
-        gl.glUniform1f(uniforms['uMaxScreen'], self.PARTICLE_MAX_SCREEN)
-        gl.glUniform2f(uniforms['uNearFade'], *self.PARTICLE_NEAR_FADE)
+        gl_state.glUniform1f(uniforms['uTime'], float((now - _CLOCK_ORIGIN) % wrap))
+        gl_state.glUniform1f(uniforms['uMaxScreen'], self.PARTICLE_MAX_SCREEN)
+        gl_state.glUniform2f(uniforms['uNearFade'], *self.PARTICLE_NEAR_FADE)
 
         prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
         # Soft particles read the opaque depth: the decal pass's (or the
@@ -1295,29 +1296,29 @@ class PassesMixin:
         blend_func = tuple(int(gl.glGetIntegerv(name)) for name in (
             gl.GL_BLEND_SRC_RGB, gl.GL_BLEND_DST_RGB,
             gl.GL_BLEND_SRC_ALPHA, gl.GL_BLEND_DST_ALPHA))
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_ONE, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthMask(gl.GL_FALSE)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_ONE, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glDisable(gl.GL_CULL_FACE)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthMask(gl.GL_FALSE)
         try:
-            gl.glBindVertexArray(vao)
+            gl_state.glBindVertexArray(vao)
             gl.glDrawArraysInstanced(
                 gl.GL_TRIANGLE_STRIP, 0, 4,
                 count * shaders.PARTICLES_PER_EMITTER)
             self.render_stats.draw_calls += 1
             self.render_stats.batched_draws += 1
         finally:
-            gl.glBindVertexArray(0)
-            gl.glBlendFuncSeparate(*blend_func)
+            gl_state.glBindVertexArray(0)
+            gl_state.glBlendFuncSeparate(*blend_func)
             if not blend_was:
-                gl.glDisable(gl.GL_BLEND)
+                gl_state.glDisable(gl.GL_BLEND)
             if cull_was:
-                gl.glEnable(gl.GL_CULL_FACE)
+                gl_state.glEnable(gl.GL_CULL_FACE)
             if not depth_test_was:
-                gl.glDisable(gl.GL_DEPTH_TEST)
-            gl.glDepthMask(gl.GL_TRUE if depth_mask_was else gl.GL_FALSE)
-            gl.glActiveTexture(prev_active_texture)
+                gl_state.glDisable(gl.GL_DEPTH_TEST)
+            gl_state.glDepthMask(gl.GL_TRUE if depth_mask_was else gl.GL_FALSE)
+            gl_state.glActiveTexture(prev_active_texture)
         return count
 
     @timed_pass('fire effects')
@@ -1502,15 +1503,15 @@ class PassesMixin:
             self.shaders['sprite_instanced'],
             self.uniforms['sprite_instanced'],
         )
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         self._upload_env_uniforms('sprite_instanced')
-        gl.glUniform1i(uniforms['use_fixed_facing'], 0)
+        gl_state.glUniform1i(uniforms['use_fixed_facing'], 0)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['sprite_texture'], 0)
-        gl.glBindVertexArray(self._ensure_sprite_instance_vao())
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glUniform1i(uniforms['sprite_texture'], 0)
+        gl_state.glBindVertexArray(self._ensure_sprite_instance_vao())
 
         current_tex = None
         for run in range(len(run_starts) - 1):
@@ -1520,7 +1521,7 @@ class PassesMixin:
                 continue
             tex_id = int(ordered_textures[begin])
             if tex_id != current_tex:
-                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 current_tex = tex_id
                 self.render_stats.batched_draws += 1
             self._point_sprite_instances_at(begin)
@@ -1534,7 +1535,7 @@ class PassesMixin:
             # Centre and size of the nearest few (drawn back to front), for
             # the water pass to reflect: numbers from the instance buffer.
             self._reflected_effects = data[-self.MAX_REFLECTED_EFFECTS:, 0:5].copy()
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         return count
 
     #: An effect's texels at least this opaque count as solid for reflections.
@@ -1560,8 +1561,8 @@ class PassesMixin:
             return
         depth_write = bool(gl.glGetBooleanv(gl.GL_DEPTH_WRITEMASK))
         gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glUniform1f(cutoff, self.EFFECT_DEPTH_ALPHA)
+        gl_state.glDepthMask(gl.GL_TRUE)
+        gl_state.glUniform1f(cutoff, self.EFFECT_DEPTH_ALPHA)
         current_tex = None
         try:
             for run in range(len(run_starts) - 1):
@@ -1571,14 +1572,14 @@ class PassesMixin:
                     continue
                 tex_id = int(ordered_textures[begin])
                 if tex_id != current_tex:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                     current_tex = tex_id
                 self._point_sprite_instances_at(begin)
                 gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, length)
                 self.render_stats.draw_calls += 1
         finally:
-            gl.glUniform1f(cutoff, 0.0)
-            gl.glDepthMask(gl.GL_TRUE if depth_write else gl.GL_FALSE)
+            gl_state.glUniform1f(cutoff, 0.0)
+            gl_state.glDepthMask(gl.GL_TRUE if depth_write else gl.GL_FALSE)
             gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
 
     def _create_water_surface_vao(self, subdivisions=64):
@@ -1610,7 +1611,7 @@ class PassesMixin:
                 k += 6
 
         vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
+        gl_state.glBindVertexArray(vao)
         vbo = gl.glGenBuffers(1)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, verts.nbytes, verts, gl.GL_STATIC_DRAW)
@@ -1623,7 +1624,7 @@ class PassesMixin:
         gl.glEnableVertexAttribArray(1)
         gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
         gl.glEnableVertexAttribArray(2)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self._water_surface_vbo = vbo
         self._water_surface_ebo = ebo
         self._water_surface_index_count = len(indices)
@@ -1650,14 +1651,14 @@ class PassesMixin:
             return
 
         shader, uniforms = self.shaders['water'], self.uniforms['water']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('water', lights)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glUniform3fv(
+        gl_state.glUniform3fv(
             uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
-        gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
+        gl_state.glUniform1f(uniforms['time'], config.get('time', 0.0))
 
         # Water uses the same scene capture as Glass, but captures before any
         # water surface is submitted so transmission never contains the water
@@ -1679,10 +1680,10 @@ class PassesMixin:
             high_quality = np.zeros_like(high_quality)
         has_depth = bool(high_quality.any()) and self._capture_scene_depth()
         depth_unit = self._water_depth_texture_unit
-        gl.glActiveTexture(gl.GL_TEXTURE0 + depth_unit)
-        gl.glBindTexture(gl.GL_TEXTURE_2D,
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + depth_unit)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D,
                          self._water_depth_texture if has_depth else 0)
-        gl.glUniform1i(uniforms['sceneDepth'], depth_unit)
+        gl_state.glUniform1i(uniforms['sceneDepth'], depth_unit)
         has_depth_loc = uniforms['hasSceneDepth']
         ssr_loc = uniforms['ssrEnabled']
         # The effects this frame drew, nearest last: high-quality water
@@ -1702,31 +1703,31 @@ class PassesMixin:
             reach = self.EFFECT_REFLECTION_REACH * (height + effects[:, 4])
             effects = effects[(height > -effects[:, 4]) & (dx * dx + dz * dz < reach * reach)]
         count = 0 if effects is None else len(effects)
-        gl.glUniform1i(uniforms['effectCount'], count)
+        gl_state.glUniform1i(uniforms['effectCount'], count)
         if count:
             quads = np.empty((count, 4), dtype=np.float32)
             quads[:, 0:3] = effects[::-1, 0:3]
             quads[:, 3] = effects[::-1, 3] * 0.5
             heights = np.ascontiguousarray(effects[::-1, 4] * 0.5, dtype=np.float32)
-            gl.glUniform4fv(uniforms['effectQuads'], count, quads)
-            gl.glUniform1fv(uniforms['effectHalfHeights'], count, heights)
+            gl_state.glUniform4fv(uniforms['effectQuads'], count, quads)
+            gl_state.glUniform1fv(uniforms['effectHalfHeights'], count, heights)
         brush_depth = None
         if not has_depth:
-            gl.glUniform1i(has_depth_loc, 0)
-            gl.glUniform1i(ssr_loc, 0)
+            gl_state.glUniform1i(has_depth_loc, 0)
+            gl_state.glUniform1i(ssr_loc, 0)
         # Keep the inverse alive: value_ptr() only borrows its storage.
         inv_projection = glm.inverse(projection)
         uniform_matrix4(uniforms['invProjection'], glm.value_ptr(inv_projection))
 
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self.water_normal_id)
-        gl.glUniform1i(uniforms['normalMap'], 0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self.water_normal_id)
+        gl_state.glUniform1i(uniforms['normalMap'], 0)
 
         scene_unit = self._glass_scene_texture_unit
-        gl.glActiveTexture(gl.GL_TEXTURE0 + scene_unit)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
-        gl.glUniform1i(uniforms['sceneColor'], scene_unit)
-        gl.glUniform2f(
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + scene_unit)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+        gl_state.glUniform1i(uniforms['sceneColor'], scene_unit)
+        gl_state.glUniform2f(
             uniforms['screenSize'],
             float(scene_width),
             float(scene_height),
@@ -1742,12 +1743,12 @@ class PassesMixin:
         probe_skies = self._water_probe_textures(table, brushes)
         unit = self._panorama_texture_unit
         if panorama or probe_skies is not None:
-            gl.glUniform1i(uniforms['skyPanorama'], unit)
+            gl_state.glUniform1i(uniforms['skyPanorama'], unit)
         if panorama:
-            gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, panorama)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0 + unit)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, panorama)
         sky_loc = uniforms['reflectSky']
-        gl.glUniform1i(sky_loc, 1 if panorama else 0)
+        gl_state.glUniform1i(sky_loc, 1 if panorama else 0)
         bound_sky = panorama
         # High-quality box water: side-wall fragments behind the (opaque) top
         # surface are not shaded (water.frag main). The test runs in the
@@ -1755,7 +1756,7 @@ class PassesMixin:
         skip_loc = uniforms['skipCoveredSides']
         local_eye_loc = uniforms['localEye']
         margin_loc = uniforms['sideSkipMargin']
-        gl.glUniform1i(skip_loc, 0)
+        gl_state.glUniform1i(skip_loc, 0)
         eye = np.array((*self._camera_xyz(camera_pos), 1.0))
 
         opacity_loc = uniforms['waterOpacity']
@@ -1787,7 +1788,7 @@ class PassesMixin:
                          * float(config.get('time', 0.0))).tolist()
         flow_now = (0.0, 0.0)
         if flow_loc != -1:
-            gl.glUniform2f(flow_loc, 0.0, 0.0)
+            gl_state.glUniform2f(flow_loc, 0.0, 0.0)
         tints = table.water_tint[brushes]
         # Emissive water glows in its tint. The uniform is touched only when
         # the map has such water, or had and it must be put back.
@@ -1805,8 +1806,8 @@ class PassesMixin:
         surface_vao = self.vaos.get('water_surface')
         cube_vao = self.vaos['cube']
 
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
         upload_model = uniform_rows('mat4', models)
         upload_normal = uniform_rows('mat3', normals)
@@ -1819,10 +1820,10 @@ class PassesMixin:
             if probe_skies is not None:
                 sky = int(probe_skies[i]) or panorama
                 if sky != bound_sky:
-                    gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, sky)
+                    gl_state.glActiveTexture(gl.GL_TEXTURE0 + unit)
+                    gl_state.glBindTexture(gl.GL_TEXTURE_2D, sky)
                     if bool(sky) != bool(bound_sky):
-                        gl.glUniform1i(sky_loc, 1 if sky else 0)
+                        gl_state.glUniform1i(sky_loc, 1 if sky else 0)
                     bound_sky = sky
 
             opacity = float(params[i, 0])
@@ -1830,32 +1831,32 @@ class PassesMixin:
             if has_depth:
                 wants_depth = bool(high_quality[i])
                 if wants_depth != brush_depth:
-                    gl.glUniform1i(has_depth_loc, 1 if wants_depth else 0)
+                    gl_state.glUniform1i(has_depth_loc, 1 if wants_depth else 0)
                     # 'reflections 0' turns the scene reflection off.
-                    gl.glUniform1i(ssr_loc, 1 if wants_depth and getattr(
+                    gl_state.glUniform1i(ssr_loc, 1 if wants_depth and getattr(
                         self, 'reflections_enabled', True) else 0)
                     brush_depth = wants_depth
 
-            gl.glUniform1f(opacity_loc, opacity)
-            gl.glUniform1f(reflectivity_loc, fresnel)
-            gl.glUniform1f(fresnel_loc, fresnel)
-            gl.glUniform1f(distortion_loc, float(params[i, 4]))
-            gl.glUniform1f(refraction_loc, max(float(params[i, 5]), 1.0))
-            gl.glUniform1f(roughness_loc, min(max(float(params[i, 6]), 0.0), 1.0))
-            gl.glUniform1f(spread_loc, spreads[i])
+            gl_state.glUniform1f(opacity_loc, opacity)
+            gl_state.glUniform1f(reflectivity_loc, fresnel)
+            gl_state.glUniform1f(fresnel_loc, fresnel)
+            gl_state.glUniform1f(distortion_loc, float(params[i, 4]))
+            gl_state.glUniform1f(refraction_loc, max(float(params[i, 5]), 1.0))
+            gl_state.glUniform1f(roughness_loc, min(max(float(params[i, 6]), 0.0), 1.0))
+            gl_state.glUniform1f(spread_loc, spreads[i])
             if flowing and flow_loc != -1:
                 wanted_flow = tuple(travelled[i])
                 if wanted_flow != flow_now:
-                    gl.glUniform2f(flow_loc, wanted_flow[0], wanted_flow[1])
+                    gl_state.glUniform2f(flow_loc, wanted_flow[0], wanted_flow[1])
                     flow_now = wanted_flow
             upload_tint(tint_loc, i)
             if emissive_loc != -1:
                 wanted = bool(emissive is not None and emissive[i])
                 if wanted != glowing:
-                    gl.glUniform1f(emissive_loc, 1.0 if wanted else 0.0)
+                    gl_state.glUniform1f(emissive_loc, 1.0 if wanted else 0.0)
                     glowing = wanted
                     self._water_emissive_on = wanted
-            gl.glUniform3f(
+            gl_state.glUniform3f(
                 brush_size_loc,
                 float(sizes[i, 0]),
                 float(sizes[i, 1]),
@@ -1867,7 +1868,7 @@ class PassesMixin:
                 h /= 100.0
             amp = h * 30.0 if params[i, 3] != 0.0 else 1.2
             amp = min(amp, float(sizes[i, 1]) * 0.45, 30.0)
-            gl.glUniform1f(wave_amp_loc, amp)
+            gl_state.glUniform1f(wave_amp_loc, amp)
 
             mesh = (
                 geo_meshes.get(int(table.geometry_id[slot]))
@@ -1875,11 +1876,11 @@ class PassesMixin:
             )
             if mesh is not None:
                 top_count = mesh.count - mesh.side_count
-                gl.glBindVertexArray(mesh.vao)
+                gl_state.glBindVertexArray(mesh.vao)
                 if not bool(planes[i]):
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.side_count)
                 if mesh.has_flat_top and surface_vao:
-                    gl.glBindVertexArray(surface_vao)
+                    gl_state.glBindVertexArray(surface_vao)
                     gl.glDrawElements(
                         gl.GL_TRIANGLES,
                         self._water_surface_index_count,
@@ -1904,17 +1905,17 @@ class PassesMixin:
                 if skip:
                     local = np.linalg.solve(
                         models[i].reshape(4, 4).T.astype(np.float64), eye)
-                    gl.glUniform3f(local_eye_loc, float(local[0]),
+                    gl_state.glUniform3f(local_eye_loc, float(local[0]),
                                    float(local[1]), float(local[2]))
-                    gl.glUniform1f(margin_loc,
+                    gl_state.glUniform1f(margin_loc,
                                    amp / max(float(sizes[i, 1]), 1.0e-6))
-                    gl.glUniform1i(skip_loc, 1)
-                gl.glBindVertexArray(cube_vao)
+                    gl_state.glUniform1i(skip_loc, 1)
+                gl_state.glBindVertexArray(cube_vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
                 if skip:
-                    gl.glUniform1i(skip_loc, 0)
+                    gl_state.glUniform1i(skip_loc, 0)
             if surface_vao:
-                gl.glBindVertexArray(surface_vao)
+                gl_state.glBindVertexArray(surface_vao)
                 gl.glDrawElements(
                     gl.GL_TRIANGLES,
                     self._water_surface_index_count,
@@ -1922,12 +1923,12 @@ class PassesMixin:
                     None,
                 )
             else:
-                gl.glBindVertexArray(cube_vao)
+                gl_state.glBindVertexArray(cube_vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
             self.render_stats.draw_calls += 1
 
-        gl.glBindVertexArray(0)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glBindVertexArray(0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
         return
 
     def _capture_glass_scene(self):
@@ -1950,8 +1951,8 @@ class PassesMixin:
             self._glass_scene_texture = int(gl.glGenTextures(1))
 
         unit = gl.GL_TEXTURE0 + self._glass_scene_texture_unit
-        gl.glActiveTexture(unit)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+        gl_state.glActiveTexture(unit)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
         if created:
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
@@ -2025,8 +2026,8 @@ class PassesMixin:
 
         if not self._water_depth_texture:
             self._water_depth_texture = int(gl.glGenTextures(1))
-        gl.glActiveTexture(gl.GL_TEXTURE0 + self._water_depth_texture_unit)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + self._water_depth_texture_unit)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
         if self._water_depth_size != (width, height):
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
@@ -2049,11 +2050,11 @@ class PassesMixin:
         if table is None:
             raise RuntimeError("draw_glass_brushes requires RenderTable")
         shader, uniforms = self.shaders['glass'], self.uniforms['glass']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._upload_env_uniforms('glass')
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
+        gl_state.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
 
         # Capture once, before any glass surface is drawn.
         scene_size = self._capture_glass_scene()
@@ -2061,12 +2062,12 @@ class PassesMixin:
             return
         scene_width, scene_height = scene_size
         scene_tex_unit = self._glass_scene_texture_unit
-        gl.glActiveTexture(gl.GL_TEXTURE0 + scene_tex_unit)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
-        gl.glUniform1i(uniforms['sceneColor'], scene_tex_unit)
-        gl.glUniform2f(uniforms['screenSize'],
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + scene_tex_unit)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+        gl_state.glUniform1i(uniforms['sceneColor'], scene_tex_unit)
+        gl_state.glUniform2f(uniforms['screenSize'],
                        float(scene_width), float(scene_height))
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
 
         model_loc = uniforms['model']
         water_color_loc = uniforms['waterColor']
@@ -2078,11 +2079,11 @@ class PassesMixin:
         normal_mat_loc = uniforms.get('normalMatrix', -1)
         if normal_mat_loc is None:
             normal_mat_loc = -1
-        gl.glBindVertexArray(self.vaos['cube'])
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glEnable(gl.GL_CULL_FACE)
-        gl.glCullFace(gl.GL_BACK)
+        gl_state.glBindVertexArray(self.vaos['cube'])
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glEnable(gl.GL_CULL_FACE)
+        gl_state.glCullFace(gl.GL_BACK)
 
         models, normals = self._frame_transforms(table, brushes)
         colors = table.glass_color[brushes]
@@ -2098,41 +2099,41 @@ class PassesMixin:
             if normal_mat_loc != -1:
                 upload_normal(normal_mat_loc, i)
             upload_colour(water_color_loc, i)
-            gl.glUniform1f(distortion_loc, float(params[i, 1]))
-            gl.glUniform1f(fresnel_loc, float(params[i, 4]))
-            gl.glUniform1f(opacity_loc, float(params[i, 0]))
-            gl.glUniform1f(refraction_loc, float(params[i, 2]))
-            gl.glUniform1f(roughness_loc, float(params[i, 3]))
+            gl_state.glUniform1f(distortion_loc, float(params[i, 1]))
+            gl_state.glUniform1f(fresnel_loc, float(params[i, 4]))
+            gl_state.glUniform1f(opacity_loc, float(params[i, 0]))
+            gl_state.glUniform1f(refraction_loc, float(params[i, 2]))
+            gl_state.glUniform1f(roughness_loc, float(params[i, 3]))
             mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
             if mesh is not None:
-                gl.glBindVertexArray(mesh.vao)
+                gl_state.glBindVertexArray(mesh.vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                gl.glBindVertexArray(self.vaos['cube'])
+                gl_state.glBindVertexArray(self.vaos['cube'])
             else:
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             self.render_stats.draw_calls += 1
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glBindVertexArray(0)
+        gl_state.glDisable(gl.GL_CULL_FACE)
+        gl_state.glBindVertexArray(0)
         return
 
     @timed_pass('fog')
     def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config, *, table):
         if len(brushes) == 0 or 'fog' not in self.shaders:
             return
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         shader, uniforms = self.shaders['fog'], self.uniforms['fog']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._upload_lights_once('fog', lights)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
-        gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
-        gl.glActiveTexture(gl.GL_TEXTURE1)
-        gl.glBindTexture(gl.GL_TEXTURE_3D, self.noise_texture_id)
-        gl.glUniform1i(uniforms['noiseTexture'], 1)
-        gl.glBindVertexArray(self.vaos['cube'])
-        gl.glEnable(gl.GL_CULL_FACE)
+        gl_state.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
+        gl_state.glUniform1f(uniforms['time'], config.get('time', 0.0))
+        gl_state.glActiveTexture(gl.GL_TEXTURE1)
+        gl_state.glBindTexture(gl.GL_TEXTURE_3D, self.noise_texture_id)
+        gl_state.glUniform1i(uniforms['noiseTexture'], 1)
+        gl_state.glBindVertexArray(self.vaos['cube'])
+        gl_state.glEnable(gl.GL_CULL_FACE)
 
         model_loc = uniforms['model']
         inv_model_loc = uniforms['inverseModel']
@@ -2148,7 +2149,7 @@ class PassesMixin:
         # really in front of a face still hides it.
         offset = getattr(self, 'fog_face_offset', True)
         if offset:
-            gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
+            gl_state.glEnable(gl.GL_POLYGON_OFFSET_FILL)
             gl.glPolygonOffset(-1.0, -1.0)
 
         models, _ = self._frame_transforms(table, brushes)
@@ -2168,30 +2169,30 @@ class PassesMixin:
             upload_model(model_loc, i)
             upload_inverse(inv_model_loc, i)
             upload_colour(fog_color_loc, i)
-            gl.glUniform1f(density_loc, float(params[i, 0]))
-            gl.glUniform1f(noise_scale_loc, float(params[i, 1]))
+            gl_state.glUniform1f(density_loc, float(params[i, 0]))
+            gl_state.glUniform1f(noise_scale_loc, float(params[i, 1]))
             upload_colour(object_color_loc, i)
-            gl.glUniform1f(alpha_loc, 0.4)
+            gl_state.glUniform1f(alpha_loc, 0.4)
             mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
             if mesh is not None:
-                gl.glBindVertexArray(mesh.vao)
-                gl.glCullFace(gl.GL_FRONT)
+                gl_state.glBindVertexArray(mesh.vao)
+                gl_state.glCullFace(gl.GL_FRONT)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                gl.glCullFace(gl.GL_BACK)
+                gl_state.glCullFace(gl.GL_BACK)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                gl.glBindVertexArray(self.vaos['cube'])
+                gl_state.glBindVertexArray(self.vaos['cube'])
             else:
                 # All six faces. The bottom used to be left out (a pattern
                 # copied from the water pass, where the floor hides it), so
                 # from inside a fog volume nothing covered the floor and it
                 # showed through unfogged while the walls and ceiling fogged.
-                gl.glCullFace(gl.GL_FRONT)
+                gl_state.glCullFace(gl.GL_FRONT)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-                gl.glCullFace(gl.GL_BACK)
+                gl_state.glCullFace(gl.GL_BACK)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
         if offset:
-            gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glBindVertexArray(0)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glDisable(gl.GL_POLYGON_OFFSET_FILL)
+        gl_state.glDisable(gl.GL_CULL_FACE)
+        gl_state.glBindVertexArray(0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
         return

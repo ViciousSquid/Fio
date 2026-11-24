@@ -8,6 +8,7 @@ texture array the layered billboard shader samples.
 import re
 
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 from OpenGL.GL.shaders import compileProgram, compileShader
 
 from engine import shaders
@@ -261,7 +262,7 @@ layout (location = 10) in vec4 iPayload;
             return False
         replaced = self.shaders.get(name)
         if replaced:
-            gl.glDeleteProgram(replaced)    # compiled again: free the first
+            gl_state.glDeleteProgram(replaced)    # compiled again: free the first
         self.shaders[name] = program
         self.uniforms[name] = UniformCache(program)
         self._preload_lit_uniforms(name)
@@ -732,7 +733,7 @@ layout (location = 10) in float iInstanceAlpha;
                 program = self.shaders.pop(name, None)
                 if program:
                     try:
-                        gl.glDeleteProgram(program)
+                        gl_state.glDeleteProgram(program)
                     except Exception:
                         pass
             print(f'[Renderer] GPU model instancing disabled: {exc}')

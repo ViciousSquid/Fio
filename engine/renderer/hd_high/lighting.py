@@ -8,6 +8,7 @@ import re
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 
 from engine import render_table
 from engine import shaders
@@ -213,16 +214,16 @@ class LightingMixin:
             if previous is not None and previous[0] == values:
                 if previous[1] != cam_values:
                     uniforms.env = (values, cam_values)
-                    gl.glUniform3f(uniforms['uFogCamPos'], *cam_values)
+                    gl_state.glUniform3f(uniforms['uFogCamPos'], *cam_values)
                 return
             uniforms.env = (values, cam_values)
-        gl.glUniform1i(uniforms['uFogEnabled'], 1 if vd.fog_enabled else 0)
-        gl.glUniform3f(uniforms['uFogColor'], *vd.fog_color)
-        gl.glUniform1f(uniforms['uFogStart'], start)
-        gl.glUniform1f(uniforms['uFogEnd'], end)
-        gl.glUniform1f(uniforms['uFogDensity'], vd.fog_density)
-        gl.glUniform3f(uniforms['uFogCamPos'], cam[0], cam[1], cam[2])
-        gl.glUniform3f(uniforms['uAmbient'], *vd.ambient)
+        gl_state.glUniform1i(uniforms['uFogEnabled'], 1 if vd.fog_enabled else 0)
+        gl_state.glUniform3f(uniforms['uFogColor'], *vd.fog_color)
+        gl_state.glUniform1f(uniforms['uFogStart'], start)
+        gl_state.glUniform1f(uniforms['uFogEnd'], end)
+        gl_state.glUniform1f(uniforms['uFogDensity'], vd.fog_density)
+        gl_state.glUniform3f(uniforms['uFogCamPos'], cam[0], cam[1], cam[2])
+        gl_state.glUniform3f(uniforms['uAmbient'], *vd.ambient)
 
     def _configure_light_ubo_program(self, shader_name):
         """Bind a compiled lighting shader's std140 block to the shared slot."""
@@ -374,7 +375,7 @@ class LightingMixin:
             from engine.light_cookies import (
                 COOKIE_SIZE, COOKIE_SIZE_LOW_POWER, CookieArray)
             array = self._light_cookies = CookieArray(
-                gl, size=COOKIE_SIZE_LOW_POWER if self.lowpower_mode else COOKIE_SIZE)
+                gl_state, size=COOKIE_SIZE_LOW_POWER if self.lowpower_mode else COOKIE_SIZE)
         layers = array.layers(ids)
         # False when no image could be read: the placeholder stands in.
         self._cookie_array_bound = array.bind(shaders.COOKIE_TEXTURE_UNIT)
@@ -387,7 +388,7 @@ class LightingMixin:
         array bound (engine.light_cookies.bind_placeholder)."""
         from engine.light_cookies import bind_placeholder
         cache = self.__dict__.setdefault('_cookie_gl_cache', {})
-        bind_placeholder(gl, shaders.COOKIE_TEXTURE_UNIT, cache)
+        bind_placeholder(gl_state, shaders.COOKIE_TEXTURE_UNIT, cache)
 
     def _bind_light_cookies(self, uniforms):
         """Point a lighting program's cookie sampler at its own unit, with a
@@ -411,7 +412,7 @@ class LightingMixin:
             return
         loc = uniforms['fioCookies']
         if loc != -1:
-            gl.glUniform1i(loc, shaders.COOKIE_TEXTURE_UNIT)
+            gl_state.glUniform1i(loc, shaders.COOKIE_TEXTURE_UNIT)
         uniforms.cookie_unit = True
 
     # --------------------------------------------------------------------------
@@ -436,7 +437,7 @@ class LightingMixin:
         # built: it cost a slot list to tuple on every program bind.)
         program = self.uniforms[shader_name]
         if shader_name == 'terrain' or program.active_lights != num_lights:
-            gl.glUniform1i(program['active_lights'], num_lights)
+            gl_state.glUniform1i(program['active_lights'], num_lights)
             program.active_lights = num_lights
         # One upload serves every pass: the buffer holds the frame's light
         # prefix up to MAX_LIGHTS, and each shader reads its own first
@@ -472,7 +473,7 @@ class LightingMixin:
             # a valid texture; layers are given their size when a
             # shadow-casting light takes a slot (_ensure_shadow_array).
             array = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, array)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, array)
             # Compared and filtered by the hardware: a tap is the mean of
             # four texels' depth tests.
             for name, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
@@ -490,7 +491,7 @@ class LightingMixin:
             self._shadow_array_slots = 0
             self._specify_shadow_array(1, 1)
             self._shadow_cube_sizes = [1] * self.MAX_SHADOW_LIGHTS
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
             self.shadow_units_changed()
 
             # Depth-only FBO: validate completeness with the first layer.
@@ -504,7 +505,7 @@ class LightingMixin:
             if status != gl.GL_FRAMEBUFFER_COMPLETE:
                 print(f"[Shadow] depth array FBO incomplete (0x{status:x}); shadows disabled")
                 self._shadow_fbo = None
-                gl.glDeleteTextures([array])
+                gl_state.glDeleteTextures([array])
                 self._shadow_cubemaps = []
             else:
                 print(f"[Shadow] point shadow array ready "
@@ -560,10 +561,10 @@ class LightingMixin:
         slots = max(slot_sizes) + 1
         grown = size > self._shadow_array_size or slots > self._shadow_array_slots
         if grown:
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._shadow_cubemaps[0])
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._shadow_cubemaps[0])
             self._specify_shadow_array(max(size, self._shadow_array_size),
                                        max(slots, self._shadow_array_slots))
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
             self.shadow_units_changed()
         layer = float(max(self._shadow_array_size, 1))
         faces = self._shadow_face_array()
@@ -586,14 +587,14 @@ class LightingMixin:
         if uniforms.shadow_slots is None:
             loc = uniforms['shadowMaps']
             if loc != -1:
-                gl.glUniform1i(loc, base)
+                gl_state.glUniform1i(loc, base)
             uniforms.shadow_slots = (0,) if loc != -1 else ()
         loc = uniforms['uShadowFilter[0]']
         if loc != -1:
-            gl.glUniform2fv(loc, self.MAX_SHADOW_LIGHTS, self._shadow_filter_array())
+            gl_state.glUniform2fv(loc, self.MAX_SHADOW_LIGHTS, self._shadow_filter_array())
         loc = uniforms['uShadowFace[0]']
         if loc != -1:
-            gl.glUniform2fv(loc, self.MAX_SHADOW_LIGHTS, self._shadow_face_array())
+            gl_state.glUniform2fv(loc, self.MAX_SHADOW_LIGHTS, self._shadow_face_array())
         if not uniforms.shadow_slots:
             return
         texture = self._shadow_cubemaps[0] if self._shadow_cubemaps else 0
@@ -604,10 +605,10 @@ class LightingMixin:
         if bound is None:
             bound = self._shadow_units_bound = {}
         if bound.get(0) != texture:
-            gl.glActiveTexture(gl.GL_TEXTURE0 + base)
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0 + base)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, texture)
             bound[0] = texture
-            gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0)
 
     def shadow_units_changed(self):
         """Forget what the shadow and cookie units hold: something other
@@ -796,19 +797,19 @@ class LightingMixin:
         prev_shader = self._current_shader
         shader = self.shaders['depth_cube']
         u = self.uniforms['depth_cube']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._shadow_fbo)
         gl.glDrawBuffer(gl.GL_NONE)
         gl.glReadBuffer(gl.GL_NONE)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         prev_scissor = [int(v) for v in gl.glGetIntegerv(gl.GL_SCISSOR_BOX)]
-        gl.glEnable(gl.GL_SCISSOR_TEST)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glDepthFunc(gl.GL_LESS)
-        gl.glDisable(gl.GL_CULL_FACE)
+        gl_state.glEnable(gl.GL_SCISSOR_TEST)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthMask(gl.GL_TRUE)
+        gl_state.glDepthFunc(gl.GL_LESS)
+        gl_state.glDisable(gl.GL_CULL_FACE)
 
         model_loc = u['model']
         lsm_loc = u['lightSpaceMatrix']
@@ -846,8 +847,8 @@ class LightingMixin:
             gl.glScissor(0, 0, size, size)
             shadow_array = self._shadow_cubemaps[0]
 
-            gl.glUniform3f(lightpos_loc, lx, ly, lz)
-            gl.glUniform1f(far_loc, far_plane)
+            gl_state.glUniform3f(lightpos_loc, lx, ly, lz)
+            gl_state.glUniform1f(far_loc, far_plane)
 
             recipes = entity_table.model_recipes()
             resolved_models = []
@@ -881,26 +882,26 @@ class LightingMixin:
                 uniform_matrix4(lsm_loc, glm.value_ptr(lsm))
 
                 if len(cube_slots) and stream is not None:
-                    gl.glUseProgram(depth_instanced)
+                    gl_state.glUseProgram(depth_instanced)
                     uniform_matrix4(inst_lsm_loc, glm.value_ptr(lsm))
-                    gl.glUniform3f(inst_lightpos_loc, lx, ly, lz)
-                    gl.glUniform1f(inst_far_loc, far_plane)
-                    gl.glBindVertexArray(stream.vao)         # reads from row 0
+                    gl_state.glUniform3f(inst_lightpos_loc, lx, ly, lz)
+                    gl_state.glUniform1f(inst_far_loc, far_plane)
+                    gl_state.glBindVertexArray(stream.vao)         # reads from row 0
                     gl.glDrawArraysInstanced(
                         gl.GL_TRIANGLES, 0, 36, len(cube_slots))
                     self.render_stats.shadow_draw_calls += 1
-                    gl.glUseProgram(shader)
+                    gl_state.glUseProgram(shader)
                     uniform_matrix4(lsm_loc, glm.value_ptr(lsm))
                 elif len(cube_slots):
                     cube_models, _ = self._frame_transforms(table, cube_slots)
                     upload_model = uniform_rows('mat4', cube_models)
-                    gl.glBindVertexArray(cube_vao)
+                    gl_state.glBindVertexArray(cube_vao)
                     for i in range(len(cube_slots)):
                         upload_model(model_loc, i)
                         gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
                         self.render_stats.shadow_draw_calls += 1
 
-                gl.glBindVertexArray(cube_vao)
+                gl_state.glBindVertexArray(cube_vao)
                 if len(geo_slots):
                     geo_meshes = self._prepare_geo_meshes(table, geo_slots)
                     geo_models, _geo_normals = self._frame_transforms(
@@ -912,15 +913,15 @@ class LightingMixin:
                         if mesh is None:
                             continue
                         upload_model(model_loc, geo_i)
-                        gl.glBindVertexArray(mesh.vao)
+                        gl_state.glBindVertexArray(mesh.vao)
                         gl.glDrawArrays(
                             gl.GL_TRIANGLES, 0, mesh.count)
                         self.render_stats.shadow_draw_calls += 1
-                        gl.glBindVertexArray(cube_vao)
+                        gl_state.glBindVertexArray(cube_vao)
 
                 for index, (slot_value, obj) in enumerate(resolved_models):
                     upload_base(model_loc, index)
-                    gl.glBindVertexArray(obj.vao)
+                    gl_state.glBindVertexArray(obj.vao)
                     if (getattr(obj, 'ebo', None) is not None
                             and getattr(obj, 'index_count', 0)):
                         gl.glDrawElements(
@@ -933,22 +934,22 @@ class LightingMixin:
 
             self._shadow_slot_sig[slot] = sig
 
-        gl.glBindVertexArray(0)
-        gl.glCullFace(gl.GL_BACK)
+        gl_state.glBindVertexArray(0)
+        gl_state.glCullFace(gl.GL_BACK)
         if cull_was:
-            gl.glEnable(gl.GL_CULL_FACE)
+            gl_state.glEnable(gl.GL_CULL_FACE)
         else:
-            gl.glDisable(gl.GL_CULL_FACE)
+            gl_state.glDisable(gl.GL_CULL_FACE)
         if blend_was:
-            gl.glEnable(gl.GL_BLEND)
+            gl_state.glEnable(gl.GL_BLEND)
         else:
-            gl.glDisable(gl.GL_BLEND)
+            gl_state.glDisable(gl.GL_BLEND)
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, prev_fbo)
         gl.glViewport(
             int(prev_vp[0]), int(prev_vp[1]),
             int(prev_vp[2]), int(prev_vp[3]))
         gl.glScissor(*prev_scissor)
         if not scissor_was:
-            gl.glDisable(gl.GL_SCISSOR_TEST)
-        gl.glUseProgram(prev_program)
+            gl_state.glDisable(gl.GL_SCISSOR_TEST)
+        gl_state.glUseProgram(prev_program)
         self._current_shader = prev_shader
