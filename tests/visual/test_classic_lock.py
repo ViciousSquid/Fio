@@ -80,9 +80,8 @@ def test_classic_is_the_default_renderer():
     assert hd_graphics.renderer_from(configparser.ConfigParser()) == "Classic"
     shipped = configparser.ConfigParser()
     shipped.read(repo_path("settings.ini"))
-    # The shipped settings start the editor with HD_High; Classic stays what
-    # a missing or unreadable setting falls back to (above).
-    assert hd_graphics.renderer_from(shipped) == "HD_High"
+    # The shipped settings start the editor with Classic too.
+    assert hd_graphics.renderer_from(shipped) == "Classic"
     # A low-power machine is given Classic whatever is asked.
     asked = configparser.ConfigParser()
     asked.add_section("Renderer")

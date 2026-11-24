@@ -69,11 +69,11 @@ def redirected():
 def fresh_copy(path):
     """Write isolated test settings with the legacy renderer selected.
 
-    The shipped desktop settings select HD_High. The established integration
-    and visual suite exercises the original Forward/Classic renderer; tests
-    for HD_High construct it explicitly, so their target is never implicit.
-    Keep the shipped settings untouched and make each editor test choose its
-    renderer deliberately.
+    The established integration and visual suite exercises the original
+    Forward/Classic renderer; tests for HD_High construct it explicitly, so
+    their target is never implicit. Whichever renderer the shipped settings
+    select, each editor test's is chosen here, and the shipped settings are
+    left untouched.
     """
     config = configparser.ConfigParser()
     try:
