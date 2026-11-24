@@ -28,15 +28,21 @@ def _read(rel):
 # ---------------------------------------------------------------------------
 
 def _render_scene_source():
-    """The body of ForwardRenderer.render_scene, as source text."""
+    """ForwardRenderer.render_scene and the view it draws, as source text.
+
+    ``render_scene`` opens a ``core.gl_state`` frame and hands the view to
+    ``_render_view``, so the two are read together."""
     src = _read("engine/renderer/forward/renderer.py")
     tree = ast.parse(src)
+    found = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             for fn in node.body:
-                if isinstance(fn, ast.FunctionDef) and fn.name == "render_scene":
-                    return ast.get_source_segment(src, fn)
-    raise AssertionError("render_scene not found")
+                if isinstance(fn, ast.FunctionDef) and fn.name in ("render_scene", "_render_view"):
+                    found[fn.name] = ast.get_source_segment(src, fn)
+    if "render_scene" not in found:
+        raise AssertionError("render_scene not found")
+    return "\n\n".join(found[name] for name in ("render_scene", "_render_view") if name in found)
 
 
 def test_cull_output_feeds_the_dense_brush_pipeline():

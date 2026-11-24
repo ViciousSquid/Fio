@@ -174,13 +174,37 @@ def test_a_renderer_imports_nothing_of_its_host(name):
 OUTSIDE_RENDERERS = (ROOT / "player" / "render",)
 
 
+def _core_imports_only_gl_state(path):
+    """Whether every import of ``engine.renderer.core`` in *path* is of
+    ``gl_state`` alone (``from engine.renderer.core import gl_state``)."""
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module == "engine.renderer.core":
+            if any(alias.name != "gl_state" for alias in node.names):
+                return False
+        elif isinstance(node, ast.Import):
+            if any(alias.name == "engine.renderer.core" for alias in node.names):
+                return False
+    return True
+
+
 def test_outside_code_imports_only_the_public_package():
     outside = [p for top in ("engine", "editor", "plugins", "player") for p in (ROOT / top).rglob("*.py")
                if PACKAGE not in p.parents and "tests" not in p.parts]
     private = ("engine.renderer.forward", "engine.renderer.api", "engine.renderer.registry")
     renderers = [p for p in outside if any(root in p.parents for root in OUTSIDE_RENDERERS)]
     hosts = [p for p in outside if p not in renderers]
-    assert not _offenders(hosts, private + ("engine.renderer.core",))
+    # ``core.gl_state`` is the one part of ``core`` host code may use: every
+    # module that makes GL calls during a renderer's frame (the model
+    # loaders, sprites, the viewport's own drawing) must set GL state through
+    # it, or what it remembers is wrong.
+    shared = "engine.renderer.core.gl_state"
+    hosts_core = sorted(
+        line for line in _offenders(hosts, ("engine.renderer.core",))
+        if not line.endswith(" imports " + shared)
+        and not (line.endswith(" imports engine.renderer.core")
+                 and _core_imports_only_gl_state(ROOT / line.split(" imports ")[0])))
+    assert not hosts_core
+    assert not _offenders(hosts, private)
     assert not _offenders(renderers, private)
 
 
