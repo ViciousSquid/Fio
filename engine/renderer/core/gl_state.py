@@ -302,14 +302,32 @@ def _array(name):
         elif location is not None:
             if location == -1:
                 return
-            key = _key(value) if count == 1 else None
-            if key is None:
+            if count == 1:
+                key = _key(value)
+                if key is None:
+                    held.pop(location, None)
+                else:
+                    if held.get(location) == key:
+                        return
+                    held[location] = key
+            elif type(value) is np.ndarray:
+                # An array's elements have locations of their own, in a row:
+                # each is recorded as holding this send, so that one set
+                # singly afterwards is seen.
+                key = (count, value.tobytes())
+                was = held.get(location)
+                covered = range(location, location + count)
+                if was == key and type(was) is tuple:
+                    for index in covered:
+                        if held.get(index) is not was:
+                            break
+                    else:
+                        return
+                for index in covered:
+                    held[index] = key
+            else:
                 for index in range(location, location + count):
                     held.pop(index, None)
-            else:
-                if held.get(location) == key:
-                    return
-                held[location] = key
         getattr(gl, name)(location, count, value)
     uniform.__name__ = name
     return uniform
