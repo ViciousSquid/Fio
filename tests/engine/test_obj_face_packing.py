@@ -18,6 +18,7 @@ pytest.importorskip("OpenGL", reason="engine.obj_loader imports PyOpenGL")
 
 from engine import obj_loader                      # noqa: E402
 from engine.obj_loader import OBJ, OBJLoader       # noqa: E402
+from engine.renderer.core import gl_state                     # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -37,6 +38,7 @@ class _RecordingGL(types.SimpleNamespace):
 def gl(monkeypatch):
     fake = _RecordingGL(uploads=[])
     monkeypatch.setattr(obj_loader, "gl", fake)
+    monkeypatch.setattr(gl_state, "gl", fake)   # GL state is set through core.gl_state
     return fake
 
 
