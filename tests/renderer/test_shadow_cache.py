@@ -25,7 +25,7 @@ from engine.render_table import RenderTable                   # noqa: E402
 from engine.renderer.api import RenderStats                   # noqa: E402
 from engine.renderer.core.visibility import VisibilityMixin   # noqa: E402
 from engine.renderer.forward import lighting                  # noqa: E402
-from engine.renderer.core import gl_state                     # noqa: E402
+from engine.renderer.core import gl_state, raw_calls          # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing        # noqa: E402
 
 _REAL_GL = lighting.gl
@@ -121,6 +121,10 @@ def gl(monkeypatch):
     recorder = _GLRecorder()
     monkeypatch.setattr(lighting, 'gl', recorder)
     monkeypatch.setattr(gl_state, 'gl', recorder)   # GL state is set through core.gl_state
+    # Matrix uniforms go through core.raw_calls: its OpenGL.GL path (the one
+    # Windows ARM64 takes, with no native entry point) goes to the recorder.
+    monkeypatch.setattr(raw_calls, '_resolved', dict.fromkeys(raw_calls._ENTRIES))
+    monkeypatch.setattr(raw_calls, 'gl', recorder)
     return recorder
 
 
