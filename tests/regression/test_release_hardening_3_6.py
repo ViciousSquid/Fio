@@ -144,3 +144,42 @@ def test_a_2d_paint_that_raises_leaves_no_painter_open(main_window, monkeypatch)
     view._base_layer_valid = False
     view.repaint()                       # and the view paints again
     assert view._base_layer_valid
+
+
+# -- a brush that covers too much ground ------------------------------------------------------------
+
+def test_a_brush_too_wide_to_file_in_the_grid_is_refused():
+    """The world limit (1e7 units) let one brush cover 3.8e8 grid cells: a
+    floor a million units wide took 50 s and 3.3 GB at Play start."""
+    from engine import level_validation
+    from engine.spatial import CELL_SIZE
+    assert level_validation._CELL == CELL_SIZE
+
+    level = _level()
+    level["brushes"][0]["size"] = [1.0e6, 32, 1.0e6]
+    with pytest.raises(ValueError, match="brushes\\[0\\]\\['size'\\] covers too much ground"):
+        validate_level(level)
+    level["brushes"][0]["size"] = [1.0e7, 32, 64]          # long and thin: 19,533 cells
+    validate_level(level)
+    level["brushes"][0]["size"] = [250000.0, 32, 250000.0]
+    validate_level(level)
+
+    with pytest.raises(ValueError, match="collision_size.*covers too much ground"):
+        validate_level(_level(_thing("prop", collision_size=[1.0e6, 64, 1.0e6])))
+
+
+def test_the_grid_leaves_out_a_brush_no_map_could_ask_for(capsys):
+    """What validation cannot size without building it (an angled brush, a
+    model's mesh) meets the same limit where it is filed."""
+    from engine.spatial_grid import MAX_STATIC_CELLS, SpatialGrid
+    from engine import level_validation
+    assert MAX_STATIC_CELLS >= level_validation.MAX_FOOTPRINT_CELLS
+
+    floor = {"pos": [0.0, -16.0, 0.0], "size": [1024.0, 32.0, 1024.0]}
+    vast = {"pos": [0.0, -100.0, 0.0], "size": [2.0e6, 32.0, 2.0e6]}
+    grid = SpatialGrid(cell_size=512.0)
+    grid.populate([floor, vast])
+    assert 0 < len(grid.cells) < 64
+    assert all(vast not in bucket for bucket in grid.cells.values())
+    assert any(floor in bucket for bucket in grid.cells.values())
+    assert "too large to collide with" in capsys.readouterr().out

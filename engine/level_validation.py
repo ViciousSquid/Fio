@@ -86,6 +86,21 @@ def _vector(value) -> bool:
 WORLD_COORDINATE_LIMIT = 1.0e7
 
 
+#: The most 512-unit cells (engine.spatial.CELL_SIZE) one brush's footprint
+#: may cover. At Play start a brush is filed under every cell it covers, and
+#: the world limit alone let one brush cover 3.8e8 of them: a floor a million
+#: units wide took 50 s and 3.3 GB to file, 4e5 wide 6.8 s and 530 MB. The
+#: bundled maps' largest brush covers 42 cells; this allows one 260,000 units
+#: square (about 3 s and 230 MB, on x86), and refuses what cannot be played.
+MAX_FOOTPRINT_CELLS = 1 << 18
+_CELL = 512.0
+
+
+def _footprint_cells(size) -> float:
+    """How many cells a box of *size* covers at most, wherever it is."""
+    return (abs(size[0]) / _CELL + 2.0) * (abs(size[2]) / _CELL + 2.0)
+
+
 def _world_vector(value) -> bool:
     return _vector(value) and all(abs(v) <= WORLD_COORDINATE_LIMIT for v in value)
 
@@ -284,6 +299,9 @@ def _validate_record(item, kind, label, partial):
         if not _world_vector(value):
             raise ValueError(f"{label}['{field}'] lies beyond the world "
                              f"(more than {WORLD_COORDINATE_LIMIT:g} units out)")
+        if field == 'size' and _footprint_cells(value) > MAX_FOOTPRINT_CELLS:
+            raise ValueError(f"{label}['size'] covers too much ground to be played "
+                             f"(more than {MAX_FOOTPRINT_CELLS} cells of {_CELL:g} units)")
 
     if kind == 'brushes':
         for field in BRUSH_OBJECT_FIELDS:
@@ -347,6 +365,10 @@ def _validate_record(item, kind, label, partial):
                 if value is not None and not _world_vector(value):
                     raise ValueError(f"{label}['{field}'] must be a 3-element vector "
                                      f"within {WORLD_COORDINATE_LIMIT:g}")
+            size = props.get('collision_size')
+            if size is not None and _footprint_cells(size) > MAX_FOOTPRINT_CELLS:
+                raise ValueError(f"{label}['collision_size'] covers too much ground "
+                                 f"to be played")
             scale = props.get('scale')
             if scale is not None and not (finite_number(scale) or _vector(scale)):
                 raise ValueError(f"{label}['scale'] must be a number or a 3-element vector")

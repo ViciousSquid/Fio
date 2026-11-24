@@ -349,6 +349,14 @@ _EMPTY_CELL_ROWS = _CellRows({})
 MAX_TRAVEL_CELLS = 1 << 16
 
 
+#: The most cells one brush that does not move is filed under. A map is
+#: refused on load when a box brush would cover more
+#: (engine.level_validation.MAX_FOOTPRINT_CELLS, the same number, checked
+#: there with a margin); this is for what validation cannot size without
+#: building it -- an angled brush's planes, a model's mesh.
+MAX_STATIC_CELLS = 1 << 19
+
+
 #: The most cells one :meth:`SpatialGrid.box_pairs` box is walked cell by
 #: cell: eight square, where a body's move at its fastest (Soma's
 #: ``MAX_SPEED``) spans five. Each cell is a lookup for every box at once, so
@@ -842,6 +850,18 @@ class SpatialGrid:
     # Build
     # ------------------------------------------------------------------
 
+    def _file_static(self, brush, lo_x, lo_z, hi_x, hi_z):
+        """File a brush that does not move under the cells it covers -- unless
+        they are more than any map that loads can ask for
+        (:data:`MAX_STATIC_CELLS`): a list entry for each of millions of
+        cells is minutes and gigabytes. Such a brush is left out, and said
+        to be, rather than Play never starting."""
+        if _travel_cells((lo_x, 0.0, lo_z, hi_x, 0.0, hi_z), self.cell_size) > MAX_STATIC_CELLS:
+            print("[SpatialGrid] a brush covering %.0f x %.0f units is too large "
+                  "to collide with and was left out" % (hi_x - lo_x, hi_z - lo_z))
+            return
+        self._index.insert(brush, lo_x, lo_z, hi_x, hi_z)
+
     def populate(self, brushes):
         """Builds the grid from a list of brushes.  Call once on play-mode enter
         and again whenever the static brush list changes (rare).
@@ -923,13 +943,13 @@ class SpatialGrid:
             elif ('geometry' in brush or '_mesh_bounds' in brush
                     or 'is_mover' in brush or 'is_door' in brush):
                 lo_x, _lo_y, lo_z, hi_x, _hi_y, hi_z = world_bounds(brush)
-                self._index.insert(brush, lo_x, lo_z, hi_x, hi_z)
+                self._file_static(brush, lo_x, lo_z, hi_x, hi_z)
             else:       # a plain box: the box rule, inline
                 pos = brush['pos']
                 size = brush['size']
-                self._index.insert(brush,
-                                   pos[0] - size[0] * 0.5, pos[2] - size[2] * 0.5,
-                                   pos[0] + size[0] * 0.5, pos[2] + size[2] * 0.5)
+                self._file_static(brush,
+                                  pos[0] - size[0] * 0.5, pos[2] - size[2] * 0.5,
+                                  pos[0] + size[0] * 0.5, pos[2] + size[2] * 0.5)
 
         self._los_rows = self._build_los_rows()
         # The per-query box rows are built from these when first asked for.
