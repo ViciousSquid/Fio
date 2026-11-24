@@ -52,6 +52,9 @@ CROSSOVERS = {
         "tests/engine/test_hd_graphics.py::test_hd_highs_small_n_crossovers_are_classics_code",
     ("engine/renderer/hd_high/explosion_rows.py", "EXPLOSION_ROWS_VECTOR_FROM"):
         "tests/engine/test_hd_graphics.py::test_hd_highs_small_n_crossovers_are_classics_code",
+    ("engine/brush_placement.py", "MESH_CULL_VECTOR_FROM"):
+        "tests/physics/test_mesh_triangle_cull.py"
+        "::test_the_player_goes_the_same_way_with_and_without_the_cull",
     ("engine/brush_placement.py", "BulkBoxes.SCALAR_BELOW"):
         "tests/brush_model (BulkBoxes: same values as world_box, to the bit)",
     ("engine/spatial_grid.py", "SpatialGrid.LOS_DENSE_MIN_CANDIDATES"):

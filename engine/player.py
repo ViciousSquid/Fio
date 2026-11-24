@@ -34,8 +34,13 @@ from .constants import _UNPUBLISHED
 from . import brush_placement as _placement
 from .brush_placement import (
     collision_shape, collision_shape_at, off_range, overridden, resolved_runtime,
-    world_bounds,
+    triangles_near, world_bounds,
 )
+
+#: Added round a mesh pass's reach before its triangles are selected
+#: (brush_placement.triangles_near): the selection must never be tighter
+#: than the pass's own per-triangle tests, which compare the same numbers.
+_REACH_PAD = 1e-2
 from .physics import world_gravity
 
 
@@ -1825,9 +1830,15 @@ class Player:
         radius = min(float(half.x), float(half.z))
         radius_sq = radius * radius
         step_top = None
+        # A tread to step onto is under the footprint and within a step above
+        # the feet.
+        reach = radius + _REACH_PAD
+        reach_lo = (float(self.pos.x) - reach, feet_y - _REACH_PAD, float(self.pos.z) - reach)
+        reach_hi = (float(self.pos.x) + reach,
+                    feet_y + float(self.step_height) + _REACH_PAD, float(self.pos.z) + reach)
         for _brush, triangles in blocked:
             brush_top = None
-            for triangle, normal in triangles:
+            for triangle, normal in triangles_near(_brush, triangles, reach_lo, reach_hi):
                 # Face winding is not authoritative for a model's collision
                 # surface (reversed OBJ decks are supported elsewhere too).
                 if abs(float(normal[1])) < PM_GROUND_NORMAL:
@@ -1938,6 +1949,10 @@ class Player:
                                         position[1] + oy,
                                         position[2] + oz)
                 sweep_inputs.append((sphere_min, sphere_max, sphere_start))
+            reach_lo = tuple(min(entry[0][axis] for entry in sweep_inputs) - _REACH_PAD
+                             for axis in range(3))
+            reach_hi = tuple(max(entry[1][axis] for entry in sweep_inputs) + _REACH_PAD
+                             for axis in range(3))
 
             for brush, triangles, bounds in model_meshes:
                 if bounds:
@@ -1946,7 +1961,8 @@ class Player:
                             or sweep_max[1] < mn[1] or sweep_min[1] > mx[1]
                             or sweep_max[2] < mn[2] or sweep_min[2] > mx[2]):
                         continue
-                for tri, face_normal in triangles:
+                for tri, face_normal in triangles_near(
+                        brush, triangles, reach_lo, reach_hi):
                     v0, v1, v2 = tri
                     tri_min = (min(v0[0], v1[0], v2[0]),
                                min(v0[1], v1[1], v2[1]),
@@ -2036,6 +2052,16 @@ class Player:
         support_snap_distance = max(
             0.25, float(self._mesh_support_snap_distance)
         )
+        # Everything the loop below can accept: a triangle within the support
+        # radius of the lowest sphere, or a tread under the hull's footprint
+        # whose height range reaches the feet plane.
+        reach = support_radius + _REACH_PAD
+        reach_lo = (min(sphere[0], centre[0]) - reach,
+                    min(sphere[1], feet_y) - reach,
+                    min(sphere[2], centre[2]) - reach)
+        reach_hi = (max(sphere[0], centre[0]) + reach,
+                    max(sphere[1], feet_y) + max(reach, support_snap_distance + _REACH_PAD),
+                    max(sphere[2], centre[2]) + reach)
 
         for brush, triangles, bounds in model_meshes:
             if bounds:
@@ -2044,7 +2070,8 @@ class Player:
                         or sphere[1] + support_radius < mn[1] or sphere[1] - support_radius > mx[1]
                         or sphere[2] + support_radius < mn[2] or sphere[2] - support_radius > mx[2]):
                     continue
-            for tri, face_normal in triangles:
+            for tri, face_normal in triangles_near(
+                    brush, triangles, reach_lo, reach_hi):
                 v0, v1, v2 = tri
                 tri_min = (min(v0[0], v1[0], v2[0]),
                            min(v0[1], v1[1], v2[1]),
@@ -2140,7 +2167,8 @@ class Player:
                 if (x < mn[0] or x > mx[0] or z < mn[2] or z > mx[2]
                         or mx[1] < low or mn[1] > high):
                     continue
-            for tri, face_normal in triangles:
+            for tri, face_normal in triangles_near(
+                    _brush, triangles, (x, low, z), (x, high, z)):
                 if abs(float(face_normal[1])) < PM_GROUND_NORMAL:
                     continue
                 v0, v1, v2 = tri
@@ -2156,6 +2184,19 @@ class Player:
                     return True
         return False
 
+    def _capsule_reach(self, offsets, radius):
+        """``(lo, hi)``: the box that holds the capsule's spheres where the
+        player is now, with a margin -- what a mesh pass that tests those
+        spheres hands :func:`engine.brush_placement.triangles_near`."""
+        x, y, z = float(self.pos.x), float(self.pos.y), float(self.pos.z)
+        reach = radius + _REACH_PAD
+        return ((x + min(o[0] for o in offsets) - reach,
+                 y + min(o[1] for o in offsets) - reach,
+                 z + min(o[2] for o in offsets) - reach),
+                (x + max(o[0] for o in offsets) + reach,
+                 y + max(o[1] for o in offsets) + reach,
+                 z + max(o[2] for o in offsets) + reach))
+
     def _model_mesh_max_penetration(self, model_meshes, offsets, radius):
         """Maximum sphere/triangle penetration at the current capsule position."""
         deepest = 0.0
@@ -2165,6 +2206,7 @@ class Player:
                       self.pos.z - half.z)
         player_max = (self.pos.x + half.x, self.pos.y + half.y,
                       self.pos.z + half.z)
+        reach_lo, reach_hi = self._capsule_reach(offsets, radius)
         for _brush, triangles, bounds in model_meshes:
             if bounds:
                 mn, mx = bounds
@@ -2172,6 +2214,7 @@ class Player:
                         or player_max[1] < mn[1] - radius or player_min[1] > mx[1] + radius
                         or player_max[2] < mn[2] - radius or player_min[2] > mx[2] + radius):
                     continue
+            triangles = triangles_near(_brush, triangles, reach_lo, reach_hi)
             for ox, oy, oz in offsets:
                 sphere = (float(self.pos.x + ox), float(self.pos.y + oy),
                           float(self.pos.z + oz))
@@ -2418,6 +2461,7 @@ class Player:
                           self.pos.z - half.z)
             player_max = (self.pos.x + half.x, self.pos.y + half.y,
                           self.pos.z + half.z)
+            reach_lo, reach_hi = self._capsule_reach(offsets, radius)
 
             for brush, triangles, bounds in model_meshes:
                 # One broad-phase rejection for the whole model.
@@ -2428,7 +2472,8 @@ class Player:
                             or player_max[2] < mn[2] or player_min[2] > mx[2]):
                         continue
 
-                for tri, face_normal in triangles:
+                for tri, face_normal in triangles_near(
+                        brush, triangles, reach_lo, reach_hi):
                     v0, v1, v2 = tri
                     # Cheap per-triangle bounds rejection before the closest
                     # point calculation. The sphere's radius is the capsule's
@@ -2558,7 +2603,9 @@ class Player:
             contact_radius = max(0.0, radius - 1e-3)
             radius_sq = contact_radius * contact_radius
 
-            for triangle, _normal in triangles:
+            reach_lo = (centre[0] - radius, centre[1] - span - radius, centre[2] - radius)
+            reach_hi = (centre[0] + radius, centre[1] + span + radius, centre[2] + radius)
+            for triangle, _normal in triangles_near(brush, triangles, reach_lo, reach_hi):
                 v0, v1, v2 = triangle
                 tri_min = (
                     min(v0[0], v1[0], v2[0]),
