@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import numbers
+import sys
 
 #: Brush fields that are always objects (per-face tables, angled geometry).
 BRUSH_OBJECT_FIELDS = ('textures', 'uv_scale', 'uv_angle', 'uv_shift',
@@ -60,6 +61,18 @@ def finite_number(value) -> bool:
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
         return False
     return math.isfinite(value)
+
+
+def _unusable_number(value) -> bool:
+    """A number that is NaN, infinite, or an integer no float can hold."""
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    return (isinstance(value, int) and not isinstance(value, bool)
+            and not -_LARGEST_FLOAT <= value <= _LARGEST_FLOAT)
+
+
+#: sys.float_info.max as an integer: beyond it ``float(n)`` raises.
+_LARGEST_FLOAT = int(sys.float_info.max)
 
 
 def _vector(value) -> bool:
@@ -302,6 +315,14 @@ def _validate_record(item, kind, label, partial):
     if kind == 'brushes' and props.get('direction') is not None \
             and not _vector(props['direction']):
         raise ValueError(f"{label}['direction'] must be a 3-element vector")
+    # A number no later step can use: 1e999 (which JSON reads as infinity),
+    # NaN, or an integer too large for a float. Such a value loads, then
+    # raises wherever it is first converted -- in a paint, at Play start --
+    # and Save refuses the map for the rest of the session.
+    for field, value in props.items():
+        if _unusable_number(value) or (
+                isinstance(value, (list, tuple)) and any(map(_unusable_number, value))):
+            raise ValueError(f"{label}['{field}'] holds a number that is not finite")
     # Names and ids key the runtime's lookup tables. An odd but hashable value
     # (a numeric name) is tolerated; a list or object cannot be a key at all.
     for field in ('name', 'id'):
@@ -317,6 +338,20 @@ def _validate_record(item, kind, label, partial):
                     or not all(finite_number(v) for v in value[:3])):
                 raise ValueError(f"{label}['{field}'] must be an RGB list")
         record_type = str(item.get('type', '')).lower()
+        if record_type in ('prop', 'model'):
+            # What a model's collision is built from at Play start, where a
+            # wrong type raised half-way into the session and a huge size filled
+            # the spatial grid's cells until memory ran out.
+            for field in ('rotation', 'collision_size'):
+                value = props.get(field)
+                if value is not None and not _world_vector(value):
+                    raise ValueError(f"{label}['{field}'] must be a 3-element vector "
+                                     f"within {WORLD_COORDINATE_LIMIT:g}")
+            scale = props.get('scale')
+            if scale is not None and not (finite_number(scale) or _vector(scale)):
+                raise ValueError(f"{label}['scale'] must be a number or a 3-element vector")
+            if not isinstance(props.get('model_path', ''), str):
+                raise ValueError(f"{label}['model_path'] must be a path")
         if record_type == 'playerstart':
             if 'primary' in props and not isinstance(props['primary'], bool):
                 raise ValueError(f"{label}['primary'] must be true or false")

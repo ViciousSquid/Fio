@@ -1414,7 +1414,7 @@ class View2D(QWidget):
         if hasattr(thing, 'get_radius'):
             try:
                 margin = max(margin, float(thing.get_radius() or 0.0))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
         if isinstance(thing, PlayerStart):
             margin = max(margin, 64.0)  # full 100-unit sign, including its base
@@ -1545,6 +1545,15 @@ class View2D(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            # A paint that raises (a value in the map nothing could draw)
+            # must not leave its painter open on the widget: Qt destroys an
+            # active painter when the traceback holding it goes, and crashes.
+            painter.end()
+
+    def _paint(self, painter):
         overlay_frame, self._overlay_frame = self._overlay_frame, False
         key = self._base_layer_key()
         if not (overlay_frame and self._base_layer_valid and self._base_layer is not None
@@ -1572,16 +1581,18 @@ class View2D(QWidget):
                         max(1, int(round(self.height() * ratio))))
         layer.setDevicePixelRatio(ratio)
         painter = QPainter(layer)
-        # What a painter begun on the widget starts with (QPainter::initFrom),
-        # not a pixmap's defaults: the widget's font, its foreground pen and
-        # its background.
-        palette = self.palette()
-        painter.setPen(QPen(palette.brush(self.foregroundRole()), 1))
-        painter.setBackground(palette.brush(self.backgroundRole()))
-        painter.setFont(self.font())
-        self._paint_base_layer(painter)
-        state = (QPen(painter.pen()), QBrush(painter.brush()), QFont(painter.font()))
-        painter.end()
+        try:
+            # What a painter begun on the widget starts with
+            # (QPainter::initFrom), not a pixmap's defaults: the widget's
+            # font, its foreground pen and its background.
+            palette = self.palette()
+            painter.setPen(QPen(palette.brush(self.foregroundRole()), 1))
+            painter.setBackground(palette.brush(self.backgroundRole()))
+            painter.setFont(self.font())
+            self._paint_base_layer(painter)
+            state = (QPen(painter.pen()), QBrush(painter.brush()), QFont(painter.font()))
+        finally:
+            painter.end()           # before the pixmap it paints on goes
         self._base_layer, self._base_key = layer, key
         self._base_painter_state = state
         self._base_layer_valid = True

@@ -7085,16 +7085,16 @@ class PropertyEditor(QWidget):
         widget = QWidget()
         h = QHBoxLayout(widget)
         h.setContentsMargins(0, 0, 0, 0)
-        rgb = thing.properties.get(key, [255, 255, 255])
+        rgb = thing.properties.get(key) or [255, 255, 255]
         swatch = QPushButton()
         swatch.setFixedSize(200, 32)
 
         def update_swatch():
-            rgb = thing.properties.get(key, [255, 255, 255])
+            rgb = thing.properties.get(key) or [255, 255, 255]
             swatch.setStyleSheet(f"background-color: rgb({rgb[0]}, {rgb[1]}, {rgb[2]});")
 
         def open_dialog():
-            rgb = thing.properties.get(key, [255, 255, 255])
+            rgb = thing.properties.get(key) or [255, 255, 255]
             color = QColorDialog.getColor(QColor(*rgb), self, dialog_title)
             if color.isValid():
                 self.update_object_prop(key, [color.red(), color.green(), color.blue()])

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import glm
 
 from engine.entities import Thing, UnresolvedThing
+from engine.level_validation import validate_level
 from player.runtime.fiopak import PackageError
 from engine.io_system import OutputConnection
 from engine.items import ItemDefinitions
@@ -73,6 +74,15 @@ class PlayerWorld:
     STEP = 1 / 60
 
     def __init__(self, data, package=None, spawn=None):
+        # A package is the player's only input, and nothing had checked it:
+        # the checks the editor makes when it opens a map (a brush size of
+        # 1e308 exhausts memory in the spatial grid; a pos that is a string
+        # raises half-way into the world) are made here before any of it is
+        # built.
+        try:
+            validate_level(data)
+        except ValueError as exc:
+            raise PackageError(f"This world cannot be loaded: {exc}") from exc
         self.data, self.package = data, package
         self.pending_level = None
         self._elapsed = 0.0
