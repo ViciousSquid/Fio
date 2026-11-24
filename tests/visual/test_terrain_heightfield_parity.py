@@ -494,8 +494,11 @@ def test_each_chunk_draws_with_its_own_height_grid_and_paint(context, monkeypatc
     held = terrain_draw.scene_gl(renderer)
     recorder = _RecordingGL(gl, held.uniforms["uPaintEnabled"],
                             held.uniforms["uPaintLayer"])
+    from engine.renderer.core import raw_calls
     monkeypatch.setattr(terrain_gl_module, "gl", recorder)
-    painted_frame = frame()                       # uploads, then draws
+    monkeypatch.setattr(raw_calls, "gl", recorder)     # the chunk draws go here
+    with glh.wrapped_gl_calls():
+        painted_frame = frame()                   # uploads, then draws
     monkeypatch.undo()
     # The renderer frees these with itself: keep what the frame drew with.
     height_pages, page_layers = list(held._height_pages), held._page_layers

@@ -329,3 +329,19 @@ def is_blank(image, tolerance=2):
     """True when every pixel is (near enough) the same colour."""
     flat = image.reshape(-1, image.shape[-1]).astype(np.int16)
     return bool(np.all(flat.max(axis=0) - flat.min(axis=0) <= tolerance))
+
+
+@contextlib.contextmanager
+def wrapped_gl_calls():
+    """Route the renderer's native GL calls (``core.raw_calls``) through
+    PyOpenGL's wrappers, looked up on ``OpenGL.GL`` at each call -- the path
+    ``FIO_GL_DEBUG=1`` takes -- so a test that intercepts ``gl.glDrawElements``
+    and the like sees every call. The same GL calls with the same values."""
+    from engine.renderer.core import raw_calls
+    held = dict(raw_calls._resolved)
+    raw_calls._resolved.update(dict.fromkeys(raw_calls._ENTRIES))
+    try:
+        yield
+    finally:
+        raw_calls._resolved.clear()
+        raw_calls._resolved.update(held)
