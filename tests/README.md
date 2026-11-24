@@ -16,7 +16,8 @@ python -m pytest                     # everything except the benchmarks
 | What | Command |
 | --- | --- |
 | Everything (except benchmarks) | `python -m pytest` |
-| Headless only — no Qt, no OpenGL, no display | `python -m pytest -m "not qt and not gl and not benchmark"` |
+| Headless only — no Qt, no OpenGL, no display (CI's core tier, with `FIO_HEADLESS_TIER=1`) | `python -m pytest -m "not qt and not gl and not benchmark"` |
+| CI's Qt tier — only what is marked `qt` | `QT_QPA_PLATFORM=offscreen python -m pytest -m "qt and not gl and not benchmark"` |
 | Editor + engine (Qt, offscreen, no GPU) | `QT_QPA_PLATFORM=offscreen python -m pytest -m "not gl and not benchmark"` |
 | Renderer / visual (needs a real GL context) | `xvfb-run -a python -m pytest -m gl` |
 | Integration workflows | `python -m pytest -m integration` |
@@ -104,7 +105,8 @@ handful of tests that use real threads and real time.
 
 The plugin and player packages keep their own tests next to the code
 (`plugins/*/tests/`, `player/tests/`) because both are exported as
-self-contained packages; `pytest.ini` includes them in every run.
+self-contained packages. `pytest.ini` includes the plugins' in every run; the
+player's run against its staged runtime (see the top of this file).
 
 ## Conventions
 
