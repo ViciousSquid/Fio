@@ -121,8 +121,9 @@ def glUseProgram(program):
         if program == _program:
             return
         _program = program
-        _held = _uniforms.get(program)
-        if _held is None:
+        if program in _uniforms:
+            _held = _uniforms[program]
+        else:
             _held = _uniforms[program] = {}
     gl.glUseProgram(program)
 
@@ -139,7 +140,7 @@ def glActiveTexture(unit):
 def glBindTexture(target, texture):
     if _live and _unit is not None:
         key = (_unit, target)
-        if _textures.get(key) == texture:
+        if key in _textures and _textures[key] == texture:
             return
         _textures[key] = texture
     gl.glBindTexture(target, texture)
@@ -156,7 +157,7 @@ def glBindVertexArray(array):
 
 def glEnable(capability):
     if _live:
-        if _caps.get(capability) is True:
+        if capability in _caps and _caps[capability] is True:
             return
         _caps[capability] = True
     gl.glEnable(capability)
@@ -164,7 +165,7 @@ def glEnable(capability):
 
 def glDisable(capability):
     if _live:
-        if _caps.get(capability) is False:
+        if capability in _caps and _caps[capability] is False:
             return
         _caps[capability] = False
     gl.glDisable(capability)
@@ -173,7 +174,7 @@ def glDisable(capability):
 def glDepthMask(flag):
     if _live:
         flag = bool(flag)
-        if _misc.get('glDepthMask') is flag:
+        if 'glDepthMask' in _misc and _misc['glDepthMask'] is flag:
             return
         _misc['glDepthMask'] = flag
     gl.glDepthMask(flag)
@@ -181,7 +182,7 @@ def glDepthMask(flag):
 
 def glDepthFunc(func):
     if _live:
-        if _misc.get('glDepthFunc') == func:
+        if 'glDepthFunc' in _misc and _misc['glDepthFunc'] == func:
             return
         _misc['glDepthFunc'] = func
     gl.glDepthFunc(func)
@@ -189,7 +190,7 @@ def glDepthFunc(func):
 
 def glCullFace(mode):
     if _live:
-        if _misc.get('glCullFace') == mode:
+        if 'glCullFace' in _misc and _misc['glCullFace'] == mode:
             return
         _misc['glCullFace'] = mode
     gl.glCullFace(mode)
@@ -198,7 +199,7 @@ def glCullFace(mode):
 def glPolygonMode(face, mode):
     if _live:
         value = (face, mode)
-        if _misc.get('glPolygonMode') == value:
+        if 'glPolygonMode' in _misc and _misc['glPolygonMode'] == value:
             return
         _misc['glPolygonMode'] = value
     gl.glPolygonMode(face, mode)
@@ -207,7 +208,7 @@ def glPolygonMode(face, mode):
 def glBlendFunc(source, destination):
     if _live:
         value = (source, destination, source, destination)
-        if _misc.get('blend') == value:
+        if 'blend' in _misc and _misc['blend'] == value:
             return
         _misc['blend'] = value
     gl.glBlendFunc(source, destination)
@@ -216,7 +217,7 @@ def glBlendFunc(source, destination):
 def glBlendFuncSeparate(source, destination, source_alpha, destination_alpha):
     if _live:
         value = (source, destination, source_alpha, destination_alpha)
-        if _misc.get('blend') == value:
+        if 'blend' in _misc and _misc['blend'] == value:
             return
         _misc['blend'] = value
     gl.glBlendFuncSeparate(source, destination, source_alpha, destination_alpha)
@@ -246,34 +247,36 @@ def glDeleteProgram(program):
 # -- uniforms -------------------------------------------------------------------------
 
 def _scalar(name):
-    send = getattr(gl, name)
-
-    def uniform(location, value, _name=name):
-        held = _held
-        if held is None:
-            _outside_uniform()
-        elif location is not None:
-            if location == -1 or held.get(location) == value:
-                return
-            held[location] = value
-        getattr(gl, _name)(location, value)
-    uniform.__name__ = name
-    uniform.__doc__ = send.__doc__
-    return uniform
+    return _made(name, 'value', 'value')
 
 
 def _vector(name):
-    def uniform(location, *value):
-        held = _held
-        if held is None:
-            _outside_uniform()
-        elif location is not None:
-            if location == -1 or held.get(location) == value:
-                return
-            held[location] = value
-        getattr(gl, name)(location, *value)
-    uniform.__name__ = name
-    return uniform
+    width = int(name[len('glUniform')])
+    names = ', '.join('v%d' % index for index in range(width))
+    return _made(name, names, '(%s)' % names)
+
+
+_UNIFORM = """
+def {name}(location, {arguments}):
+    held = _held
+    if held is None:
+        _outside_uniform()
+    elif location is not None:
+        value = {value}
+        if location == -1 or (location in held and held[location] == value):
+            return
+        held[location] = value
+    gl.{name}(location, {arguments})
+"""
+
+
+def _made(name, arguments, value):
+    """The function for a uniform set by value: written out so that the
+    comparison costs no call and the send is looked up on ``OpenGL.GL`` when
+    made (a test recording GL calls replaces it there)."""
+    source = _UNIFORM.format(name=name, arguments=arguments, value=value)
+    exec(compile(source, __file__, 'exec'), globals())
+    return globals()[name]
 
 
 def _key(value):
