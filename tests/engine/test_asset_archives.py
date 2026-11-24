@@ -2,6 +2,7 @@
 file overrides its archive member, and every loader finds archived assets."""
 
 import io
+import os
 import zipfile
 
 import pytest
@@ -21,7 +22,11 @@ def write_archive(root, category, members):
     assets.mkdir(exist_ok=True)
     with zipfile.ZipFile(assets / f'{category}.fiopak', 'w') as archive:
         for name, data in members.items():
-            archive.writestr(name, data)
+            # The name exactly as given: on Windows ``writestr(name, ...)``
+            # would turn a backslash into a slash before it is stored.
+            info = zipfile.ZipInfo('member')
+            info.filename = info.orig_filename = name
+            archive.writestr(info, data)
 
 
 def _files(root):
@@ -54,8 +59,8 @@ def test_archives_are_read_in_place_with_loose_overrides(tmp_path, monkeypatch):
     assert not asset_exists('assets/sprites/monster/b.png')
     assert asset_isdir('assets/sprites/monster')
     assert asset_listdir('assets/sprites') == ['monster']
-    assert asset_files('assets/sprites', ('.png',)) == [
-        str(tmp_path / 'assets/sprites/monster/a.png').replace(str(tmp_path) + '/', '')]
+    assert [path.replace(os.sep, '/') for path in asset_files('assets/sprites', ('.png',))] == [
+        'assets/sprites/monster/a.png']
     source = asset_source('assets/sprites/monster/a.png')
     assert isinstance(source, io.BytesIO) and source.read() == b'sprite'
     assert asset_source(override) == str(override)        # a loose file: its path
@@ -233,3 +238,20 @@ def test_repository_editor_archive_carries_the_playerstart_model():
         names = set(archive.namelist())
     assert {'assets/editor/playerstart.obj', 'assets/editor/playerstart.mtl',
             'assets/select.png'} <= names
+
+
+def test_a_backslash_is_seen_in_the_name_the_archive_stores(tmp_path):
+    """On Windows ``ZipInfo.filename`` has every backslash turned into a
+    slash, which hid the one name rule that is about backslashes: an archive
+    refused on Linux and macOS was accepted there. The stored name
+    (``orig_filename``) is what is checked. This is that case as Windows
+    presents it, on any platform."""
+    class AsWindowsReadsIt:
+        def infolist(self):
+            good = zipfile.ZipInfo('assets/sprites/ok.png')
+            bad = zipfile.ZipInfo('assets/sprites/a.png')
+            bad.orig_filename = 'assets/sprites\\a.png'
+            return [good, bad]
+
+    with pytest.raises(ValueError, match='invalid sprites asset path'):
+        asset_archives._entries(AsWindowsReadsIt(), 'sprites')
