@@ -3,7 +3,8 @@
 The host (``QtGameView``) depends only on what this package exports:
 
 * :class:`Renderer` -- the contract every renderer implements (``api``),
-  versioned by :data:`RENDERER_CONTRACT_VERSION`
+  versioned by :data:`RENDERER_CONTRACT_VERSION` -- and
+  :class:`RendererOptions`, what one may offer beyond it
 * the frame input (:data:`FRAME_INPUT`), :class:`RenderStats` and the
   selection descriptor (:class:`SelectionOverlay`, :class:`EffectBillboard`)
 * the registry: :func:`register_renderer`, :func:`create_renderer`,
@@ -16,15 +17,17 @@ renderer may reuse. Importing this package needs no OpenGL.
 
 from .api import (
     FRAME_INPUT, RENDERER_CONTRACT_VERSION, RENDERER_CONTRACT_VERSION_INFO,
-    WATER_QUALITIES, EffectBillboard, Renderer, RenderStats, SelectionOverlay,
-    contract_compatible, missing_members)
+    WATER_QUALITIES, EffectBillboard, Renderer, RendererOptions, RenderStats,
+    SelectionOverlay,
+    contract_compatible, contract_violations, missing_members)
 from .registry import (
     RendererContractError, RendererInitError, DEFAULT_RENDERER, available_renderers, create_renderer, register_renderer,
     renderer_factory, canonical_name)
 
 __all__ = [
-    'Renderer', 'RENDERER_CONTRACT_VERSION', 'RENDERER_CONTRACT_VERSION_INFO',
-    'missing_members', 'contract_compatible', 'RendererContractError',
+    'Renderer', 'RendererOptions', 'RENDERER_CONTRACT_VERSION', 'RENDERER_CONTRACT_VERSION_INFO',
+    'contract_violations', 'missing_members', 'contract_compatible',
+    'RendererContractError',
     'RendererInitError', 'RenderStats', 'SelectionOverlay', 'EffectBillboard',
     'FRAME_INPUT', 'WATER_QUALITIES',
     'DEFAULT_RENDERER', 'register_renderer', 'create_renderer',

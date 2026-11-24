@@ -165,7 +165,6 @@ class QtGameView(QOpenGLWidget):
         self.debug_console_window = DebugConsole.get_instance()
         self.grid_size, self.world_size = 16, 2048
         self.grid_dirty = True
-        self.culling_enabled = True
         self.show_sprites_in_play_mode = False
         # Cache keys for per-frame expensive rebuilds
         self._io_conn_cache       = None   # last _gather_io_connections result
@@ -327,11 +326,9 @@ class QtGameView(QOpenGLWidget):
         self.start_time = time.perf_counter()
 
         self._render_config = {
-            "culling_enabled": True,
             "brush_display_mode": "Textured",
             "render_mode": 0,
             "show_triggers_as_solid": False,
-            "show_caulk": True,
             "play_mode": False,
             "splitscreen_active": False,
             "primary_selection": None,
@@ -549,9 +546,9 @@ class QtGameView(QOpenGLWidget):
         width = max(1, int(self.width() * ratio))
         height = max(1, int(self.height() * ratio))
         viewport = (0, 0, width // 2, height) if splitscreen else (0, 0, width, height)
-        # Optional, like animate_textures and draw_face_hover: a renderer that
-        # does not offer it (it is not in the locked contract) shows none.
-        # The built-in one has it from engine.renderer.core.
+        # Optional (engine.renderer.RendererOptions), like animate_textures
+        # and draw_face_hover: a renderer that does not offer it shows none.
+        # The built-in ones have it from engine.renderer.core.
         draw = getattr(self.renderer, 'draw_lens_water', None)
         if draw is not None:
             draw(drops, viewport)
@@ -1454,7 +1451,6 @@ class QtGameView(QOpenGLWidget):
             _set_fov(self.camera.fov)
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
         self._view_ptr = glm.value_ptr(self.view_matrix)
-        self._render_config["culling_enabled"] = self.culling_enabled
         # The Display box is published as-is while editing. In Play the game
         # is drawn textured; only the debug views (Wireframe, Overlay)
         # carry over.

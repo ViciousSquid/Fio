@@ -1,35 +1,16 @@
 """The renderer registry checks what a factory returns before the host
-paints with it, as the physics registry does: every member of the contract,
-and a contract version it can run on. A renderer refused after it was made
-is cleaned up first, so its GL objects do not outlive it."""
+paints with it, as the physics registry does: the whole contract
+(``contract_violations``) -- every member, each method's arguments, each
+attribute's type, a declared contract version it can run on. A renderer
+refused after it was made is cleaned up first, so its GL objects do not
+outlive it. The malformed implementations are in
+``test_renderer_contract_validation.py``."""
 
 import pytest
 
 from engine import renderer as boundary
 from engine.renderer import registry
-from engine.renderer.api import Renderer
-
-
-def _complete(**attrs):
-    """An object with every member of the contract, doing nothing."""
-    class Complete:
-        cleaned = 0
-
-        def cleanup(self):
-            type(self).cleaned += 1
-
-    obj = Complete()
-    for name in boundary.missing_members(object()):
-        if name == 'cleanup':
-            continue
-        if callable(getattr(Renderer, name, None)):
-            setattr(obj, name, lambda *a, **k: None)
-        else:
-            setattr(obj, name, None)
-    obj.ready = True
-    for name, value in attrs.items():
-        setattr(obj, name, value)
-    return obj
+from tests.helpers.renderers import conforming_renderer
 
 
 @pytest.fixture
@@ -46,22 +27,25 @@ def test_the_renderer_contract_has_its_own_version():
 
 
 def test_a_complete_renderer_is_created(registered):
-    made = _complete()
+    made = conforming_renderer()
     name = registered("Complete", lambda config: made)
     assert registry.create_renderer(name) is made
+    assert boundary.contract_violations(made) == []
     assert boundary.missing_members(made) == []
+    assert made.cleaned == 0, "a renderer that is accepted is not cleaned up"
 
 
 def test_an_incomplete_renderer_is_refused_and_cleaned_up(registered):
-    made = _complete()
-    del made.render_scene
-    made.draw_billboards = "not a method"
+    made = conforming_renderer(render_scene=None, draw_billboards="not a method")
     name = registered("Half", lambda config: made)
     with pytest.raises(boundary.RendererContractError) as caught:
         registry.create_renderer(name)
     message = str(caught.value)
-    assert "'Half'" in message and "render_scene" in message and "draw_billboards" in message
-    assert type(made).cleaned == 1, "its GL objects must not outlive the refusal"
+    assert "'Half'" in message
+    assert "render_scene is missing" in message
+    assert "draw_billboards is not callable" in message
+    assert boundary.missing_members(made) == ["draw_billboards", "render_scene"]
+    assert made.cleaned == 1, "its GL objects must not outlive the refusal"
     assert issubclass(boundary.RendererContractError, TypeError)
 
 
@@ -86,17 +70,28 @@ def test_an_unknown_name_is_a_key_error():
 
 
 @pytest.mark.parametrize("declared, runs", [
-    (None, True), ("1.0.0", True), ("1.0", True),
+    ("1.0.0", True), ("1.0", True),
     ("1.1.0", False),                 # newer than this Fio's
     ("2.0.0", False), ("0.9.0", False),
 ])
 def test_a_renderer_written_for_another_contract_version(registered, declared, runs):
-    attrs = {} if declared is None else {"contract_version": declared}
-    made = _complete(**attrs)
+    made = conforming_renderer(contract_version=declared)
     name = registered("Versioned", lambda config: made)
     if runs:
         assert registry.create_renderer(name) is made
+        assert boundary.contract_compatible(made) is None
     else:
-        with pytest.raises(boundary.RendererContractError, match="renderer contract"):
+        with pytest.raises(boundary.RendererContractError, match="written for renderer contract"):
             registry.create_renderer(name)
-        assert type(made).cleaned == 1
+        assert "written for renderer contract" in boundary.contract_compatible(made)
+        assert made.cleaned == 1
+
+
+def test_a_renderer_that_does_not_say_which_contract_is_refused(registered):
+    """An undeclared version is not taken as this one."""
+    made = conforming_renderer(contract_version=None)
+    name = registered("Unversioned", lambda config: made)
+    with pytest.raises(boundary.RendererContractError, match="contract_version is not declared"):
+        registry.create_renderer(name)
+    assert boundary.contract_compatible(made) == "contract_version is not declared"
+    assert made.cleaned == 1

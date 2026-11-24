@@ -856,7 +856,9 @@ class EditorAPI:
         written for 1.6-1.8 (which read the ``Terrain`` object and authored
         brushes) or for the 1.3-1.5 construction are not compatible. The
         registry checks what the factory returns before the host paints with
-        it (engine.renderer.registry.create_renderer).
+        it (engine.renderer.registry.create_renderer): every member, each
+        method's arguments, each attribute's type, and a ``contract_version``
+        that is declared -- one that does not say is refused.
 
         The renderer owns its GL resources: no GL resource id survives the
         lifetime of the renderer that owns it. The host discards every handle

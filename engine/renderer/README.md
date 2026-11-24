@@ -6,13 +6,22 @@ the contract in `api.py`.
 
 | Part | What it is |
 |---|---|
-| `api.py` | The renderer contract: the `Renderer` protocol and `FRAME_INPUT`, every key a frame hands a renderer. |
-| `registry.py` | Registers renderers by name (`r_renderer` switches between them). |
+| `api.py` | The renderer contract: the `Renderer` protocol, `RendererOptions` (what a renderer may offer beyond it), `FRAME_INPUT` (every key a frame hands a renderer) and `contract_violations`, the check of an object against all of it. |
+| `registry.py` | Registers renderers by name (`r_renderer` switches between them). `create_renderer` refuses, and cleans up, whatever does not satisfy the contract. |
 | `core/` | Shared, renderer-independent pieces: GPU geometry and resources, culling and visibility, terrain, overlays. |
 | `forward/` | **Classic**: Fio's original renderer, `ForwardRenderer` (registered as `"Forward"`; `"Classic"` is an alias). The default. |
 | `hd_high/` | **HD_High**: a separate, physically based renderer, `HDHighRenderer` (registered as `"HD_High"`). |
 
-Fio ships two renderers. They share `core/` and nothing else: neither imports
+Fio ships two renderers, held to one contract. What a factory returns is
+checked before the host paints with it: every member, each method's arguments
+(names, order, defaults), each attribute's type and permitted values, a
+declared `contract_version`, and no property that raises. The same
+conformance tests run against both (`tests/visual/test_renderer_conformance.py`,
+`tests/renderer/test_built_in_renderer_classes.py`); the malformed
+implementations the registry must refuse are in
+`tests/renderer/test_renderer_contract_validation.py`.
+
+They share `core/` and nothing else: neither imports
 the other, each is created by `create_renderer(name, config)` and handed the
 same frame input, and the host swaps them while it runs
 (`QtGameView.switch_renderer`; Settings > Display > Renderer; the console's
