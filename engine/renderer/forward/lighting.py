@@ -157,8 +157,10 @@ class LightingMixin:
         if self._light_ubo is None:
             self._light_ubo = gl.glGenBuffers(1)
             self._light_ubo_bound = False
+            self._light_ubo_sent = None
         if capacity > self._light_ubo_capacity:
             self._light_ubo_capacity = max(self.MAX_LIGHTS, capacity)
+            self._light_ubo_sent = None         # a new, empty store
             self._light_ubo_data = np.zeros(self._light_ubo_capacity,
                                             dtype=self._light_ubo_dtype)
             gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
@@ -243,17 +245,25 @@ class LightingMixin:
             # w: how bright a cookie light's image stays in its own shadow.
             active['params'][:, 3] = table.light_cookie_floor[active_lights]
 
-        # Respecify the whole store rather than sub-updating it: earlier draws
-        # still queued against the old contents would otherwise make the
-        # driver wait for them before the write. A fresh store (orphaning)
-        # lets them finish on the old one.
-        gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
-        gl.glBufferData(
-            gl.GL_UNIFORM_BUFFER,
-            self._light_ubo_data.nbytes,
-            self._light_ubo_data,
-            gl.GL_DYNAMIC_DRAW,
-        )
+        # The key is dropped every frame (the shadow slots it does not hold
+        # are rebuilt), so the block is packed every frame; it is uploaded
+        # only when what was packed differs from what the buffer holds. On a
+        # still view that is never: 8 KiB a frame that went to the driver
+        # unchanged.
+        packed = self._light_ubo_data.tobytes()
+        if packed != self._light_ubo_sent:
+            # Respecify the whole store rather than sub-updating it: earlier
+            # draws still queued against the old contents would otherwise
+            # make the driver wait for them before the write. A fresh store
+            # (orphaning) lets them finish on the old one.
+            gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
+            gl.glBufferData(
+                gl.GL_UNIFORM_BUFFER,
+                self._light_ubo_data.nbytes,
+                self._light_ubo_data,
+                gl.GL_DYNAMIC_DRAW,
+            )
+            self._light_ubo_sent = packed
         self._light_ubo_key = key
         self._light_ubo_lights, self._light_ubo_count = lights, count
 
@@ -469,7 +479,15 @@ class LightingMixin:
             slots = uniforms.shadow_slots = tuple(live)
         loc = uniforms['uShadowFilter[0]']
         if loc != -1:
-            gl.glUniform2fv(loc, self.MAX_SHADOW_LIGHTS, self._shadow_filter_array())
+            # Program state, like the sampler units above: sent when the
+            # filter differs from what this program was last given, not on
+            # every lit pass.
+            filters = self._shadow_filter_array()
+            sent = self._shadow_filter_sent.get(id(uniforms))
+            current = filters.tobytes()
+            if sent is None or sent[0] is not uniforms or sent[1] != current:
+                gl.glUniform2fv(loc, self.MAX_SHADOW_LIGHTS, filters)
+                self._shadow_filter_sent[id(uniforms)] = (uniforms, current)
         cubemaps = self._shadow_cubemaps
         count = len(cubemaps)
         # What each shadow unit holds is remembered for the frame: every lit

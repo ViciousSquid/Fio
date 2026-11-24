@@ -34,33 +34,6 @@ def _tinted(colour, tint):
     return (colour[0] * tint[0], colour[1] * tint[1], colour[2] * tint[2])
 
 
-@contextmanager
-def _model_material(uniforms, alpha):
-    """Blend clear model surfaces without writing their depth over the ink.
-
-    Opaque materials retain the caller's state, including respawn fades.
-    """
-    gl.glUniform1f(uniforms['alpha'], alpha)
-    if alpha >= 1.0:
-        yield
-        return
-    blend = gl.glIsEnabled(gl.GL_BLEND)
-    depth_write = bool(gl.glGetBooleanv(gl.GL_DEPTH_WRITEMASK))
-    blend_func = [int(gl.glGetIntegerv(key)) for key in (
-        gl.GL_BLEND_SRC_RGB, gl.GL_BLEND_DST_RGB,
-        gl.GL_BLEND_SRC_ALPHA, gl.GL_BLEND_DST_ALPHA)]
-    gl.glEnable(gl.GL_BLEND)
-    gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-    gl.glDepthMask(gl.GL_FALSE)
-    try:
-        yield
-    finally:
-        gl.glDepthMask(depth_write)
-        gl.glBlendFuncSeparate(*blend_func)
-        if not blend:
-            gl.glDisable(gl.GL_BLEND)
-
-
 def _set_model_tint(uniforms, tint):
     """Set a textured model shader's tint, or clear it for the next draw.
 
@@ -79,7 +52,85 @@ def _set_model_emissive(uniforms, emissive):
     """Set the glTF material's linear emissiveFactor for this model draw."""
     location = uniforms['emissive_factor']
     if location is not None and location != -1:
-        gl.glUniform3fv(location, 1, emissive)
+        gl.glUniform3f(location, emissive[0], emissive[1], emissive[2])
+
+
+class _ModelSends:
+    """What one model pass has sent each program, so that a material group
+    sends only what differs from the group before it.
+
+    A model's groups mostly share their emissive factor, opacity and often
+    their colour: five reel models are 135 groups a frame, and every group
+    sent all three whether or not they had changed (320 of the frame's 719
+    GL calls). A uniform is program state, so what a program was last sent
+    in this pass is what it holds; nothing is assumed of what it held before
+    the pass, whose first send to each program always goes out.
+
+    The blend state a clear material puts back is asked of GL once a pass
+    rather than once a group: each group restores it, so it is the same for
+    the next.
+    """
+
+    __slots__ = ('_sent', '_blend_state')
+
+    def __init__(self):
+        self._sent = {}
+        self._blend_state = None
+
+    def _changed(self, uniforms, name, value):
+        key = (id(uniforms), name)
+        if self._sent.get(key) == value:
+            return False
+        self._sent[key] = value
+        return True
+
+    def emissive(self, uniforms, emissive):
+        location = uniforms['emissive_factor']
+        if location is None or location == -1:
+            return
+        value = (float(emissive[0]), float(emissive[1]), float(emissive[2]))
+        if self._changed(uniforms, 'emissive_factor', value):
+            gl.glUniform3f(location, *value)
+
+    def colour(self, uniforms, colour):
+        value = (float(colour[0]), float(colour[1]), float(colour[2]))
+        if self._changed(uniforms, 'object_color', value):
+            gl.glUniform3f(uniforms['object_color'], *value)
+
+    def alpha(self, uniforms, alpha):
+        value = float(alpha)
+        if self._changed(uniforms, 'alpha', value):
+            gl.glUniform1f(uniforms['alpha'], value)
+
+    @contextmanager
+    def material(self, uniforms, alpha):
+        """Blend clear model surfaces without writing their depth over the ink.
+
+        Opaque materials retain the caller's state, including respawn fades.
+        """
+        self.alpha(uniforms, alpha)
+        if alpha >= 1.0:
+            yield
+            return
+        state = self._blend_state
+        if state is None:
+            state = self._blend_state = (
+                gl.glIsEnabled(gl.GL_BLEND),
+                bool(gl.glGetBooleanv(gl.GL_DEPTH_WRITEMASK)),
+                [int(gl.glGetIntegerv(key)) for key in (
+                    gl.GL_BLEND_SRC_RGB, gl.GL_BLEND_DST_RGB,
+                    gl.GL_BLEND_SRC_ALPHA, gl.GL_BLEND_DST_ALPHA)])
+        blend, depth_write, blend_func = state
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl.glDepthMask(gl.GL_FALSE)
+        try:
+            yield
+        finally:
+            gl.glDepthMask(depth_write)
+            gl.glBlendFuncSeparate(*blend_func)
+            if not blend:
+                gl.glDisable(gl.GL_BLEND)
 
 
 
@@ -227,6 +278,7 @@ class PassesMixin:
         upload_model = uniform_rows('mat4', models)
         upload_normal = uniform_rows('mat3', normals)
         upload_colour = uniform_rows('vec3', colours)
+        alpha_sent = False
         for index in range(len(brushes)):
             self.render_stats.visible_tris += 12
             upload_model(model_loc, index)
@@ -239,7 +291,9 @@ class PassesMixin:
                     gl.glUniform1i(lights_loc, wanted)
                     lights_now = wanted
             has_geometry = bool(geometry[index])
-            gl.glUniform1f(alpha_loc, 1.0)
+            if not alpha_sent:          # the same for every glow brush
+                gl.glUniform1f(alpha_loc, 1.0)
+                alpha_sent = True
             mesh = None
             if has_geometry:
                 mesh = geo_meshes.get(int(table.geometry_id[int(brushes[index])]))
@@ -385,6 +439,7 @@ class PassesMixin:
 
         recipes = table.model_recipes()
         current_shader = None
+        sends = _ModelSends()
         # 'Solid Lit': models shaded in their colours, no textures.
         solid = bool(getattr(self, '_solid_look', False))
         for start, end in zip(starts[:-1], starts[1:]):
@@ -420,14 +475,13 @@ class PassesMixin:
                 if current_shader != shader_name:
                     continue
                 u = self.uniforms[shader_name]
-                _set_model_emissive(u, (0.0, 0.0, 0.0))
+                sends.emissive(u, (0.0, 0.0, 0.0))
                 gl.glBindTexture(
                     gl.GL_TEXTURE_2D,
                     self._manual_model_texture_id(manual_texture))
-                gl.glUniform1f(u['alpha'], 1.0)
+                sends.alpha(u, 1.0)
                 if shader_kind != 'textured':
-                    colour = _tinted(override_color or (0.8, 0.8, 0.8), tint)
-                    gl.glUniform3fv(u['object_color'], 1, colour)
+                    sends.colour(u, _tinted(override_color or (0.8, 0.8, 0.8), tint))
                 elif tint:
                     _set_model_tint(u, tint)
                 gl.glDrawArraysInstanced(
@@ -448,10 +502,10 @@ class PassesMixin:
                 if current_shader != shader_name:
                     continue
                 u = self.uniforms[shader_name]
-                _set_model_emissive(u, (0.0, 0.0, 0.0))
+                sends.emissive(u, (0.0, 0.0, 0.0))
                 if shader_kind == 'lit':
-                    gl.glUniform3fv(u['object_color'], 1, _tinted((0.8, 0.8, 0.8), tint))
-                    gl.glUniform1f(u['alpha'], 1.0)
+                    sends.colour(u, _tinted((0.8, 0.8, 0.8), tint))
+                    sends.alpha(u, 1.0)
                 gl.glDrawArraysInstanced(
                     gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
                 self.render_stats.draw_calls += 1
@@ -471,15 +525,14 @@ class PassesMixin:
                 if current_shader != shader_name:
                     continue
                 u = self.uniforms[shader_name]
-                _set_model_emissive(u, group.emissive)
+                sends.emissive(u, group.emissive)
                 if shader_kind == 'textured':
                     gl.glBindTexture(gl.GL_TEXTURE_2D, group.texture)
                     if tint:
                         _set_model_tint(u, tint)
                 else:
-                    colour = _tinted(group.colour, tint)
-                    gl.glUniform3fv(u['object_color'], 1, colour)
-                with _model_material(u, group.alpha):
+                    sends.colour(u, _tinted(group.colour, tint))
+                with sends.material(u, group.alpha):
                     if group.indexed:
                         gl.glDrawElementsInstanced(
                             gl.GL_TRIANGLES, group.count, gl.GL_UNSIGNED_INT,
@@ -522,6 +575,7 @@ class PassesMixin:
             return 0
 
         groups = self._model_draw_groups(obj)
+        sends = _ModelSends()
         if manual_texture:
             shader_kind = (
                 'textured' if self.shaders.get('textured') else
@@ -539,10 +593,8 @@ class PassesMixin:
                     gl.GL_TEXTURE_2D,
                     self._manual_model_texture_id(manual_texture))
             else:
-                gl.glUniform3fv(
-                    u['object_color'], 1,
-                    _tinted(override_color or (0.8, 0.8, 0.8), tint))
-                gl.glUniform1f(u['alpha'], 1.0)
+                sends.colour(u, _tinted(override_color or (0.8, 0.8, 0.8), tint))
+                sends.alpha(u, 1.0)
             groups_to_draw = (None,)
         elif groups:
             groups_to_draw = groups
@@ -580,7 +632,7 @@ class PassesMixin:
                 continue
 
             u = self.uniforms[shader_name]
-            _set_model_emissive(
+            sends.emissive(
                 u, group.emissive if group is not None else (0.0, 0.0, 0.0))
             if shader_kind == 'textured':
                 gl.glBindTexture(
@@ -590,7 +642,7 @@ class PassesMixin:
                 if tint:
                     _set_model_tint(u, tint)
             else:
-                gl.glUniform3fv(u['object_color'], 1, _tinted(colour, tint))
+                sends.colour(u, _tinted(colour, tint))
 
             gl.glUniformMatrix4fv(
                 u['model'], 1, gl.GL_FALSE, base)
@@ -600,7 +652,7 @@ class PassesMixin:
                     normal_loc, 1, gl.GL_FALSE, normal)
 
             gl.glBindVertexArray(obj.vao)
-            with _model_material(u, alpha):
+            with sends.material(u, alpha):
                 if group is None:
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
                 elif group.indexed:

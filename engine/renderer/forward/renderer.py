@@ -260,6 +260,10 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
         self._light_ubo_capacity = 0
         self._light_ubo_key = None
         self._light_ubo_lights = None
+        #: The bytes the light buffer holds, and the shadow filter each
+        #: program was last sent: neither is sent again unchanged.
+        self._light_ubo_sent = None
+        self._shadow_filter_sent = {}
         #: Whether ``_light_ubo`` is bound to ``LIGHT_UBO_BINDING``; see
         #: :meth:`_ensure_light_ubo`.
         self._light_ubo_bound = False
@@ -1296,6 +1300,7 @@ class ForwardRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin
             self._light_ubo = None
             self._light_ubo_capacity = 0
             self._light_ubo_key = None
+            self._light_ubo_sent = None
             self._light_ubo_lights = None
             self._light_ubo_bound = False
         if self._light_cookies is not None:

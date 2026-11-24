@@ -18,6 +18,12 @@ jobs:
     name: Required tests (exact build commit)
     uses: ./.github/workflows/tests.yml
 
+  # The Windows tiers of the same suites: the release ships Windows x64 and
+  # Windows on ARM binaries, and was gated on the Linux run alone.
+  tests-windows:
+    name: Required tests on Windows (exact build commit)
+    uses: ./.github/workflows/tests-windows.yml
+
   build-windows:
     runs-on: windows-latest
     env:
@@ -705,6 +711,7 @@ jobs:
 
     needs:
       - tests
+      - tests-windows
       - build-windows
       - build-windows-arm64
       - build-macos

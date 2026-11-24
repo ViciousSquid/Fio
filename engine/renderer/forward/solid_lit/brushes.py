@@ -119,6 +119,7 @@ class SolidLitMixin:
             upload_normal = uniform_rows('mat3', normals)
             upload_colour = uniform_rows('vec3', colours)
             upload_override = uniform_rows('vec3', _OVERRIDE_COLOURS)
+        alpha_sent = None
         for index in indices:
             slot = int(visible[index])
             upload_model(model_loc, index)
@@ -139,7 +140,9 @@ class SolidLitMixin:
                 alpha = 1.0
             has_geometry = bool(row & render_table.CLASS_HAS_GEOMETRY)
 
-            gl.glUniform1f(alpha_loc, alpha)
+            if alpha != alpha_sent:     # most rows share one opacity
+                gl.glUniform1f(alpha_loc, alpha)
+                alpha_sent = alpha
             # An angled brush draws from its own convex mesh, which is built
             # from the brush's plane set -- the one thing no column holds, and
             # the only place the numeric path needs an object.

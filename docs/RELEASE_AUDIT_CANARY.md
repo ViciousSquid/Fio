@@ -66,6 +66,37 @@ low-power ARM target expect each several times larger.
 | `EntityTable._apply_changes` rebuilt a set for every moved row | 2,000 entities moved in a frame, `prepare_render_state`: **54.6 → 1.6 ms** |
 | A monster's sprite candidates are kept, not re-derived on every heading change | 200 chasing monsters, `prepare_render_state`: **11.4 → 2.9 ms** |
 
+### Redundant sends in a frame
+
+Both renderers drew a model one material group at a time, and every group
+sent its emissive factor, opacity and colour whether or not the group before
+had the same; each clear group also asked GL for the blend state it would
+put back. A pass now keeps what it has sent each program (`_ModelSends`) and
+asks for the blend state once. Classic also uploaded its light block and
+sent the shadow filter to every lit program on every frame, changed or not.
+
+| `Reel_To_Reel_Test`, Play, Classic | Before | After |
+|---|---|---|
+| GL calls a frame | 719 | 389 |
+| of which set a value already set | 365 | 43 |
+| GL state queries a frame | 16 | 9 |
+| Light block uploaded on a still frame | 8,192 B | 0 |
+| `paintGL`, median (llvmpipe) | 14.1 ms | 6.8 ms |
+
+`_SHOWCASE`: 624 → 578 calls a frame.
+
+Verified three ways: Classic's frames are identical to the stored golden
+set and to the code before the change; for both renderers, the uniform
+values and blend state every model draw sees (1,080 draws on
+`Reel_To_Reel_Test`, also `_SHOWCASE` and `Office_Corridor`) are identical
+before and after; and Classic's sources were re-locked. HD_High's own frames
+differ from run to run on unchanged code, so its pictures could not be
+compared.
+
+What remains are queries a pass makes once to put back state it does not own
+(the decal, water and shadow passes; the frame's viewport and framebuffer).
+Removing those needs the renderer to track GL state across passes.
+
 The mesh broad phase is a registered small-N crossover
 (`MESH_CULL_VECTOR_FROM = 32`, measured table where it is defined): below it
 each pass keeps its loop.
@@ -92,7 +123,15 @@ registry runs on what a factory returns:
   no longer taken as compatible;
 * the optional members the host looks up by name (`animate_textures`,
   `draw_face_hover`, `draw_lens_water`) are declared as `RendererOptions` and
-  held to their declaration when present.
+  held to their declaration when present;
+* so are the four settings the editor reads from a renderer (`hd`,
+  `lowpower_mode`, `reflections_enabled`, `decal_reflection_fade`). A fifth
+  the editor wrote, `clear_color`, no renderer had: `r_clearcolor` reported
+  success and changed nothing. It now sets the fog colour, which is what a
+  renderer clears to.
+
+A test holds the viewport, the editor and the plugins to `Renderer` and
+`RendererOptions`: nothing else is read from a renderer.
 
 A refused renderer is cleaned up, and a cleanup that raises is reported with
 the refusal. The same conformance tests run against Forward and HD_High,
@@ -109,6 +148,7 @@ refusal of a malformed variant. Neither renderer needed changing.
 | 30 name-resolution tests skipped everywhere: no job installed pyflakes. | Installed in the Qt jobs. |
 | `opengl`, `benchmark` and `launch` had no timeout (a hang held a runner for six hours). | Timeouts; Qt 30 → 45 minutes. |
 | A test defined twice; an assertion ending `or True`. | Removed; made real. |
+| The Windows workflow could not fail: every job was `continue-on-error`, so it concluded "success" with failed jobs inside (5 of 16 on one commit of this branch), and releases were gated on the Linux run alone. | Every Windows job can fail the workflow; `build.yml` and `full-build-all-platforms.yml` require it. |
 
 New regression tests accompany every defect above. The teleport, the paint
 crash, the Rotate and the editor tests were each run against the code
@@ -116,14 +156,7 @@ without its fix and fail there (the paint test segfaults).
 
 ## 5. Decisions for the maintainer (not changed)
 
-* **The Windows workflow cannot fail.** Every job in `tests-windows.yml` is
-  `continue-on-error` (documented there as report-only until green for a
-  release cycle), and the release workflows gate on the Linux `tests.yml`
-  only. macOS has no test tier. Promoting the Windows core job and adding a
-  macOS core job would make "green CI" cover the platforms that ship.
-* **Version strings disagree:** `editor/version.txt` 3.5.1.0,
-  `requirements.txt` header 3.5.0.1611, `player/buildozer.spec` 3.5.0. Set
-  them with the release.
+* **macOS has no test tier.** Only two path-filtered UI jobs run there.
 * **Push and pull_request both trigger the suites**, so a same-repo PR runs
   everything twice, including 13 Windows Qt shards.
 * **Material companions are not exported:** a package carries a map's
@@ -143,10 +176,6 @@ without its fix and fail there (the paint test segfaults).
 * **A rotating model re-resolves its whole entity row every frame** (22 µs a
   model): the angle is journalled as a state change. A narrow journal flag
   would rewrite only the transform columns.
-* **Classic's model pass** sends emissive and colour per material group
-  through PyOpenGL's slow path whether or not they changed (189 of 270
-  sends redundant on `Reel_To_Reel_Test`), and 5–16 `glGet*` state queries a
-  frame. Fixing it means re-locking Classic.
 * **`material_maps.generate` peaks at 31× the image** (2 GB for 4096²).
 * **Path-following movers** keep their state in a dict beside the mover
   table (22 µs a mover a tick).
