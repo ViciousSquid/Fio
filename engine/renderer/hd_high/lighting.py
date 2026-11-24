@@ -431,9 +431,8 @@ class LightingMixin:
         num_lights = min(len(slots), cap)
 
         # _upload_light_ubo below makes sure the buffer exists and is bound.
-        self._frame_lights_uploaded[shader_name] = (
-            id(table), table.generation,
-            tuple(slots[:cap].tolist()))
+        # (Nothing reads a record of what each program was given, so none is
+        # built: it cost a slot list to tuple on every program bind.)
         program = self.uniforms[shader_name]
         if shader_name == 'terrain' or program.active_lights != num_lights:
             gl.glUniform1i(program['active_lights'], num_lights)
@@ -517,7 +516,11 @@ class LightingMixin:
     def _specify_shadow_array(self, size, slots):
         """(Re)allocate the bound depth array: *slots* shadow slots of six
         *size*-square layers each."""
-        gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_DEPTH_COMPONENT24,
+        # 16 bits: depth_cube.frag writes the linear distance over the
+        # light's reach, so a step is radius / 65536 -- far finer than the
+        # texel-sized bias the lookup applies -- at half the memory and half
+        # the traffic of a 24-bit map (which drivers keep in 32 bits).
+        gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_DEPTH_COMPONENT16,
                         int(size), int(size), 6 * int(slots), 0,
                         gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
         self._shadow_array_size = int(size)

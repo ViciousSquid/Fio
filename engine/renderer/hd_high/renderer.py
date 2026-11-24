@@ -7,6 +7,7 @@ implements :class:`engine.renderer.api.Renderer` and builds on
 :class:`engine.renderer.core.RendererCore`.
 """
 
+import ctypes
 import os
 
 import glm
@@ -93,6 +94,11 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
     def __init__(self, config=None, *, texture_loader=None):
         super().__init__(texture_loader)
         self.render_stats.details['sprite texture array'] = self._describe_sprite_layers
+        #: The depth prepass's overdraw measurement (_prepass_poll).
+        self._overdraw_query = 0
+        self._overdraw_pending = False
+        self._prepass_on = False
+        self.overdraw = 0.0
 
         # Glass samples the already-rendered scene for screen-space transmission.
         # Kept lazy because most frames contain no glass at all.
@@ -1128,8 +1134,10 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
                 if look == 'Wireframe':
                     self.draw_brush_edges(projection, view, opaque_brushes, config, _tbl)
                 elif brush_display_mode in ('Textured', 'Overlay'):
-                    self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
-                    self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
+                    self._draw_opaque_brushes_hd(
+                        projection, view, camera_pos, textured_opaque, solid_opaque,
+                        lights, config, _tbl,
+                        environment and not look and not self._portal_scene_pass)
                 else:
                     # 'Solid Lit': every brush shaded in its colour, no
                     # textures at all (a nodraw face included); water too --
@@ -1282,8 +1290,108 @@ class HDHighRenderer(TexturedMixin, SolidLitMixin, WireframeMixin, OverlayMixin,
         if environment:
             self._postfx_end(projection, view)
 
+    # ------------------------------------------------------------------
+    # Depth prepass
+    # ------------------------------------------------------------------
+    #: 'auto': a depth-only pass ahead of the shaded opaque brushes while
+    #: the frame's measured overdraw makes it pay; 'on' / 'off' force it.
+    depth_prepass = 'auto'
+    #: Overdraw (fragments the opaque brushes pass the depth test with, over
+    #: the frame's pixels) above which 'auto' turns the prepass on, and
+    #: below which it turns it off again.
+    PREPASS_ON_OVERDRAW = 1.3
+    PREPASS_OFF_OVERDRAW = 1.15
+
+    def _prepass_poll(self):
+        """The last overdraw measurement, if the GPU has it (never waits),
+        and whether the prepass should run this frame."""
+        query = self._overdraw_query
+        if query and self._overdraw_pending:
+            available = ctypes.c_int(0)
+            gl.glGetQueryObjectiv(query, gl.GL_QUERY_RESULT_AVAILABLE,
+                                  ctypes.byref(available))
+            if available.value:
+                samples = ctypes.c_uint(0)
+                gl.glGetQueryObjectuiv(query, gl.GL_QUERY_RESULT, ctypes.byref(samples))
+                self._overdraw_pending = False
+                width, height = self._postfx_size
+                if width and height:
+                    ratio = samples.value / float(width * height)
+                    self.overdraw = ratio
+                    if ratio > self.PREPASS_ON_OVERDRAW:
+                        self._prepass_on = True
+                    elif ratio < self.PREPASS_OFF_OVERDRAW:
+                        self._prepass_on = False
+        mode = self.depth_prepass
+        if mode == 'on':
+            return True
+        if mode == 'off':
+            return False
+        return self._prepass_on
+
+    def _draw_opaque_brushes_hd(self, projection, view, camera_pos, textured, solid,
+                                lights, config, table, hd_frame):
+        """The opaque brushes. In an HD frame whose overdraw is high, first
+        their depth alone (surface mode 4: the textured program samples only
+        the alpha that decides a fragment, and nothing is lit), then the
+        shaded pass against that depth with depth writes off, so the
+        physically based shading runs once a pixel instead of once a layer.
+        The fragments the first pass lets through are counted (a query read
+        back a frame or more later, never waited for): that count over the
+        frame's pixels is the overdraw that decides the next frames."""
+        if not hd_frame or not (len(textured) or len(solid)):
+            self.draw_textured_brushes_optimized(projection, view, camera_pos, textured,
+                                                 lights, config, table)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, solid, lights,
+                                            config, table=table)
+            return
+        prepass = self._prepass_poll()
+        measure = not self._overdraw_pending
+        if measure:
+            if not self._overdraw_query:
+                self._overdraw_query = int(np.asarray(gl.glGenQueries(1)).ravel()[0])
+            gl.glBeginQuery(gl.GL_SAMPLES_PASSED, self._overdraw_query)
+        if prepass:
+            stats = self.render_stats
+            counted = (stats.visible_brushes, stats.visible_tris)
+            gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
+            phase, self._env_phase = self._env_phase, 4
+            try:
+                self.draw_textured_brushes_optimized(projection, view, camera_pos, textured,
+                                                     lights, config, table)
+                self.draw_lit_brushes_optimized(projection, view, camera_pos, solid, lights,
+                                                config, table=table)
+            finally:
+                self._env_phase = phase
+                gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
+                if measure:
+                    gl.glEndQuery(gl.GL_SAMPLES_PASSED)
+                    self._overdraw_pending = True
+                    measure = False
+            stats.visible_brushes, stats.visible_tris = counted
+            # Same programs, same vertices: the shaded pass meets exactly the
+            # depth the prepass wrote.
+            gl.glDepthFunc(gl.GL_LEQUAL)
+            gl.glDepthMask(gl.GL_FALSE)
+        try:
+            self.draw_textured_brushes_optimized(projection, view, camera_pos, textured,
+                                                 lights, config, table)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, solid, lights,
+                                            config, table=table)
+        finally:
+            if measure:
+                gl.glEndQuery(gl.GL_SAMPLES_PASSED)
+                self._overdraw_pending = True
+            if prepass:
+                gl.glDepthMask(gl.GL_TRUE)
+                gl.glDepthFunc(gl.GL_LESS)
+
     def cleanup(self):
         """Release HDHighRenderer's own GL resources, then RendererCore's."""
+        if self._overdraw_query:
+            gl.glDeleteQueries(1, [self._overdraw_query])
+            self._overdraw_query = 0
+            self._overdraw_pending = False
         self._cleanup_background_image()
         self._cleanup_environment()
         self._cleanup_occlusion()

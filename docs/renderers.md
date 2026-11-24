@@ -98,7 +98,7 @@ frame is finished.
    derivatives (no mesh needs tangents), the sun with shadow and cloud
    shadows, sky light, the map's lamps with their cube-map shadows, haze or
    fog.
-5. **Forward+**: with 12 or more lamps in a frame they are binned on the CPU
+5. **Forward+**: with 10 or more lamps in a frame they are binned on the CPU
    into world-space clusters (32 x 32 over the floor plan, 4 layers high) and
    a fragment loops over its cluster's lamps only. The clusters are of the
    world, not the view, so they are rebuilt when lamps change, not when the

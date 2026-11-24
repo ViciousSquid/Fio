@@ -346,13 +346,22 @@ void main() {
     const int STEPS = 28;
     vec2 delta = toSun / float(STEPS);
     vec2 uv = vUV + delta * fioDither(gl_FragCoord.xy);
+    // The weight of a step, decay * exp(-9 |off|^2) with off moving a fixed
+    // step a time, is a Gaussian along a line: kept by two multiplies a
+    // step (w *= r, r *= k) instead of an exp each.
+    vec2 off = (uv - uSun.xy) * vec2(uSun.w, 1.0);
+    vec2 step_ = delta * vec2(uSun.w, 1.0);
+    float b = dot(off, step_);
+    float c = dot(step_, step_);
+    float w = exp(-9.0 * dot(off, off));
+    float r = exp(-9.0 * (2.0 * b + c)) * 0.955;
+    float k = exp(-18.0 * c);
     float light = 0.0;
-    float decay = 1.0;
     for (int i = 0; i < STEPS; i++) {
-        vec2 off = (uv - uSun.xy) * vec2(uSun.w, 1.0);
         float open = step(0.999999, textureLod(uDepth, clamp(uv, 0.0, 1.0), 0.0).r);
-        light += open * decay * exp(-dot(off, off) * 9.0);
-        decay *= 0.955;
+        light += open * w;
+        w *= r;
+        r *= k;
         uv += delta;
     }
     vec2 here = (vUV - uSun.xy) * vec2(uSun.w, 1.0);
@@ -375,6 +384,7 @@ uniform vec4 uParams;      // exposure, bloom, saturation, contrast
 uniform vec4 uParams2;     // vignette, grain, shafts on, time
 uniform vec3 uTint;
 uniform vec3 uSunColor;
+uniform float uOpaque;     // 1: the last pass (no FXAA after): alpha 1, not luma
 """ + surface.ENV_GLSL + """
 // Extended Reinhard: straight through the shadows and mid-tones, rolling
 // off toward white (hd_graphics.tone; hdr.py inverts it for the classic
@@ -384,7 +394,7 @@ vec3 fioTone(vec3 x) {
 }
 void main() {
     vec3 colour = fioToLinear(textureLod(uColor, vUV, 0.0).rgb);
-    colour += textureLod(uBloom, vUV, 0.0).rgb * uParams.y;
+    if (uParams.y > 0.0) colour += textureLod(uBloom, vUV, 0.0).rgb * uParams.y;
     if (uParams2.z > 0.5) colour += uSunColor * textureLod(uShafts, vUV, 0.0).r;
     colour *= uTint * uParams.x;
     colour = fioTone(colour);
@@ -399,7 +409,7 @@ void main() {
     float grain = textureLod(uNoise, gl_FragCoord.xy / 256.0 + vec2(uParams2.w * 7.31, uParams2.w * 3.17), 0.0).r - 0.5;
     colour += grain * uParams2.y * (1.0 - luma * 0.6);
     colour = clamp(colour, 0.0, 1.0);
-    FragColor = vec4(colour, dot(colour, vec3(0.299, 0.587, 0.114)));
+    FragColor = vec4(colour, uOpaque > 0.5 ? 1.0 : dot(colour, vec3(0.299, 0.587, 0.114)));
 }
 """
 
@@ -538,6 +548,8 @@ class PostFXMixin:
         self._postfx_bloom = []          # [(texture, fbo, width, height)]
         self._postfx_target = None       # (fbo, viewport, scissor on)
         self._postfx_resolved = False
+        #: (framebuffer, size, viewport) -> whether the depth blit works there.
+        self._postfx_blit_works = {}
 
     def _postfx_program(self, name, fragment):
         return self._env_program(name, FULLSCREEN_VERT, fragment)
@@ -805,10 +817,18 @@ class PostFXMixin:
         width, height = self._postfx_size
         target, viewport, scissor = self._postfx_target
         self._postfx_pass_state()
-        # Bloom: down the chain, then back up, each level added to the next.
+        bloom = env.bloom > 0.0
+        if bloom:
+            self._postfx_bloom_chain(tex['colour'], width, height, exposure)
+        self._hd_mark('bloom')
+        self._postfx_finish(projection, view, exposure, bloom, target, viewport, scissor)
+
+    def _postfx_bloom_chain(self, source, width, height, exposure):
+        """Bloom: down the chain, then back up, each level added to the next."""
+        env = self.environment
+        source_w, source_h = width, height
         down = self._postfx_program('bloom_down', BLOOM_DOWN_FRAG)
         gl.glUseProgram(down.id)
-        source, source_w, source_h = tex['colour'], width, height
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindTexture(gl.GL_TEXTURE_2D, source)
         gl.glUniform1i(down['uSource'], 0)
@@ -838,7 +858,13 @@ class PostFXMixin:
             self._env_fullscreen()
         gl.glDisable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        self._hd_mark('bloom')
+
+    def _postfx_finish(self, projection, view, exposure, bloom, target, viewport, scissor):
+        """Sun shafts, tone mapping and grade, FXAA, into the view's own
+        framebuffer, and the frame's depth after it."""
+        env = self.environment
+        tex, fbo = self._postfx_textures, self._postfx_fbos
+        width, height = self._postfx_size
         # The sun's shafts.
         sun = self._postfx_sun_on_screen(projection, view) if env.sun_shafts > 0.0 else None
         shafts = sun is not None and sun[1] > 0.0
@@ -852,43 +878,43 @@ class PostFXMixin:
                            env.sun_shafts * sun[1], width / float(height))
             self._env_fullscreen()
         self._hd_mark('sun shafts')
-        # Tone map and grade.
-        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['ldr'])
-        gl.glViewport(0, 0, width, height)
+        # Tone map and grade: into the display target for FXAA to read, or,
+        # without FXAA, straight into the view's framebuffer (one full-screen
+        # pass fewer).
+        fxaa = bool(env.fxaa)
+        if fxaa:
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, fbo['ldr'])
+            gl.glViewport(0, 0, width, height)
+        else:
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
+            gl.glViewport(*viewport)
         program = self._postfx_program('compose', COMPOSE_FRAG)
         gl.glUseProgram(program.id)
         self._postfx_bind(program, 'uColor', 0, tex['colour'])
         self._postfx_bind(program, 'uBloom', 1, self._postfx_bloom[0][0])
         self._postfx_bind(program, 'uShafts', 2, tex['shafts'])
         self._postfx_bind(program, 'uNoise', surface.NOISE_UNIT, self._env_noise())
-        gl.glUniform4f(program['uParams'], exposure, env.bloom * BLOOM_GAIN, env.saturation,
-                       env.contrast)
+        gl.glUniform4f(program['uParams'], exposure,
+                       env.bloom * BLOOM_GAIN if bloom else 0.0, env.saturation, env.contrast)
+        gl.glUniform1f(program['uOpaque'], 0.0 if fxaa else 1.0)
         gl.glUniform4f(program['uParams2'], env.vignette, env.grain, 1.0 if shafts else 0.0,
                        self._env_time % 64.0)
         gl.glUniform3f(program['uTint'], *env.tint)
         gl.glUniform3f(program['uSunColor'], *self._env_sun_rgb)
         self._env_fullscreen()
-        # Anti-alias into the framebuffer the view asked for.
-        gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
-        gl.glViewport(*viewport)
-        program = self._postfx_program('fxaa', FXAA_FRAG)
-        gl.glUseProgram(program.id)
-        self._postfx_bind(program, 'uSource', 0, tex['ldr'])
-        gl.glUniform2f(program['uTexel'], 1.0 / width, 1.0 / height)
-        gl.glUniform1i(program['uEnabled'], 1 if env.fxaa else 0)
-        self._env_fullscreen()
+        if fxaa:
+            # Anti-alias into the framebuffer the view asked for.
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
+            gl.glViewport(*viewport)
+            program = self._postfx_program('fxaa', FXAA_FRAG)
+            gl.glUseProgram(program.id)
+            self._postfx_bind(program, 'uSource', 0, tex['ldr'])
+            gl.glUniform2f(program['uTexel'], 1.0 / width, 1.0 / height)
+            gl.glUniform1i(program['uEnabled'], 1)
+            self._env_fullscreen()
         # What the view draws next (its own overlays) is depth-tested
         # against the world: give its framebuffer the frame's depth.
-        try:
-            gl.glBindFramebuffer(gl.GL_READ_FRAMEBUFFER, fbo['scene'])
-            gl.glBindFramebuffer(gl.GL_DRAW_FRAMEBUFFER, target)
-            gl.glBlitFramebuffer(0, 0, width, height, viewport[0], viewport[1],
-                                 viewport[0] + width, viewport[1] + height,
-                                 gl.GL_DEPTH_BUFFER_BIT, gl.GL_NEAREST)
-        except Exception:
-            pass
-        while gl.glGetError() != gl.GL_NO_ERROR:
-            pass
+        self._postfx_blit_depth(fbo['scene'], target, width, height, viewport)
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, target)
         self._postfx_restore_units()
         gl.glUseProgram(0)
@@ -902,6 +928,35 @@ class PostFXMixin:
             self._hd_mark('compose')
             self._hd_mark_frames.append(self._hd_marks)
             self._hd_marks = {}
+
+    def _postfx_blit_depth(self, source, target, width, height, viewport):
+        """Copy the frame's depth into the view's framebuffer. Whether that
+        framebuffer can take it (a depth buffer of a matching format) is
+        found out once for each framebuffer and size, by the blit's own
+        error, not by draining the error queue every frame (a glGetError a
+        frame is a pipeline sync on threaded drivers)."""
+        key = (int(target), width, height, tuple(viewport))
+        works = self._postfx_blit_works.get(key)
+        if works is False:
+            return
+        if works is None:
+            while gl.glGetError() != gl.GL_NO_ERROR:
+                pass
+        try:
+            gl.glBindFramebuffer(gl.GL_READ_FRAMEBUFFER, source)
+            gl.glBindFramebuffer(gl.GL_DRAW_FRAMEBUFFER, target)
+            gl.glBlitFramebuffer(0, 0, width, height, viewport[0], viewport[1],
+                                 viewport[0] + width, viewport[1] + height,
+                                 gl.GL_DEPTH_BUFFER_BIT, gl.GL_NEAREST)
+            failed = False
+        except Exception:
+            failed = True
+        if works is None:
+            while gl.glGetError() != gl.GL_NO_ERROR:
+                failed = True
+            if len(self._postfx_blit_works) >= 16:
+                self._postfx_blit_works.clear()
+            self._postfx_blit_works[key] = not failed
 
     def _cleanup_postfx(self):
         self._postfx_release_targets()

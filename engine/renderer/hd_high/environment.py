@@ -290,28 +290,62 @@ class _Program:
             self.id = 0
 
 
-def load_data_texture(path, anisotropy=0.0, alpha_path=None):
-    """The image at *path* as a mip-mapped RGBA texture of plain data (a
-    normal or material map: no colour space), or 0. With *alpha_path*, that
-    image's brightness becomes the alpha channel (a height map beside a
-    normal map)."""
+def data_image_source(path):
+    """What :func:`decode_data_image` opens for *path*: the file itself, or
+    an archived asset's bytes. Resolved on the render thread (the archives
+    are not asked from another); the decode can then run anywhere."""
+    if os.path.isabs(path) and os.path.isfile(path):
+        return path                                 # a generated map in the cache
+    from engine.animated_texture import _source
+    return _source(path)
+
+
+def decode_data_image(path, source, alpha_path=None, alpha_source=None):
+    """The pixels of a normal or material map, bottom row first, as
+    ``(width, height, RGBA bytes)``, or None. With *alpha_path*, that image's
+    brightness becomes the alpha channel (a height map beside a normal map).
+    Pure PIL work, no GL: run on a worker thread (_material_for)."""
     try:
         from PIL import Image
-        from engine.animated_texture import open_still_rgba
-        if os.path.isabs(path) and os.path.isfile(path):
-            with Image.open(path) as opened:      # a generated map in the cache
-                image = opened.convert('RGBA')
-        else:
-            image = open_still_rgba(path)
+        from engine.animated_texture import check_texture_size
+        with Image.open(source) as opened:
+            check_texture_size(opened.width, opened.height, path)
+            image = opened.convert('RGBA')
         if alpha_path:
-            height = open_still_rgba(alpha_path).convert('L')
+            with Image.open(alpha_source) as opened:
+                check_texture_size(opened.width, opened.height, alpha_path)
+                height = opened.convert('L')
             if height.size != image.size:
                 height = height.resize(image.size, Image.BILINEAR)
             image.putalpha(height)
         image = image.transpose(Image.FLIP_TOP_BOTTOM)
+        return image.width, image.height, image.tobytes()
+    except Exception as exc:
+        print(f"[Environment] could not load {path}: {exc}")
+        return None
+
+
+def load_data_texture(path, anisotropy=0.0, alpha_path=None):
+    """The image at *path* as a mip-mapped RGBA texture of plain data (a
+    normal or material map: no colour space), or 0, decoded and uploaded
+    here and now. (_material_for decodes on a worker thread instead and
+    uploads with :func:`upload_data_texture`.)"""
+    try:
+        source = data_image_source(path)
+        alpha_source = data_image_source(alpha_path) if alpha_path else None
     except Exception as exc:
         print(f"[Environment] could not load {path}: {exc}")
         return 0
+    return upload_data_texture(decode_data_image(path, source, alpha_path, alpha_source),
+                               anisotropy)
+
+
+def upload_data_texture(decoded, anisotropy=0.0):
+    """A :func:`decode_data_image` result as a mip-mapped RGBA8 texture, or
+    0 for None. Leaves it bound on the active unit."""
+    if not decoded:
+        return 0
+    width, height, pixels = decoded
     texture = int(gl.glGenTextures(1))
     gl.glBindTexture(gl.GL_TEXTURE_2D, texture)
     gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
@@ -320,8 +354,8 @@ def load_data_texture(path, anisotropy=0.0, alpha_path=None):
                        gl.GL_LINEAR_MIPMAP_LINEAR)
     gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
     gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
-    gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, image.width, image.height,
-                    0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, image.tobytes())
+    gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, width, height,
+                    0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, pixels)
     gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
     gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
     _set_anisotropy(anisotropy)
@@ -440,6 +474,7 @@ class EnvironmentMixin:
         # Forward+: the light grid (see _env_light_grid).
         self._env_grid_tex = 0
         self._env_grid_key = None
+        self._env_grid_shape = None
         self._env_grid_params = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         self._env_grid_sent = {}
         #: For the benchmark: grids built, whether one is in use, and the
@@ -452,6 +487,12 @@ class EnvironmentMixin:
         #: emission) or None when the texture has no companion maps.
         self._material_maps = {}
         self._material_names = {}
+        #: GL texture -> its maps being made or decoded (_material_collect).
+        self._material_loading = {}
+        self._material_uploads_left = self.MATERIAL_UPLOADS_PER_FRAME
+        #: GL texture -> whether it has no alpha channel (_bind_material_maps).
+        self._texture_opaque = {}
+        self._texture_opaque_count = -1
         #: The maps on the material units now (units are shared by programs).
         self._env_units_material = None
         self._init_postfx()
@@ -643,6 +684,7 @@ class EnvironmentMixin:
         env = self.environment
         self._env_time = time.perf_counter() - self._env_started
         self._env_frame += 1
+        self._material_uploads_left = self.MATERIAL_UPLOADS_PER_FRAME
         key = env.key()
         if key != self._env_key:
             self._env_key = key
@@ -1750,7 +1792,13 @@ class EnvironmentMixin:
 
     #: Forward+ pays when there are enough lamps that most of them cannot
     #: reach a given fragment; under this many a fragment simply tests each.
-    FORWARD_PLUS_MIN_LIGHTS = 12
+    #: Measured (docs/hd_high_audit.md, "Forward+ threshold"): from 10 lamps
+    #: the grid saved 12-35% of the scene pass however the lamps were laid
+    #: out; under 6 it saved nothing where lamps overlap, and on real maps of
+    #: 7-8 lamps 0-4%, too little to cover the cost of the per-fragment lamp
+    #: index on a GPU (a divergent index into the light block, which a
+    #: software rasteriser does not charge for).
+    FORWARD_PLUS_MIN_LIGHTS = 10
 
     def _env_light_grid(self, shader_name, uniforms):
         """Forward+ for the bound surface program: bring the light grid up
@@ -1774,7 +1822,15 @@ class EnvironmentMixin:
         if count >= self.FORWARD_PLUS_MIN_LIGHTS and key:
             if key != self._env_grid_key:
                 self._env_grid_key = key
-                self._env_grid_params = self._env_build_light_grid(count)
+                # The block's key changes with what the grid does not use
+                # (a streamed lamp's fade, its cookie): rebuilt only when the
+                # lamps' places, reach or order do.
+                data = self._light_ubo_data[:count]
+                shape = (count, data['position'][:, :3].tobytes(),
+                         data['params'][:, 1].tobytes())
+                if shape != self._env_grid_shape:
+                    self._env_grid_shape = shape
+                    self._env_grid_params = self._env_build_light_grid(count)
             params = self._env_grid_params
         if self._env_grid_sent.get(shader_name) != params:
             gl.glUniform4f(location, *params[:4])
@@ -1835,18 +1891,25 @@ class EnvironmentMixin:
         stats['builds'] += 1
         stats['max_per_cell'] = int(listed.max())
         stats['mean_per_cell'] = float(listed[listed > 0].mean()) if listed.any() else 0.0
-        if not self._env_grid_tex:
+        created = not self._env_grid_tex
+        if created:
             self._env_grid_tex = int(gl.glGenTextures(1))
         gl.glActiveTexture(gl.GL_TEXTURE0 + surface.LIGHT_GRID_UNIT)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self._env_grid_tex)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
-        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_R8UI, table.shape[1], table.shape[0], 0,
-                        gl.GL_RED_INTEGER, gl.GL_UNSIGNED_BYTE, table.tobytes())
+        if created:
+            # The table's shape is fixed (surface.LIGHT_GRID_*): made once,
+            # its contents replaced after.
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_R8UI, table.shape[1], table.shape[0],
+                            0, gl.GL_RED_INTEGER, gl.GL_UNSIGNED_BYTE, table.tobytes())
+            for name in (gl.GL_TEXTURE_MIN_FILTER, gl.GL_TEXTURE_MAG_FILTER):
+                gl.glTexParameteri(gl.GL_TEXTURE_2D, name, gl.GL_NEAREST)
+            for name in (gl.GL_TEXTURE_WRAP_S, gl.GL_TEXTURE_WRAP_T):
+                gl.glTexParameteri(gl.GL_TEXTURE_2D, name, gl.GL_CLAMP_TO_EDGE)
+        else:
+            gl.glTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, table.shape[1], table.shape[0],
+                               gl.GL_RED_INTEGER, gl.GL_UNSIGNED_BYTE, table.tobytes())
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
-        for name in (gl.GL_TEXTURE_MIN_FILTER, gl.GL_TEXTURE_MAG_FILTER):
-            gl.glTexParameteri(gl.GL_TEXTURE_2D, name, gl.GL_NEAREST)
-        for name in (gl.GL_TEXTURE_WRAP_S, gl.GL_TEXTURE_WRAP_T):
-            gl.glTexParameteri(gl.GL_TEXTURE_2D, name, gl.GL_CLAMP_TO_EDGE)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         return (corner[0], corner[2], 1.0 / size, 1.0, corner[1], 1.0 / height)
 
@@ -1881,7 +1944,13 @@ class EnvironmentMixin:
                 h = gl.glGetTexLevelParameteriv(gl.GL_TEXTURE_2D, 0, gl.GL_TEXTURE_HEIGHT)
                 maps += int(w) * int(h) * 4 * 4 // 3
         gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        # The point lights' shadow array (lighting.py): six 16-bit layers a
+        # slot, every slot at the largest light's size.
+        point = 0
+        if getattr(self, '_shadow_cubemaps', None) and self._shadow_array_size > 1:
+            point = 6 * self._shadow_array_slots * self._shadow_array_size ** 2 * 2
         return {'frame targets': frame, 'bloom': bloom, 'sun shadow maps': shadow,
+                'point shadow maps': point,
                 'sky light volume': cover, 'environment maps': env, 'material maps': maps}
 
     def _bind_terrain_layers(self, terrain_gl):
@@ -1950,6 +2019,10 @@ class EnvironmentMixin:
             return self._material_maps[texture]
         except KeyError:
             pass
+        loading = self._material_loading.get(texture)
+        if loading is not None:
+            # Being made or decoded: only the job is asked, not the files.
+            return self._material_collect(texture, loading)
         from engine import material_maps
         from engine.asset_archives import asset_bytes, asset_exists
         from engine.asset_paths import confined_path
@@ -1975,9 +2048,7 @@ class EnvironmentMixin:
                 or not material_maps.is_surface_texture(relative)):
             self._material_maps[texture] = None
             return None
-        anisotropy = self._env_max_anisotropy()
         parallax, emission = 0.0, 1.0
-        normal = material = 0
         if key:
             base = os.path.splitext(key)[0]
 
@@ -1998,8 +2069,6 @@ class EnvironmentMixin:
             normal_path, material_path = companion('_n'), companion('_m')
             if normal_path and material_path:
                 height_path = companion('_h')
-                normal = load_data_texture(normal_path, anisotropy, height_path)
-                material = load_data_texture(material_path, anisotropy)
                 # Without a height there is nothing for parallax to follow.
                 has_height = bool(height_path) or normal_path.lower().endswith(('.png', '.webp'))
                 try:
@@ -2009,20 +2078,79 @@ class EnvironmentMixin:
                     parallax, emission = 0.0, 1.0
                 if not has_height:
                     parallax = 0.0
-        if not (normal and material):
-            # Made from the picture itself, by the generator, on another thread.
-            made = self._material_generated(texture, key, absolute)
+                return self._material_decode(texture, (normal_path, height_path),
+                                             (material_path, None), parallax, emission)
+        # Made from the picture itself, by the generator, on another thread.
+        self._material_loading[texture] = ('made', key, absolute)
+        return self._material_collect(texture, self._material_loading[texture])
+
+    #: Material maps uploaded at most this many textures a frame: each is
+    #: two mip-mapped images, and a map coming into view must not stall the
+    #: frame it comes into view in (a surface draws flat until its maps are in).
+    MATERIAL_UPLOADS_PER_FRAME = 2
+
+    def _material_executor(self):
+        pool = self.__dict__.get('_material_pool')
+        if pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            pool = self.__dict__['_material_pool'] = ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix='fio-materials')
+        return pool
+
+    def _material_decode(self, texture, normal, material, parallax, emission):
+        """Start decoding a texture's two maps off this thread (the files
+        are resolved here, the pixels decoded there); None meanwhile."""
+        try:
+            sources = [(path, data_image_source(path),
+                        alpha, data_image_source(alpha) if alpha else None)
+                       for path, alpha in (normal, material)]
+        except Exception as exc:
+            print(f"[Environment] could not load {normal[0]}: {exc}")
+            self._material_maps[texture] = None
+            return None
+        pool = self._material_executor()
+        jobs = [pool.submit(decode_data_image, *args) for args in sources]
+        self._material_loading[texture] = ('decode', jobs, parallax, emission)
+        return self._material_collect(texture, self._material_loading[texture])
+
+    def _material_collect(self, texture, loading):
+        """Advance a texture's maps that are being made or decoded: the
+        found maps once they are uploaded, None until then."""
+        if loading[0] == 'made':
+            made = self._material_generated(texture, loading[1], loading[2])
             if made is None:
                 return None             # still being made: asked again next time
-            if made:
-                normal = load_data_texture(made[0], anisotropy)
-                material = load_data_texture(made[1], anisotropy)
-                parallax = 0.0          # a guessed height is not worth relief
-        # Loading put the maps on the diffuse texture's unit: give it back.
-        gl.glBindTexture(gl.GL_TEXTURE_2D, int(texture))
-        if normal and material:
-            found = (normal, material, parallax, emission)
-            _set_anisotropy(anisotropy)     # the diffuse was loaded without it
+            del self._material_loading[texture]
+            if not made:
+                self._material_maps[texture] = None
+                return None
+            # A guessed height is not worth relief: no parallax.
+            return self._material_decode(texture, (made[0], None), (made[1], None), 0.0, 1.0)
+        _kind, jobs, parallax, emission = loading
+        if not all(job.done() for job in jobs) or self._material_uploads_left <= 0:
+            return None
+        self._material_uploads_left -= 1
+        del self._material_loading[texture]
+        decoded = []
+        for job in jobs:
+            try:
+                decoded.append(job.result())
+            except Exception:
+                decoded.append(None)
+        found = None
+        if all(decoded):
+            anisotropy = self._env_max_anisotropy()
+            normal = upload_data_texture(decoded[0], anisotropy)
+            material = upload_data_texture(decoded[1], anisotropy)
+            # Loading put the maps on the diffuse texture's unit: give it back.
+            gl.glBindTexture(gl.GL_TEXTURE_2D, int(texture))
+            if normal and material:
+                found = (normal, material, parallax, emission)
+                _set_anisotropy(anisotropy)     # the diffuse was loaded without it
+            else:
+                stray = [t for t in (normal, material) if t]
+                if stray:
+                    gl.glDeleteTextures(stray)
         self._material_maps[texture] = found
         return found
 
@@ -2034,7 +2162,6 @@ class EnvironmentMixin:
         pending = self.__dict__.setdefault('_material_pending', {})
         job = pending.get(texture)
         if job is None:
-            from concurrent.futures import ThreadPoolExecutor
             from engine import material_maps
             from engine.asset_archives import asset_bytes
             from engine.asset_paths import confined_path
@@ -2048,11 +2175,8 @@ class EnvironmentMixin:
                 return ()
             if not data:
                 return ()
-            pool = self.__dict__.get('_material_pool')
-            if pool is None:
-                pool = self.__dict__['_material_pool'] = ThreadPoolExecutor(
-                    max_workers=1, thread_name_prefix='fio-materials')
-            pending[texture] = pool.submit(material_maps.ensure_cached, data)
+            pending[texture] = self._material_executor().submit(
+                material_maps.ensure_cached, data)
             self.material_stats['generated'] += 1
             return None
         if not job.done():
@@ -2076,7 +2200,32 @@ class EnvironmentMixin:
             gl.glBindTexture(gl.GL_TEXTURE_2D, maps[1])
             gl.glActiveTexture(gl.GL_TEXTURE0)
             self._env_units_material = maps
-        if self._env_material_bound.get(shader_name, False) is maps:
+        # w: the diffuse has no alpha channel, so the depth prepass need not
+        # sample it (surface._TEXTURED_MAIN).
+        count = len(self.texture_manager)
+        if count != self._texture_opaque_count:
+            # Textures were loaded or freed: a GL name may now be another
+            # picture's.
+            self._texture_opaque.clear()
+            self._texture_opaque_count = count
+        opaque = self._texture_opaque.get(texture)
+        if opaque is None:
+            # Once a texture, while it is bound on unit 0 (the pass just bound it).
+            try:
+                opaque = int(gl.glGetTexLevelParameteriv(
+                    gl.GL_TEXTURE_2D, 0, gl.GL_TEXTURE_ALPHA_SIZE)) == 0
+            except Exception:
+                opaque = False
+            self._texture_opaque[texture] = opaque
+        if maps is None:
+            value = (0.0, 0.0, 0.0, 1.0 if opaque else 0.0)
+        else:
+            env = self.environment
+            value = (1.0, env.parallax * maps[2], env.emissive_gain * maps[3],
+                     1.0 if opaque else 0.0)
+        # By value: most textures' maps give the same vector, and a run of
+        # them then sends it once.
+        if self._env_material_bound.get(shader_name) == value:
             return
         uniforms = self.uniforms.get(shader_name)
         if uniforms is None:
@@ -2084,13 +2233,8 @@ class EnvironmentMixin:
         location = uniforms['uMaterial']
         if location == -1:
             return
-        if maps is None:
-            gl.glUniform4f(location, 0.0, 0.0, 0.0, 0.0)
-        else:
-            env = self.environment
-            gl.glUniform4f(location, 1.0, env.parallax * maps[2],
-                           env.emissive_gain * maps[3], 0.0)
-        self._env_material_bound[shader_name] = maps
+        gl.glUniform4f(location, *value)
+        self._env_material_bound[shader_name] = value
 
     # ------------------------------------------------------------------
     # Teardown
@@ -2100,6 +2244,8 @@ class EnvironmentMixin:
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
         self.__dict__.pop('_material_pending', None)
+        self._material_loading = {}
+        self._texture_opaque = {}
         self._cleanup_postfx()
         textures = [t for t in (self._env_shadow_tex, self._env_shadow_static_tex,
                                 self._env_noise_tex, self._env_map,
@@ -2108,6 +2254,7 @@ class EnvironmentMixin:
                                 self._env_grid_tex) if t]
         self._env_grid_tex = 0
         self._env_grid_key = None
+        self._env_grid_shape = None
         self._env_grid_sent = {}
         for maps in self._material_maps.values():
             if maps:

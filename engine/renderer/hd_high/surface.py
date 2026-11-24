@@ -148,7 +148,7 @@ vec3 fioEnvBRDF(vec3 f0, float rough, float nov) {
 
 SURFACE_GLSL = """
 // ---- physically based surfaces (engine/renderer/hd_high/surface.py) ----
-uniform int uSurfaceMode;          // 0 legacy, 1 opaque phase, 2 blended phase, 3 opaque in a portal's view
+uniform int uSurfaceMode;          // 0 legacy, 1 opaque phase, 2 blended phase, 3 opaque in a portal's view, 4 depth prepass
 uniform highp vec3 uSunDir;        // toward the sun
 uniform vec3 uSunColor;
 uniform highp mat4 uSunMatrix;     // world -> shadow clip space
@@ -161,7 +161,7 @@ uniform vec3 uAmbientHorizon;
 uniform vec3 uAmbientGround;
 uniform sampler2D uNormalMap;
 uniform sampler2D uMaterialMap;
-uniform vec4 uMaterial;            // x maps bound, y parallax depth (world units), z emission of the map, w unused
+uniform vec4 uMaterial;            // x maps bound, y parallax depth (world units), z emission of the map, w 1: the diffuse has no alpha
 uniform vec4 uSurfaceDefault;      // x roughness, y metalness, z detail strength, w unused
 uniform vec4 uAtmosphere;          // x haze density, y haze height falloff, z cloud shadow strength, w unused
 uniform vec4 uEnvParams2;          // x the environment map is a probe's whole sphere, y haze colour from uHazeColor, z gain on the environment map
@@ -273,8 +273,15 @@ highp vec2 fioParallax(highp vec2 uv, highp vec2 dx, highp vec2 dy, highp vec2 r
     // A step a texel of the height map is as fine as the map can tell
     // apart: a relief that moves the lookup three texels takes four steps,
     // not twenty, and one that moves it less than half a texel takes none.
-    highp vec2 texels = abs(reach) * vec2(textureSize(uNormalMap, 0));
-    float span = max(texels.x, texels.y);
+    highp vec2 size = vec2(textureSize(uNormalMap, 0));
+    highp vec2 texels = abs(reach) * size;
+    // ... of the mip level the lookups read: on a surface seen from afar,
+    // or at a glancing angle, a level's texel covers several of the base
+    // map's, and steps finer than that find nothing new.
+    highp vec2 fx = dx * size;
+    highp vec2 fy = dy * size;
+    float footprint = max(sqrt(max(dot(fx, fx), dot(fy, fy))), 1.0);
+    float span = max(texels.x, texels.y) / footprint;
     if (span < 0.5) return uv;
     float count = min(mix(20.0, 8.0, nov), max(ceil(span), 4.0));
     float layer = 1.0 / count;
@@ -335,7 +342,11 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
     float facing = dot(ng, fioSunDir);
     if (facing > 0.0 && fioSunColor.r + fioSunColor.g + fioSunColor.b > 0.0) {
         float lit = smoothstep(0.0, 0.08, facing);
-        if (fioSunMapped > 0.5) lit *= fioSunShadow(FragPos, ng) * fioCloudShadow(FragPos);
+        if (fioSunMapped > 0.5) {
+            lit *= fioSunShadow(FragPos, ng);
+            // The clouds' noise only where the sun still reaches.
+            if (lit > 0.0) lit *= fioCloudShadow(FragPos);
+        }
         if (lit > 0.0)
             result += fioLight(n, v, fioSunDir, diffuse, f0, rough, fioSunColor) * lit
                     * mix(1.0, occlusion, 0.5);
@@ -435,29 +446,35 @@ void fioShade(vec3 albedo, vec3 n, vec3 ng, float rough, float metal, float occl
 _TEXTURED_MAIN = """
 void main() {
     if (uSurfaceMode == 0) { fioLegacyMain(); return; }
-    fioSunBegin();
+    // The depth prepass (mode 4, colour writes off): only what decides
+    // whether the fragment exists -- its alpha, where the texture has any
+    // (uMaterial.w is 1 for a texture with no alpha channel), at the
+    // coordinate the shaded pass will use, parallax included, so the two
+    // passes keep and drop exactly the same fragments.
+    if (uSurfaceMode == 4 && uMaterial.w > 0.5) return;
     vec3 ng = normalize(Normal);
     // A thin, two-sided surface (a flag's cloth) seen from behind.
     if (dot(ng, uFogCamPos - FragPos) < 0.0) ng = -ng;
     highp vec2 uv = TexCoords;
     highp vec2 dx = dFdx(uv);
     highp vec2 dy = dFdy(uv);
-    vec3 n = ng;
-    float rough = uSurfaceDefault.x;
-    float metal = uSurfaceDefault.y;
-    float occlusion = 1.0;
-    float glow = 0.0;
+    bool axes = false;
+    highp vec3 pu = vec3(0.0);
+    highp vec3 pv = vec3(0.0);
+    highp float lu = 0.0;
+    highp float lv = 0.0;
     if (uMaterial.x > 0.5) {
         highp vec3 dp1 = dFdx(FragPos);
         highp vec3 dp2 = dFdy(FragPos);
         highp float det = dx.x * dy.y - dx.y * dy.x;
         if (abs(det) > 1e-16) {
             // The surface's own axes of u and v, in world units per repeat.
-            highp vec3 pu = (dp1 * dy.y - dp2 * dx.y) / det;
-            highp vec3 pv = (dp2 * dx.x - dp1 * dy.x) / det;
-            highp float lu = dot(pu, pu);
-            highp float lv = dot(pv, pv);
-            if (lu > 1e-10 && lv > 1e-10) {
+            pu = (dp1 * dy.y - dp2 * dx.y) / det;
+            pv = (dp2 * dx.x - dp1 * dy.x) / det;
+            lu = dot(pu, pu);
+            lv = dot(pv, pv);
+            axes = lu > 1e-10 && lv > 1e-10;
+            if (axes) {
                 highp vec3 toEye = uFogCamPos - FragPos;
                 highp float eyeDist = length(toEye);
                 vec3 v = toEye / max(eyeDist, 1e-4);
@@ -469,10 +486,23 @@ void main() {
                                      * (deep / max(nov, 0.3));
                     uv = fioParallax(uv, dx, dy, reach, nov);
                 }
-                vec3 tn = textureGrad(uNormalMap, uv, dx, dy).xyz * 2.0 - 1.0;
-                n = normalize(pu * (tn.x * inversesqrt(lu)) + pv * (tn.y * inversesqrt(lv))
-                              + ng * tn.z);
             }
+        }
+    }
+    vec4 texColor = textureGrad(texture_diffuse, uv, dx, dy);
+    if (texColor.a < 0.1) discard;
+    if (uSurfaceMode == 4) return;
+    fioSunBegin();
+    vec3 n = ng;
+    float rough = uSurfaceDefault.x;
+    float metal = uSurfaceDefault.y;
+    float occlusion = 1.0;
+    float glow = 0.0;
+    if (uMaterial.x > 0.5) {
+        if (axes) {
+            vec3 tn = textureGrad(uNormalMap, uv, dx, dy).xyz * 2.0 - 1.0;
+            n = normalize(pu * (tn.x * inversesqrt(lu)) + pv * (tn.y * inversesqrt(lv))
+                          + ng * tn.z);
         }
         vec4 mm = textureGrad(uMaterialMap, uv, dx, dy);
         occlusion = mm.r;
@@ -480,8 +510,6 @@ void main() {
         metal = mm.b;
         glow = (1.0 - mm.a) * uMaterial.z;
     }
-    vec4 texColor = textureGrad(texture_diffuse, uv, dx, dy);
-    if (texColor.a < 0.1) discard;
     texColor.rgb *= mix(vec3(1.0), model_tint.rgb, model_tint.a);
     vec3 albedo = fioToLinear(texColor.rgb);
     vec3 emission = fioToLinear(emissive_factor) * uEnvParams.z + albedo * glow;
@@ -492,6 +520,7 @@ void main() {
 _LIT_MAIN = """
 void main() {
     if (uSurfaceMode == 0) { fioLegacyMain(); return; }
+    if (uSurfaceMode == 4) return;      // the depth prepass: depth only
     fioSunBegin();
     vec3 ng = normalize(Normal);
     if (dot(ng, uFogCamPos - FragPos) < 0.0) ng = -ng;

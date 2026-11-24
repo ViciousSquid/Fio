@@ -109,4 +109,4 @@ Levitate redrew the sun's whole shadow map whenever any caster moved. HD_High ke
 
 ## Forward+
 
-With 12 or more lamps in a frame HD_High bins them into world-space clusters and each fragment loops over its cluster's lamps only (`engine/renderer/hd_high/environment.py`, `light_grid`). Of these maps only _SHOWCASE has that many: its 21 lamps came to 1.5 per occupied cluster on average and 9 at most, so a fragment there tests one or two lamps where the plain loop tests all 21.
+With 10 or more lamps in a frame (the threshold measured in `docs/hd_high_audit.md`) HD_High bins them into world-space clusters and each fragment loops over its cluster's lamps only (`engine/renderer/hd_high/environment.py`, `light_grid`). Of these maps only _SHOWCASE has that many: its 21 lamps came to 1.5 per occupied cluster on average and 9 at most, so a fragment there tests one or two lamps where the plain loop tests all 21.

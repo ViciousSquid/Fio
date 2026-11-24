@@ -354,8 +354,12 @@ class _Maps:
         from engine.renderer.hd_high import environment
         self.loaded = []
         self.texture_manager = {name: index + 1 for index, name in enumerate(names)}
-        monkeypatch.setattr(environment, "load_data_texture",
-                            lambda path, *a, **k: (self.loaded.append(path) or len(self.loaded) + 100))
+        # Decoded on the renderer's worker thread, uploaded on its own.
+        monkeypatch.setattr(environment, "data_image_source", lambda path: path)
+        monkeypatch.setattr(environment, "decode_data_image",
+                            lambda path, *a, **k: (self.loaded.append(path) or (1, 1, b"")))
+        monkeypatch.setattr(environment, "upload_data_texture",
+                            lambda decoded, *a, **k: len(self.loaded) + 100)
         monkeypatch.setattr(environment, "_set_anisotropy", lambda amount: None)
         monkeypatch.setattr(environment.gl, "glBindTexture", lambda *a: None)
         monkeypatch.setattr(environment.gl, "glGetFloatv", lambda *a: 0.0)
@@ -369,14 +373,23 @@ class _Maps:
         self.renderer.texture_manager = self.texture_manager
         self.renderer._init_environment()
 
-    def maps(self, name, wait=False):
+    def maps(self, name, wait=True):
+        """The texture's maps; with *wait*, once the worker thread has made
+        or decoded them (as a later frame would find them)."""
         texture = self.texture_manager[name]
-        found = self.renderer._material_for(texture)
-        if wait:
-            job = self.renderer.__dict__.get("_material_pending", {}).get(texture)
-            if job is not None:
-                job.result(timeout=60)
-                found = self.renderer._material_for(texture)
+        renderer = self.renderer
+        found = renderer._material_for(texture)
+        while wait and texture in renderer._material_loading:
+            loading = renderer._material_loading[texture]
+            if loading[0] == "made":
+                job = renderer.__dict__.get("_material_pending", {}).get(texture)
+                if job is not None:
+                    job.result(timeout=60)
+            else:
+                for job in loading[1]:
+                    job.result(timeout=60)
+            renderer._material_uploads_left = renderer.MATERIAL_UPLOADS_PER_FRAME
+            found = renderer._material_for(texture)
         return found
 
 
@@ -409,7 +422,7 @@ def test_a_texture_without_maps_gets_them_made_and_kept(monkeypatch, tmp_path):
     Image.fromarray(rng.integers(0, 255, (64, 64, 3), dtype=np.uint8)).save(picture)
     world = _Maps(["model_tex:" + str(picture)], monkeypatch)
     name = "model_tex:" + str(picture)
-    assert world.maps(name) is None                  # being made, off this thread
+    assert world.maps(name, wait=False) is None      # being made, off this thread
     found = world.maps(name, wait=True)
     assert found is not None and found[2] == 0.0     # a guessed height: no parallax
     assert world.renderer.material_stats["generated"] == 1

@@ -93,6 +93,16 @@ def _measure(gl, renderer, context, frame, matrices, frames, hd):
                               brush_slots=frame['all_brush_slots'])
         gl.glFinish()
         time.sleep(0.05)                    # generated material maps arrive
+    # Material maps are decoded off the render thread and uploaded a few a
+    # frame: draw until every map the view asked for is in.
+    for _ in range(400):
+        if not getattr(renderer, '_material_loading', None):
+            break
+        context.bind()
+        renderer.render_scene(projection, view, eye, None, frame,
+                              brush_slots=frame['all_brush_slots'])
+        gl.glFinish()
+        time.sleep(0.01)
     if hd:
         renderer.hd_timing(True)
         renderer.hd_timing_collect()
