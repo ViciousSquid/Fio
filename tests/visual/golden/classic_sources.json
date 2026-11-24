@@ -17,7 +17,7 @@
  "engine/renderer/forward/decals.py": "5a07d318aebb8a7c9c95856cd8aa327366ff647764e30dd8c8ad8b30202ecfb5",
  "engine/renderer/forward/explosion_rows.py": "41a5c04dfc43a9ad81b9c3f138363b4e0dd49bf546c53206f4c050f5d4842df4",
  "engine/renderer/forward/instancing.py": "c12cda944314653592e3065771580b6b1236a93c51800fea550d4dfa80d3827a",
- "engine/renderer/forward/lighting.py": "0357f76c62609da9892626f6f50dd7a9adbe41748121891315f81e836eff1165",
+ "engine/renderer/forward/lighting.py": "5e6f3f57cb41be14737fc0893b7df8056d93edf9158742dda6af418070d88ea3",
  "engine/renderer/forward/occlusion.py": "3ed5997c9a3c014d4b0ca221f25ec653ae3f4721d7320aac2559f441ea931148",
  "engine/renderer/forward/overlay/__init__.py": "e774b250bade8abcac26aedfb5bc5d087e252e081cc329a2b277ab8bccf50069",
  "engine/renderer/forward/overlay/triangles.py": "43527be1431cae2aa90c22a72315601dfa08d00e1264404a05519d61d7fcfea8",

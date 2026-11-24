@@ -50,6 +50,10 @@ class LightingMixin:
 
     # --- Depth cube-map shadow mapping (omnidirectional point-light shadows) ---
     MAX_SHADOW_LIGHTS = shaders.MAX_SHADOW_LIGHTS  # authoritative point-light shadow budget
+    #: The bytes the light buffer holds (None: nothing known of it): what was
+    #: packed is uploaded only when it differs. The renderer resets it with
+    #: the buffer; a class default so anything built on this mixin alone has it.
+    _light_ubo_sent = None
 
     #: Per-face resolution of each depth cube-map ([Renderer] shadow_map_size).
     #: A cube-map is only sized when a shadow-casting light takes its slot
@@ -483,11 +487,14 @@ class LightingMixin:
             # filter differs from what this program was last given, not on
             # every lit pass.
             filters = self._shadow_filter_array()
-            sent = self._shadow_filter_sent.get(id(uniforms))
+            record = getattr(self, '_shadow_filter_sent', None)
+            if record is None:
+                record = self._shadow_filter_sent = {}
+            sent = record.get(id(uniforms))
             current = filters.tobytes()
             if sent is None or sent[0] is not uniforms or sent[1] != current:
                 gl.glUniform2fv(loc, self.MAX_SHADOW_LIGHTS, filters)
-                self._shadow_filter_sent[id(uniforms)] = (uniforms, current)
+                record[id(uniforms)] = (uniforms, current)
         cubemaps = self._shadow_cubemaps
         count = len(cubemaps)
         # What each shadow unit holds is remembered for the frame: every lit
