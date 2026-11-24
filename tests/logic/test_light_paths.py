@@ -101,6 +101,32 @@ def test_one_long_tick_spends_its_time_across_several_nodes():
     assert light.pos == pytest.approx([25.0, 0.0, 0.0])
 
 
+def test_a_path_that_loops_where_the_light_stands_arrives_once_a_tick():
+    """A node on the light, whose next node is itself (or two nodes in one
+    place that name each other), is a loop no time is spent in. It used to
+    arrive -- and fire OnPathNodeReached -- 64 times every tick."""
+    light = _Light((50, 0, 0), path_target='a')
+    runtime, io = _paths(light, _Node('a', (50, 0, 0), 'a'))
+    _run(runtime, 1.0)
+    assert len(io.fired) == 60 and set(io.fired) == {('OnPathNodeReached', 'a')}
+    assert light.pos == [50.0, 0.0, 0.0]
+
+    light = _Light((0, 0, 0), path_target='a')
+    runtime, io = _paths(light, _Node('a', (0, 0, 0), 'b'), _Node('b', (0, 0, 0), 'a'))
+    _run(runtime, 1.0)
+    assert len(io.fired) == 60
+
+
+def test_a_node_in_the_same_place_as_the_last_does_not_hold_the_journey_up():
+    light = _Light((0, 0, 0), path_target='a')
+    runtime, io = _paths(light, _Node('a', (10, 0, 0), 'b'), _Node('b', (10, 0, 0), 'c'),
+                         _Node('c', (30, 0, 0)))
+    _run(runtime, 1.0)
+    assert light.pos == pytest.approx([30.0, 0.0, 0.0])
+    assert io.fired == [('OnPathNodeReached', 'a'), ('OnPathNodeReached', 'b'),
+                        ('OnPathNodeReached', 'c'), ('OnPathEnd', None)]
+
+
 def test_it_waits_for_start_path_and_pauses_on_stop_path():
     light = _Light((0, 0, 0), path_target='a', path_start_on=False)
     runtime, io = _paths(light, _Node('a', (300, 0, 0)))

@@ -199,8 +199,9 @@ class LightPaths:
             target = [float(v) for v in node.pos[:3]]
             length = math.dist(origin, target)
             speed = path_speed(light.properties) * float(node.get_speed())
-            if length < 1e-6:
-                reached, delta = True, delta
+            standing = length < 1e-6
+            if standing:
+                reached = True
             elif speed <= 0.0:
                 return
             else:
@@ -223,6 +224,12 @@ class LightPaths:
                     return
                 if not journey['running']:
                     return          # stopped by the arrival's output: stay here
+                if standing:
+                    # A node where the light already was took none of the
+                    # tick. One such arrival a tick, as a mover's path takes:
+                    # a path that loops through coincident nodes would
+                    # otherwise arrive, and fire, on every pass of this loop.
+                    return
 
     def _next(self, journey):
         """On to the current node's next node; False at the end of the path."""

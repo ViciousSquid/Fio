@@ -72,6 +72,7 @@ head-less test -- still imports this module.
 from __future__ import annotations
 
 import math
+import functools
 import os
 import time
 from itertools import chain
@@ -228,9 +229,20 @@ def _monster_sprite_candidates(props, rotation=None):
         custom, sprite_type = props.get('custom_shoot', ''), 'shoot'
     else:
         custom, sprite_type = props.get('custom_idle', ''), 'idle'
+    try:
+        return _sprite_recipe(custom, sprite_type, props.get('monster_type', 'human'),
+                              props.get('variant', '<None>'), rotation)
+    except TypeError:               # an unhashable authored value: build it
+        return _sprite_recipe.__wrapped__(
+            custom, sprite_type, props.get('monster_type', 'human'),
+            props.get('variant', '<None>'), rotation)
 
-    mtype = props.get('monster_type', 'human')
-    variant = props.get('variant', '<None>')
+
+@functools.lru_cache(maxsize=4096)
+def _sprite_recipe(custom, sprite_type, mtype, variant, rotation):
+    """The candidates for one monster state. A pure function of its
+    arguments, and asked for the same few again on every heading change, so
+    the answers are kept."""
     key = 'msprite_%s_%s_%s_%s' % (mtype, variant, sprite_type, custom)
 
     candidates = []
@@ -1159,7 +1171,8 @@ class EntityTable:
                         effect_store.pos[store_indices[valid]] = self.pos[
                             effect_slots[valid]
                         ]
-        fallback = [slot for slot in moved if slot not in set(moved_slots)]
+        fast = set(moved_slots)
+        fallback = [slot for slot in moved if slot not in fast]
         if fallback:
             self._read_positions(things, fallback)
         if shown:
