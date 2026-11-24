@@ -1604,6 +1604,9 @@ class MainWindow(QMainWindow):
         # A clone while one is still being placed drops the pending one first,
         # so repeated Shift+Space never strands half-placed duplicates.
         self.finish_clone_placement()
+        # A copy is of the object as placed, not at the angle a running
+        # preview has turned it to.
+        self.stop_mover_preview()
         self.save_state()
 
         # Offset based on the current 2D view, in grid-size steps
@@ -1892,6 +1895,13 @@ class MainWindow(QMainWindow):
             # changes page, so the Preview button it resets is the one that
             # started it, not one on the page about to be shown.
             self.stop_rotate_preview()
+        timer = getattr(self, 'preview_timer', None)
+        if (timer is not None and timer.isActive()
+                and self.preview_data.get('obj') is not primary):
+            # A mover or door preview ends with its selection too: it was
+            # stopped only by its own button and by Save, and went on moving
+            # a brush nobody was looking at.
+            self.stop_mover_preview()
         self.update_all_ui(selection_only=True)
         self.selection_changed.emit()
 
@@ -2720,6 +2730,7 @@ class MainWindow(QMainWindow):
 
     def copy_selection(self):
         """Copy the current object/multi-selection into the editor clipboard."""
+        self.stop_mover_preview()       # as placed, not as a preview has it
         sources = list(self.state.selected_objects or [])
 
         if sources:
@@ -3334,10 +3345,12 @@ class MainWindow(QMainWindow):
         # Only once Play is certain to start: a refused Play must leave the
         # side panel on the tab the author was using.
         self._store_and_switch_to_debug_console()
-        # The game drives a model's Rotate itself: an editor preview of one
-        # ends here, the model back as placed.
-        if getattr(self, 'rotate_preview', None) is not None and self.rotate_preview.active:
-            self.stop_rotate_preview()
+        # The game drives movers and a model's Rotate itself: an editor
+        # preview of either ends here, the object back as placed (a mover
+        # preview left running drove the brush's transform during Play). A
+        # drag or a pending clone does not survive into Play either.
+        self._end_gesture()
+        self.stop_mover_preview()
 
         if hasattr(self, 'mode_label'):
             self.mode_label.setText("PLAY MODE")
@@ -3762,13 +3775,34 @@ class MainWindow(QMainWindow):
         self.components.invalidate()
         self.mark_as_modified() # Mark as dirty when state is saved for undo
 
+    def _end_gesture(self):
+        """Cancel a gesture in flight -- a gizmo drag, copies not yet placed.
+        Each holds objects and the undo checkpoint it took; the history or
+        the mode changing under it left it moving objects no longer in the
+        scene, and its later cancel dropped a checkpoint that was not its
+        own. True when there was one."""
+        gizmo = getattr(getattr(self, 'view_3d', None), 'gizmo', None)
+        if gizmo is not None and gizmo.dragging:
+            gizmo.cancel()
+            return True
+        if self.clone_placement:
+            self.cancel_clone_placement()
+            return True
+        return False
+
     def undo(self):
+        if self._end_gesture():
+            return                  # Ctrl+Z mid-drag takes the drag back
+        self.stop_mover_preview()   # its brush may not be in the scene after
         if self.state.undo():
             self._resync_components_after_history()
             self.mark_as_modified() # Undo changes state
             self.update_all_ui()
 
     def redo(self):
+        if self._end_gesture():
+            return
+        self.stop_mover_preview()
         if self.state.redo():
             self._resync_components_after_history()
             self.mark_as_modified() # Redo changes state
@@ -5462,6 +5496,8 @@ class MainWindow(QMainWindow):
         selected = self.with_group_mates(chosen)
         if pivot is None and len(selected) != len(chosen):
             pivot = self.selection_centre()
+        # A locked object does not turn, as it does not move or scale.
+        selected = self.movable_with_mates(chosen)
         brushes = [b for b in selected if isinstance(b, dict)]
         things = [t for t in selected if not isinstance(t, dict)]
         if not brushes and not (things and pivot is not None):
@@ -5902,6 +5938,11 @@ class MainWindow(QMainWindow):
 
         loaded = False
         open_level = None
+        # A drag, pending copies or a preview hold objects of the level that
+        # is about to go: a preview's timer went on driving a brush of the
+        # closed map.
+        self._end_gesture()
+        self.stop_mover_preview()
         try:
             # A level change during play: end the running session *before*
             # the scene is replaced.  Its teardown (movers, doors, Props, the
