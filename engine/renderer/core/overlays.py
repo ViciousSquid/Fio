@@ -11,6 +11,7 @@ import ctypes
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from . import gl_state
 
 from engine.constants import brush_aabb_bounds
 from .diagnostics import timed_pass
@@ -89,7 +90,7 @@ class OverlaysMixin:
                 return
         if grid_size <= 0:
             if self.vaos['grid']:
-                gl.glDeleteVertexArrays(1, [self.vaos['grid']])
+                gl_state.glDeleteVertexArrays(1, [self.vaos['grid']])
                 if hasattr(self, '_grid_vbo') and self._grid_vbo:
                     gl.glDeleteBuffers(1, [self._grid_vbo])
                     self._grid_vbo = None
@@ -100,17 +101,17 @@ class OverlaysMixin:
         grid_vertices = np.array(lines, dtype=np.float32).flatten()
         self.grid_indices_count = len(grid_vertices) // 3
         if self.vaos['grid']:
-            gl.glDeleteVertexArrays(1, [self.vaos['grid']])
+            gl_state.glDeleteVertexArrays(1, [self.vaos['grid']])
         if hasattr(self, '_grid_vbo') and self._grid_vbo:
             gl.glDeleteBuffers(1, [self._grid_vbo])
         vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
+        gl_state.glBindVertexArray(vao)
         vbo = gl.glGenBuffers(1)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, grid_vertices.nbytes, grid_vertices, gl.GL_STATIC_DRAW)
         gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self._grid_vbo = vbo
         self.vaos['grid'] = vao
 
@@ -119,22 +120,22 @@ class OverlaysMixin:
         if not self.vaos['grid'] or play_mode or not grid_visible or 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         uniform_matrix4(uniforms['model'], glm.value_ptr(self._identity_mat4))
-        gl.glUniform3f(uniforms['color'], 0.2, 0.2, 0.2)
-        gl.glUniform1f(uniforms['alpha'], 1.0)
-        gl.glBindVertexArray(self.vaos['grid'])
+        gl_state.glUniform3f(uniforms['color'], 0.2, 0.2, 0.2)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glBindVertexArray(self.vaos['grid'])
         gl.glDrawArrays(gl.GL_LINES, 0, grid_indices_count)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def _create_gizmo_buffers(self):
         axis_verts = np.array([0,0,0, 1,0,0, 0,0,0, 0,1,0, 0,0,0, 0,0,1], dtype=np.float32)
         self.vao_gizmo_lines = gl.glGenVertexArrays(1)
         vbo = gl.glGenBuffers(1)
         self._gizmo_lines_vbo = vbo
-        gl.glBindVertexArray(self.vao_gizmo_lines)
+        gl_state.glBindVertexArray(self.vao_gizmo_lines)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, axis_verts.nbytes, axis_verts, gl.GL_STATIC_DRAW)
         gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
@@ -149,30 +150,30 @@ class OverlaysMixin:
         self.vao_gizmo_cone = gl.glGenVertexArrays(1)
         vbo2 = gl.glGenBuffers(1)
         self._gizmo_cone_vbo = vbo2
-        gl.glBindVertexArray(self.vao_gizmo_cone)
+        gl_state.glBindVertexArray(self.vao_gizmo_cone)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo2)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, cone_verts.nbytes, cone_verts, gl.GL_STATIC_DRAW)
         gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def render_gizmo(self, projection, view, position):
         if 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         pos_vec = glm.vec3(*position) if isinstance(position, (list, tuple)) else position
         base = glm.scale(glm.translate(self._identity_mat4, pos_vec), glm.vec3(32.0))
         model_loc, color_loc = uniforms['model'], uniforms['color']
-        gl.glUniform1f(uniforms['alpha'], 1.0)
-        gl.glBindVertexArray(self.vao_gizmo_lines)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glBindVertexArray(self.vao_gizmo_lines)
         uniform_matrix4(model_loc, glm.value_ptr(base))
         for i,c in enumerate([(1,0,0), (0,1,0), (0,0,1)]):
-            gl.glUniform3f(color_loc, *c)
+            gl_state.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_LINES, i*2, 2)
-        gl.glBindVertexArray(self.vao_gizmo_cone)
+        gl_state.glBindVertexArray(self.vao_gizmo_cone)
         for axis, c, rot in [((1,0,0), (1,0,0), glm.rotate(base, glm.radians(-90), glm.vec3(0,0,1))),
                              ((0,1,0), (0,1,0), base),
                              ((0,0,1), (0,0,1), glm.rotate(base, glm.radians(90), glm.vec3(1,0,0)))]:
@@ -181,22 +182,22 @@ class OverlaysMixin:
             if axis[2]: m = glm.translate(glm.rotate(base, glm.radians(90), glm.vec3(1,0,0)), glm.vec3(0,1,0))
             if axis[1]: m = glm.translate(base, glm.vec3(0,1,0))
             uniform_matrix4(model_loc, glm.value_ptr(m))
-            gl.glUniform3f(color_loc, *c)
+            gl_state.glUniform3f(color_loc, *c)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.gizmo_cone_v_count)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def draw_selected_brush_outline(self, projection, view, pos, size,
                                     brush_id=None, table=None):
         if 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         model_matrix = glm.scale(glm.translate(self._identity_mat4, glm.vec3(*pos)), glm.vec3(*size))
         uniform_matrix4(uniforms['model'], glm.value_ptr(model_matrix))
-        gl.glUniform3f(uniforms['color'], 1.0, 1.0, 0.0)
-        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glUniform3f(uniforms['color'], 1.0, 1.0, 0.0)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
         edge_vao = self._ensure_edge_vao()
         gl.glLineWidth(1.0)
         # The selection is a SelectionOverlay (an id and copied numbers); a
@@ -213,12 +214,12 @@ class OverlaysMixin:
                         mesh = meshes[gid]
         if mesh is not None and mesh.edge_count:
             # Angled brush: outline its real convex edges instead of the AABB.
-            gl.glBindVertexArray(mesh.edge_vao)
+            gl_state.glBindVertexArray(mesh.edge_vao)
             gl.glDrawArrays(gl.GL_LINES, 0, mesh.edge_count)
         else:
-            gl.glBindVertexArray(edge_vao)
+            gl_state.glBindVertexArray(edge_vao)
             gl.glDrawArrays(gl.GL_LINES, 0, 24)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def _ensure_edge_vao(self):
         """The unit cube's 12 edges as GL_LINES (24 vertices), made once."""
@@ -232,13 +233,13 @@ class OverlaysMixin:
                  0.5,-0.5, 0.5,  0.5, 0.5, 0.5, -0.5,-0.5, 0.5, -0.5, 0.5, 0.5,
             ], dtype=np.float32)
             self._edge_vao = gl.glGenVertexArrays(1)
-            gl.glBindVertexArray(self._edge_vao)
+            gl_state.glBindVertexArray(self._edge_vao)
             vbo = gl.glGenBuffers(1)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
             gl.glBufferData(gl.GL_ARRAY_BUFFER, edge_vertices.nbytes, edge_vertices, gl.GL_STATIC_DRAW)
             gl.glEnableVertexAttribArray(0)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-            gl.glBindVertexArray(0)
+            gl_state.glBindVertexArray(0)
             self._edge_vbo = vbo
         return self._edge_vao
 
@@ -307,7 +308,7 @@ class OverlaysMixin:
         if 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
 
@@ -343,19 +344,19 @@ class OverlaysMixin:
         if vao is None:
             vao = self._aabb_vao = gl.glGenVertexArrays(1)
             vbo = self._aabb_vbo = gl.glGenBuffers(1)
-            gl.glBindVertexArray(vao)
+            gl_state.glBindVertexArray(vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
             gl.glEnableVertexAttribArray(0)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-            gl.glBindVertexArray(0)
-        gl.glBindVertexArray(vao)
+            gl_state.glBindVertexArray(0)
+        gl_state.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data, gl.GL_DYNAMIC_DRAW)
-        gl.glUniform3f(uniforms['color'], 1.0, 140.0 / 255.0, 0.0)
-        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glUniform3f(uniforms['color'], 1.0, 140.0 / 255.0, 0.0)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
         self._set_line_width(1.0)
         gl.glDrawArrays(gl.GL_LINES, 0, len(vertices) // 3)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def draw_face_highlight(self, projection, view, triangles):
         """Highlight a face: *triangles* is ``(n, 3)`` float32, world space
@@ -376,18 +377,18 @@ class OverlaysMixin:
         if triangles is None or not len(triangles) or 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         uniform_matrix4(uniforms['model'], glm.value_ptr(self._identity_mat4))
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        gl.glUniform3f(uniforms['color'], *colour)
-        gl.glUniform1f(uniforms['alpha'], alpha)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glUniform3f(uniforms['color'], *colour)
+        gl_state.glUniform1f(uniforms['alpha'], alpha)
         self._draw_face_highlight_verts(
             np.ascontiguousarray(triangles, dtype=np.float32).ravel(), uniforms)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glUseProgram(0)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glUseProgram(0)
 
     def _draw_face_highlight_verts(self, verts, uniforms):
         """Upload and draw a fill+wire face highlight for arbitrary geometry."""
@@ -396,22 +397,22 @@ class OverlaysMixin:
         if self.face_highlight_vao is None:
             self.face_highlight_vao = gl.glGenVertexArrays(1)
             self.face_highlight_vbo = gl.glGenBuffers(1)
-            gl.glBindVertexArray(self.face_highlight_vao)
+            gl_state.glBindVertexArray(self.face_highlight_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.face_highlight_vbo)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
             gl.glEnableVertexAttribArray(0)
-            gl.glBindVertexArray(0)
-        gl.glBindVertexArray(self.face_highlight_vao)
+            gl_state.glBindVertexArray(0)
+        gl_state.glBindVertexArray(self.face_highlight_vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.face_highlight_vbo)
         # Orphan-and-refill so the buffer resizes for any face vertex count.
         gl.glBufferData(gl.GL_ARRAY_BUFFER, v_data.nbytes, v_data, gl.GL_DYNAMIC_DRAW)
         gl.glDrawArrays(gl.GL_TRIANGLES, 0, n)
-        gl.glUniform3f(uniforms['color'], 1.0, 1.0, 1.0)
-        gl.glUniform1f(uniforms['alpha'], 1.0)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+        gl_state.glUniform3f(uniforms['color'], 1.0, 1.0, 1.0)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         gl.glDrawArrays(gl.GL_TRIANGLES, 0, n)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        gl.glBindVertexArray(0)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glBindVertexArray(0)
 
     def draw_lens_water(self, drops, viewport) -> int:
         """Water on the camera's lens (engine.lens_water): *drops*
@@ -473,22 +474,22 @@ class OverlaysMixin:
             return
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         uniform_matrix4(uniforms['model'], glm.value_ptr(self._identity_mat4))
-        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
 
         if self._component_overlay_vao is None:
             self._component_overlay_vao = gl.glGenVertexArrays(1)
             self._component_overlay_vbo = gl.glGenBuffers(1)
-            gl.glBindVertexArray(self._component_overlay_vao)
+            gl_state.glBindVertexArray(self._component_overlay_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._component_overlay_vbo)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
             gl.glEnableVertexAttribArray(0)
-            gl.glBindVertexArray(0)
+            gl_state.glBindVertexArray(0)
 
-        gl.glBindVertexArray(self._component_overlay_vao)
+        gl_state.glBindVertexArray(self._component_overlay_vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._component_overlay_vbo)
         if self._component_overlay_dirty:
             data = self._component_overlay_data
@@ -500,15 +501,15 @@ class OverlaysMixin:
         # Handles are editor furniture: they must stay visible through the
         # geometry they belong to, so the depth test is off for this pass.
         depth_was_on = gl.glIsEnabled(gl.GL_DEPTH_TEST)
-        gl.glDisable(gl.GL_DEPTH_TEST)
+        gl_state.glDisable(gl.GL_DEPTH_TEST)
         offset = 0
         if cold_lines:
-            gl.glUniform3f(uniforms['color'], 0.45, 0.78, 1.0)
+            gl_state.glUniform3f(uniforms['color'], 0.45, 0.78, 1.0)
             self._set_line_width(1.0)
             gl.glDrawArrays(gl.GL_LINES, offset, cold_lines)
         offset += cold_lines
         if hot_lines_n:
-            gl.glUniform3f(uniforms['color'], 1.0, 0.66, 0.16)
+            gl_state.glUniform3f(uniforms['color'], 1.0, 0.66, 0.16)
             # Hardware that cannot draw a wide line reports a range of [1, 1],
             # and the highlight then reads by colour alone — which is why the
             # hot and cold colours are far apart rather than two shades of one.
@@ -516,20 +517,20 @@ class OverlaysMixin:
             gl.glDrawArrays(gl.GL_LINES, offset, hot_lines_n)
         offset += hot_lines_n
         if cold_points:
-            gl.glUniform3f(uniforms['color'], 0.45, 0.78, 1.0)
+            gl_state.glUniform3f(uniforms['color'], 0.45, 0.78, 1.0)
             self._set_point_size(6.0)
             gl.glDrawArrays(gl.GL_POINTS, offset, cold_points)
         offset += cold_points
         if hot_points_n:
-            gl.glUniform3f(uniforms['color'], 1.0, 0.66, 0.16)
+            gl_state.glUniform3f(uniforms['color'], 1.0, 0.66, 0.16)
             self._set_point_size(9.0)
             gl.glDrawArrays(gl.GL_POINTS, offset, hot_points_n)
         self._set_line_width(1.0)
         self._set_point_size(1.0)
         if depth_was_on:
-            gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glBindVertexArray(0)
-        gl.glUseProgram(0)
+            gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glBindVertexArray(0)
+        gl_state.glUseProgram(0)
 
     def draw_path_node_cubes(self, projection, view, table, slots):
         """The editor's PathNode markers for the entity table's node *slots*."""
@@ -539,13 +540,13 @@ class OverlaysMixin:
             return
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glUniform3f(uniforms['color'], 1.0, 0.5, 0.0)
-        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glUniform3f(uniforms['color'], 1.0, 0.5, 0.0)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
         cube_size = 16.0
-        gl.glBindVertexArray(self.vaos['cube'])
+        gl_state.glBindVertexArray(self.vaos['cube'])
         for x, y, z in table.pos[slots].tolist():
             model_matrix = glm.scale(glm.translate(self._identity_mat4,
                                                    glm.vec3(x, y, z)),
@@ -553,8 +554,8 @@ class OverlaysMixin:
             uniform_matrix4(uniforms['model'], glm.value_ptr(model_matrix))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             self.render_stats.draw_calls += 1
-        gl.glBindVertexArray(0)
-        gl.glUseProgram(0)
+        gl_state.glBindVertexArray(0)
+        gl_state.glUseProgram(0)
 
     def draw_portal_wireframes(self, projection, view, portal_table,
                                portal_slots, play_mode=False):
@@ -580,34 +581,34 @@ class OverlaysMixin:
             return
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
 
         if self._portal_outline_vao is None:
             self._portal_outline_vao = gl.glGenVertexArrays(1)
             self._portal_outline_vbo = gl.glGenBuffers(1)
-            gl.glBindVertexArray(self._portal_outline_vao)
+            gl_state.glBindVertexArray(self._portal_outline_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_outline_vbo)
             gl.glBufferData(gl.GL_ARRAY_BUFFER, 4 * 3 * 4,
                             None, gl.GL_DYNAMIC_DRAW)
             gl.glVertexAttribPointer(
                 0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
             gl.glEnableVertexAttribArray(0)
-            gl.glBindVertexArray(0)
+            gl_state.glBindVertexArray(0)
 
         if self._portal_normal_vao is None:
             self._portal_normal_vao = gl.glGenVertexArrays(1)
             self._portal_normal_vbo = gl.glGenBuffers(1)
-            gl.glBindVertexArray(self._portal_normal_vao)
+            gl_state.glBindVertexArray(self._portal_normal_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_normal_vbo)
             gl.glBufferData(gl.GL_ARRAY_BUFFER, 2 * 3 * 4,
                             None, gl.GL_DYNAMIC_DRAW)
             gl.glVertexAttribPointer(
                 0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
             gl.glEnableVertexAttribArray(0)
-            gl.glBindVertexArray(0)
+            gl_state.glBindVertexArray(0)
 
         gl.glLineWidth(1.0)
         model_loc = uniforms['model']
@@ -629,8 +630,8 @@ class OverlaysMixin:
             vdata = np.asarray(corners, dtype=np.float32).reshape(-1)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_outline_vbo)
             gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vdata.nbytes, vdata)
-            gl.glUniform3f(color_loc, float(r), float(g), float(b))
-            gl.glBindVertexArray(self._portal_outline_vao)
+            gl_state.glUniform3f(color_loc, float(r), float(g), float(b))
+            gl_state.glBindVertexArray(self._portal_outline_vao)
             gl.glDrawArrays(gl.GL_LINE_LOOP, 0, 4)
 
             basis = portal_table.portal_basis[slot]
@@ -648,18 +649,18 @@ class OverlaysMixin:
             )
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_normal_vbo)
             gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, nline.nbytes, nline)
-            gl.glUniform3f(
+            gl_state.glUniform3f(
                 color_loc,
                 min(1.0, float(r) * 1.6),
                 min(1.0, float(g) * 1.6),
                 min(1.0, float(b) * 1.6),
             )
-            gl.glBindVertexArray(self._portal_normal_vao)
+            gl_state.glBindVertexArray(self._portal_normal_vao)
             gl.glDrawArrays(gl.GL_LINES, 0, 2)
 
         gl.glLineWidth(1.0)
-        gl.glBindVertexArray(0)
-        gl.glUseProgram(0)
+        gl_state.glBindVertexArray(0)
+        gl_state.glUseProgram(0)
 
     def _line_buffer(self, vertices):
         """Bind the shared dynamic line buffer holding *vertices* (float32,
@@ -669,11 +670,11 @@ class OverlaysMixin:
             self._conn_line_vao = gl.glGenVertexArrays(1)
             self._conn_line_vbo = gl.glGenBuffers(1)
             self._conn_line_capacity = 0
-            gl.glBindVertexArray(self._conn_line_vao)
+            gl_state.glBindVertexArray(self._conn_line_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._conn_line_vbo)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
             gl.glEnableVertexAttribArray(0)
-        gl.glBindVertexArray(self._conn_line_vao)
+        gl_state.glBindVertexArray(self._conn_line_vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._conn_line_vbo)
         if vertices.nbytes > self._conn_line_capacity:
             self._conn_line_capacity = max(vertices.nbytes, 1024 * 1024)
@@ -688,18 +689,18 @@ class OverlaysMixin:
             return
         vertices = np.ascontiguousarray(segments, dtype=np.float32).ravel()
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         uniform_matrix4(uniforms['model'], glm.value_ptr(self._identity_mat4))
-        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
         self._line_buffer(vertices)
         color_loc = uniforms['color']
         for i, (r, g, b) in enumerate(np.asarray(colours, dtype=np.float32).tolist()):
-            gl.glUniform3f(color_loc, r, g, b)
+            gl_state.glUniform3f(color_loc, r, g, b)
             gl.glDrawArrays(gl.GL_LINES, i*2, 2)
-        gl.glBindVertexArray(0)
-        gl.glUseProgram(0)
+        gl_state.glBindVertexArray(0)
+        gl_state.glUseProgram(0)
 
     def draw_collision_visualization(self, projection, view, vertices, runs):
         """Debug wireframes of collision shapes: GL_LINES *vertices*
@@ -708,21 +709,21 @@ class OverlaysMixin:
         if vertices is None or not len(vertices) or 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
         uniform_matrix4(uniforms['model'], glm.value_ptr(self._identity_mat4))
-        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
         # Clamped to what the driver supports (a core profile need only
         # offer 1.0); the helper caches the queried range.
         self._set_line_width(2.0)
         self._line_buffer(np.ascontiguousarray(vertices, dtype=np.float32).ravel())
         for first, count, colour in runs:
-            gl.glUniform3f(uniforms['color'], *colour)
+            gl_state.glUniform3f(uniforms['color'], *colour)
             gl.glDrawArrays(gl.GL_LINES, int(first), int(count))
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         gl.glLineWidth(1.0)
-        gl.glUseProgram(0)
+        gl_state.glUseProgram(0)
 
     def _draw_selection_overlays(self, projection, view, selection, table):
         """Outline, dashed bounds, Effect box and gizmo of a SelectionOverlay."""
@@ -742,23 +743,23 @@ class OverlaysMixin:
         """Impact marks as small dark cubes (Renderer contract)."""
         if not marks or 'simple' not in self.shaders:
             return
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         shader = self.shaders['simple']
         uniforms = self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(view)
         uniform_matrix4(uniforms['projection'], proj_ptr)
         uniform_matrix4(uniforms['view'], view_ptr)
-        gl.glBindVertexArray(self.vaos['cube'])
+        gl_state.glBindVertexArray(self.vaos['cube'])
         for mark in marks:
             pos = mark['pos']
             alpha = mark['alpha']
-            gl.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0)
+            gl_state.glUniform3f(uniforms['color'], 0.0, 0.0, 0.0)
             mat = glm.translate(glm.mat4(1.0), glm.vec3(pos[0], pos[1], pos[2]))
             mat = glm.scale(mat, glm.vec3(2.0, 2.0, 2.0))
             uniform_matrix4(uniforms['model'], glm.value_ptr(mat))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-        gl.glBindVertexArray(0)
-        gl.glDisable(gl.GL_BLEND)
+        gl_state.glBindVertexArray(0)
+        gl_state.glDisable(gl.GL_BLEND)

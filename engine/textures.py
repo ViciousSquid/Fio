@@ -1,4 +1,5 @@
 import OpenGL.GL as gl                    # FIX#9: no wildcard import
+from engine.renderer.core import gl_state
 from PyQt5.QtGui import QImage
 
 
@@ -30,7 +31,7 @@ class TextureManager:
         data = ptr.asstring(nbytes)
 
         texture_id = gl.glGenTextures(1)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, texture_id)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, texture_id)
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
         gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0,

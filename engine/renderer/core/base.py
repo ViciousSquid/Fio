@@ -21,6 +21,7 @@ at the point in its own start-up where it wants them.
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from . import gl_state
 
 from engine.view_distance import ViewDistance
 from ..api import RenderStats
@@ -189,9 +190,9 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         # Delete VAOs and VBOs
         for name, vao in self.vaos.items():
             if vao:
-                gl.glDeleteVertexArrays(1, [vao])
+                gl_state.glDeleteVertexArrays(1, [vao])
         if self._edge_vao:
-            gl.glDeleteVertexArrays(1, [self._edge_vao])
+            gl_state.glDeleteVertexArrays(1, [self._edge_vao])
         if self._edge_vbo:
             gl.glDeleteBuffers(1, [self._edge_vbo])
         if self._gizmo_lines_vbo:
@@ -201,7 +202,7 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         for vao in (self.vao_gizmo_lines, self.vao_gizmo_cone,
                     self._aabb_vao, self._component_overlay_vao):
             if vao:
-                gl.glDeleteVertexArrays(1, [vao])
+                gl_state.glDeleteVertexArrays(1, [vao])
         for vbo in (self._aabb_vbo, self._component_overlay_vbo):
             if vbo:
                 gl.glDeleteBuffers(1, [vbo])
@@ -209,19 +210,19 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         self._aabb_vao = self._aabb_vbo = None
         self._component_overlay_vao = self._component_overlay_vbo = None
         if self._portal_outline_vao:
-            gl.glDeleteVertexArrays(1, [self._portal_outline_vao])
+            gl_state.glDeleteVertexArrays(1, [self._portal_outline_vao])
         if self._portal_outline_vbo:
             gl.glDeleteBuffers(1, [self._portal_outline_vbo])
         if self._portal_normal_vao:
-            gl.glDeleteVertexArrays(1, [self._portal_normal_vao])
+            gl_state.glDeleteVertexArrays(1, [self._portal_normal_vao])
         if self._portal_normal_vbo:
             gl.glDeleteBuffers(1, [self._portal_normal_vbo])
         if self._conn_line_vao:
-            gl.glDeleteVertexArrays(1, [self._conn_line_vao])
+            gl_state.glDeleteVertexArrays(1, [self._conn_line_vao])
         if self._conn_line_vbo:
             gl.glDeleteBuffers(1, [self._conn_line_vbo])
         if self.face_highlight_vao:
-            gl.glDeleteVertexArrays(1, [self.face_highlight_vao])
+            gl_state.glDeleteVertexArrays(1, [self.face_highlight_vao])
         if self.face_highlight_vbo:
             gl.glDeleteBuffers(1, [self.face_highlight_vbo])
         for mesh in self._geo_mesh_cache.values():
@@ -243,7 +244,7 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         # the renderer that replaces this one (QtGameView.switch_renderer).
         textures = sorted({int(t) for t in self.texture_manager.values() if t})
         if textures:
-            gl.glDeleteTextures(textures)
+            gl_state.glDeleteTextures(textures)
         self.texture_manager.clear()
         self._model_draw_group_cache.clear()
         self._manual_model_textures.clear()
@@ -254,7 +255,7 @@ class RendererCore(ResourcesMixin, GeometryMixin, TablesMixin, VisibilityMixin,
         for prog in self.shaders.values():
             if prog:
                 try:
-                    gl.glDeleteProgram(prog)
+                    gl_state.glDeleteProgram(prog)
                 except Exception:
                     pass
         self.shaders.clear()

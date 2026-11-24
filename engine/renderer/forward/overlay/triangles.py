@@ -5,6 +5,7 @@ drawn over it in white.
 
 import glm
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 
 from engine import render_table
 from ...core.diagnostics import timed_pass
@@ -26,22 +27,22 @@ class OverlayMixin:
         if len(brushes) == 0 or 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glUniform3f(uniforms['color'], 1.0, 1.0, 1.0)
-        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glUniform3f(uniforms['color'], 1.0, 1.0, 1.0)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
         model_loc = uniforms['model']
         models, _normals = self._frame_transforms(table, brushes)
         geometry = (table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0
         geo_meshes = (self._prepare_geo_meshes(table, brushes[geometry])
                       if geometry.any() else {})
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
-        gl.glEnable(gl.GL_POLYGON_OFFSET_LINE)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+        gl_state.glEnable(gl.GL_POLYGON_OFFSET_LINE)
         gl.glPolygonOffset(-1.0, -1.0)
-        gl.glDepthFunc(gl.GL_LEQUAL)
-        gl.glDepthMask(gl.GL_FALSE)
+        gl_state.glDepthFunc(gl.GL_LEQUAL)
+        gl_state.glDepthMask(gl.GL_FALSE)
         cube_vao = self.vaos['cube']
         bound_vao = None
         upload_model = uniform_rows('mat4', models)
@@ -50,13 +51,13 @@ class OverlayMixin:
                     if geometry[index] else None)
             vao, count = (mesh.vao, mesh.count) if mesh is not None else (cube_vao, 36)
             if vao != bound_vao:
-                gl.glBindVertexArray(vao)
+                gl_state.glBindVertexArray(vao)
                 bound_vao = vao
             upload_model(model_loc, index)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, count)
             self.render_stats.draw_calls += 1
-        gl.glBindVertexArray(0)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glDepthFunc(gl.GL_LESS)
-        gl.glDisable(gl.GL_POLYGON_OFFSET_LINE)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glBindVertexArray(0)
+        gl_state.glDepthMask(gl.GL_TRUE)
+        gl_state.glDepthFunc(gl.GL_LESS)
+        gl_state.glDisable(gl.GL_POLYGON_OFFSET_LINE)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)

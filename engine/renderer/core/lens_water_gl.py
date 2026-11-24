@@ -145,12 +145,13 @@ class LensWaterPass:
     def _grab(self, gl, x0, y0, w, h):
         """Copy the finished frame (resolving any multisampling) into the
         pass's texture, sized to the view."""
+        from engine.renderer.core import gl_state
         prev_draw = int(gl.glGetIntegerv(gl.GL_DRAW_FRAMEBUFFER_BINDING))
         prev_read = int(gl.glGetIntegerv(gl.GL_READ_FRAMEBUFFER_BINDING))
         if self.size != (w, h):
             self._free_target(gl)
             self.texture = gl.glGenTextures(1)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, self.texture)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, self.texture)
             gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, w, h, 0, gl.GL_RGBA,
                             gl.GL_UNSIGNED_BYTE, None)
             for param, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
@@ -177,6 +178,7 @@ class LensWaterPass:
         fractions, y down; :meth:`engine.lens_water.LensWater.frame`) over
         the finished frame in *viewport* ``(x, y, w, h)`` (default: the
         current one). Returns how many were drawn. GL state is put back."""
+        from engine.renderer.core import gl_state
         if not drops:
             return 0
         import OpenGL.GL as gl
@@ -195,13 +197,13 @@ class LensWaterPass:
             depth = gl.glIsEnabled(gl.GL_DEPTH_TEST)
             blend = gl.glIsEnabled(gl.GL_BLEND)
             cull = gl.glIsEnabled(gl.GL_CULL_FACE)
-            gl.glDisable(gl.GL_DEPTH_TEST)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glDisable(gl.GL_CULL_FACE)
+            gl_state.glDisable(gl.GL_DEPTH_TEST)
+            gl_state.glDisable(gl.GL_BLEND)
+            gl_state.glDisable(gl.GL_CULL_FACE)
             gl.glViewport(x0, y0, w, h)
-            gl.glUseProgram(self.program)
-            gl.glActiveTexture(gl.GL_TEXTURE0)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, self.texture)
+            gl_state.glUseProgram(self.program)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, self.texture)
             loc = self.locations
             n = min(MAX_DROPS, len(drops))
             data, shape = self._drops, self._stretch
@@ -212,21 +214,21 @@ class LensWaterPass:
                 data[i] = (x, 1.0 - y, r, wet)          # uv has y up
                 if len(drop) > 4:
                     shape[i] = drop[4]
-            gl.glUniform1i(loc["scene"], 0)
-            gl.glUniform4fv(loc["drops"], MAX_DROPS, data)
-            gl.glUniform1fv(loc["stretch"], MAX_DROPS, shape)
-            gl.glUniform1f(loc["soft"], WET_SOFT)
-            gl.glUniform1f(loc["opacity"], WET_OPACITY)
-            gl.glUniform1f(loc["size"], WET_SIZE)
-            gl.glUniform1f(loc["blur"], WET_BLUR)
-            gl.glUniform1i(loc["count"], n)
-            gl.glUniform1f(loc["aspect"], w / float(h))
-            gl.glBindVertexArray(self.vao)
+            gl_state.glUniform1i(loc["scene"], 0)
+            gl_state.glUniform4fv(loc["drops"], MAX_DROPS, data)
+            gl_state.glUniform1fv(loc["stretch"], MAX_DROPS, shape)
+            gl_state.glUniform1f(loc["soft"], WET_SOFT)
+            gl_state.glUniform1f(loc["opacity"], WET_OPACITY)
+            gl_state.glUniform1f(loc["size"], WET_SIZE)
+            gl_state.glUniform1f(loc["blur"], WET_BLUR)
+            gl_state.glUniform1i(loc["count"], n)
+            gl_state.glUniform1f(loc["aspect"], w / float(h))
+            gl_state.glBindVertexArray(self.vao)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
-            gl.glBindVertexArray(0)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-            gl.glActiveTexture(prev_texture_unit)
-            gl.glUseProgram(prev_program)
+            gl_state.glBindVertexArray(0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl_state.glActiveTexture(prev_texture_unit)
+            gl_state.glUseProgram(prev_program)
             gl.glViewport(*(int(v) for v in prev_viewport))
             (gl.glEnable if depth else gl.glDisable)(gl.GL_DEPTH_TEST)
             (gl.glEnable if blend else gl.glDisable)(gl.GL_BLEND)
@@ -238,23 +240,25 @@ class LensWaterPass:
             return 0
 
     def _free_target(self, gl):
+        from engine.renderer.core import gl_state
         if self.fbo:
             gl.glDeleteFramebuffers(1, [self.fbo])
             self.fbo = 0
         if self.texture:
-            gl.glDeleteTextures([self.texture])
+            gl_state.glDeleteTextures([self.texture])
             self.texture = 0
         self.size = (0, 0)
 
     def cleanup(self):
         """Release the pass's GL objects (with its context current)."""
+        from engine.renderer.core import gl_state
         try:
             import OpenGL.GL as gl
             self._free_target(gl)
             if self.vao:
-                gl.glDeleteVertexArrays(1, [self.vao])
+                gl_state.glDeleteVertexArrays(1, [self.vao])
             if self.program:
-                gl.glDeleteProgram(self.program)
+                gl_state.glDeleteProgram(self.program)
         except Exception:
             pass
         self.__init__()

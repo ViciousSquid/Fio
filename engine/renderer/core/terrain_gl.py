@@ -21,6 +21,7 @@ import time
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from . import gl_state
 from OpenGL.GL.shaders import compileProgram, compileShader
 
 from engine import shaders
@@ -201,15 +202,15 @@ class TerrainGL:
             if loc is None or loc == -1:
                 continue
             if name == 'uPalette':
-                gl.glUniform3fv(loc, len(value), np.ascontiguousarray(value, dtype=np.float32))
+                gl_state.glUniform3fv(loc, len(value), np.ascontiguousarray(value, dtype=np.float32))
             elif isinstance(value, int):
-                gl.glUniform1i(loc, value)
+                gl_state.glUniform1i(loc, value)
             elif isinstance(value, float):
-                gl.glUniform1f(loc, value)
+                gl_state.glUniform1f(loc, value)
             elif len(value) == 2:
-                gl.glUniform2f(loc, *value)
+                gl_state.glUniform2f(loc, *value)
             else:
-                gl.glUniform3f(loc, *value)
+                gl_state.glUniform3f(loc, *value)
 
     def _sync_gl_columns(self):
         """Grow the per-slot GL arrays to the table's capacity."""
@@ -239,10 +240,10 @@ class TerrainGL:
             slot = int(slot)
             if not self._block_vao[slot] or self._block_count[slot] <= 0:
                 continue
-            gl.glBindVertexArray(int(self._block_vao[slot]))
+            gl_state.glBindVertexArray(int(self._block_vao[slot]))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, int(self._block_count[slot]))
             triangles += int(self._block_count[slot]) // 3
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         return triangles
 
     def _ensure_height_page(self, page: int) -> int:
@@ -257,7 +258,7 @@ class TerrainGL:
             self._page_layers = max(1, min(self.frame.height_page_layers, limit))
         while len(self._height_pages) <= page:
             tex = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
             gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_R32F,
                             STORED_GRID, STORED_GRID, self._page_layers, 0,
                             gl.GL_RED, gl.GL_FLOAT, None)
@@ -281,7 +282,7 @@ class TerrainGL:
         # Stored row i is texel row y = i, column k is x = k; the drawn grid
         # starts GRID_BORDER texels in (terrain.vert offsets by the same).
         data = np.ascontiguousarray(table.heights[slot, :n, :n], dtype=np.float32)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
         gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
         gl.glTexSubImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, n, n, 1,
@@ -315,14 +316,14 @@ class TerrainGL:
         """Per-frame heightfield uniforms: sampler unit, tiling, gradient."""
         count, H, C, W, D = self.frame.gradient
         limit = self.frame.max_gradient_stops
-        gl.glUniform1i(u['uHeights'], unit)
-        gl.glUniform1f(u['uTiling'], float(np.float32(self.frame.tiling)))
-        gl.glUniform1i(u['uFlatMode'], 1 if self.frame.flat_mode else 0)
-        gl.glUniform1i(u['uGradCount'], count)
-        gl.glUniform1fv(u['uGradH'], limit, H)
-        gl.glUniform3fv(u['uGradC'], limit, C)
-        gl.glUniform1fv(u['uGradW'], limit, W)
-        gl.glUniform3fv(u['uGradD'], limit, D)
+        gl_state.glUniform1i(u['uHeights'], unit)
+        gl_state.glUniform1f(u['uTiling'], float(np.float32(self.frame.tiling)))
+        gl_state.glUniform1i(u['uFlatMode'], 1 if self.frame.flat_mode else 0)
+        gl_state.glUniform1i(u['uGradCount'], count)
+        gl_state.glUniform1fv(u['uGradH'], limit, H)
+        gl_state.glUniform3fv(u['uGradC'], limit, C)
+        gl_state.glUniform1fv(u['uGradW'], limit, W)
+        gl_state.glUniform3fv(u['uGradD'], limit, D)
 
     def _index_vao(self, res: int) -> int:
         """The vertex array a chunk of *res* quads a side is drawn with: no
@@ -334,7 +335,7 @@ class TerrainGL:
             vao = int(gl.glGenVertexArrays(1))
             buffer = int(gl.glGenBuffers(1))
             indices = heightfield_indices(res)
-            gl.glBindVertexArray(vao)
+            gl_state.glBindVertexArray(vao)
             gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, buffer)
             gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices,
                             gl.GL_STATIC_DRAW)
@@ -368,7 +369,7 @@ class TerrainGL:
             paint = [version if slot in layers else 0
                      for slot, version in zip(order, paint)]
         bound_res = -1
-        gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + unit)
         lods = table.lod[slots].tolist() if lod_level_loc != -1 else None
         loc_chunk_i, loc_chunk_x, loc_chunk_y = (
             u['uChunkI'], u['uChunkX'], u['uChunkY'])
@@ -383,37 +384,37 @@ class TerrainGL:
             slot = order[i]
             page = slot // page_layers
             if page != bound_page:
-                gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._height_pages[page])
+                gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._height_pages[page])
                 bound_page = page
             if paint_unit is not None:
                 if paint is not None and paint[i]:
                     paint_page, paint_layer = divmod(
                         self._paint_layer[slot], self._paint_page_layers)
                     if paint_page != bound_paint_page:
-                        gl.glActiveTexture(gl.GL_TEXTURE0 + paint_unit)
-                        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY,
+                        gl_state.glActiveTexture(gl.GL_TEXTURE0 + paint_unit)
+                        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY,
                                          self._paint_pages[paint_page])
                         bound_paint_page = paint_page
-                        gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
+                        gl_state.glActiveTexture(gl.GL_TEXTURE0 + unit)
                     if paint_enabled != 1:
-                        gl.glUniform1i(u['uPaintEnabled'], 1)
+                        gl_state.glUniform1i(u['uPaintEnabled'], 1)
                         paint_enabled = 1
-                    gl.glUniform1i(u['uPaintLayer'], paint_layer)
+                    gl_state.glUniform1i(u['uPaintLayer'], paint_layer)
                 elif paint_enabled != 0:
-                    gl.glUniform1i(u['uPaintEnabled'], 0)
+                    gl_state.glUniform1i(u['uPaintEnabled'], 0)
                     paint_enabled = 0
             if lods is not None:
-                gl.glUniform1i(lod_level_loc, lods[i])
-            gl.glUniform2i(loc_chunk_i, res, layer)
-            gl.glUniform3f(loc_chunk_x, *cx)
-            gl.glUniform2f(loc_chunk_y, *cy)
+                gl_state.glUniform1i(lod_level_loc, lods[i])
+            gl_state.glUniform2i(loc_chunk_i, res, layer)
+            gl_state.glUniform3f(loc_chunk_x, *cx)
+            gl_state.glUniform2f(loc_chunk_y, *cy)
             if res != bound_res:
-                gl.glBindVertexArray(self._index_vao(res))
+                gl_state.glBindVertexArray(self._index_vao(res))
                 bound_res = res
             draw_elements(gl.GL_TRIANGLES, 6 * res * res, gl.GL_UNSIGNED_INT, 0)
             triangles += 2 * res * res
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindVertexArray(0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glBindVertexArray(0)
         return triangles
 
     def _draw_grass(self, visible_slots, projection, view, camera_pos, env_uniforms):
@@ -425,23 +426,23 @@ class TerrainGL:
         last = getattr(self, '_grass_last_time', now)
         self.grass_time = (self.grass_time + max(0.0, min(now - last, 0.1))) % 100000.0
         self._grass_last_time = now
-        gl.glUseProgram(self.grass_shader_program)
+        gl_state.glUseProgram(self.grass_shader_program)
         u = self.grass_uniforms
         uniform_matrix4(u['projection'], glm.value_ptr(projection))
         uniform_matrix4(u['view'], glm.value_ptr(view))
-        gl.glUniform1f(u['time'], self.grass_time)
-        gl.glUniform3f(u['grassColor'], *self.frame.grass_color)
-        gl.glUniform3f(u['cameraPos'], float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
-        gl.glUniform1f(u['windStrength'], 0.65)
-        gl.glUniform3f(u['grassTipColor'], *self.frame.grass_tip_colour)
-        gl.glUniform1i(u['uMatchGround'], 1 if self.frame.grass_match_ground else 0)
-        gl.glUniform1i(u['uTipAuto'], 1 if self.frame.grass_tip_auto else 0)
-        gl.glUniform1f(u['uLodStart'], self.frame.grass_lod_start)
-        gl.glUniform1f(u['uLodEnd'], self.frame.grass_lod_distance)
-        gl.glUniform1f(u['uFadeStart'], min(self.frame.grass_fade_start, self.frame.grass_max_distance))
-        gl.glUniform1f(u['uFadeEnd'], self.frame.grass_max_distance)
-        gl.glUniform1f(u['uBladeHeight'], self.frame.grass_height)
-        gl.glUniform1f(u['uBladeWidth'], self.frame.grass_blade_width)
+        gl_state.glUniform1f(u['time'], self.grass_time)
+        gl_state.glUniform3f(u['grassColor'], *self.frame.grass_color)
+        gl_state.glUniform3f(u['cameraPos'], float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
+        gl_state.glUniform1f(u['windStrength'], 0.65)
+        gl_state.glUniform3f(u['grassTipColor'], *self.frame.grass_tip_colour)
+        gl_state.glUniform1i(u['uMatchGround'], 1 if self.frame.grass_match_ground else 0)
+        gl_state.glUniform1i(u['uTipAuto'], 1 if self.frame.grass_tip_auto else 0)
+        gl_state.glUniform1f(u['uLodStart'], self.frame.grass_lod_start)
+        gl_state.glUniform1f(u['uLodEnd'], self.frame.grass_lod_distance)
+        gl_state.glUniform1f(u['uFadeStart'], min(self.frame.grass_fade_start, self.frame.grass_max_distance))
+        gl_state.glUniform1f(u['uFadeEnd'], self.frame.grass_max_distance)
+        gl_state.glUniform1f(u['uBladeHeight'], self.frame.grass_height)
+        gl_state.glUniform1f(u['uBladeWidth'], self.frame.grass_blade_width)
 
         if env_uniforms:
             for name, value in env_uniforms.items():
@@ -449,22 +450,22 @@ class TerrainGL:
                 if loc == -1:
                     continue
                 if isinstance(value, int):
-                    gl.glUniform1i(loc, value)
+                    gl_state.glUniform1i(loc, value)
                 elif isinstance(value, float):
-                    gl.glUniform1f(loc, value)
+                    gl_state.glUniform1f(loc, value)
                 else:
-                    gl.glUniform3f(loc, *value)
+                    gl_state.glUniform3f(loc, *value)
 
         # Opaque tapered blades. Explicitly restore the depth state here:
         # grass must test against the already-rendered terrain, not inherit
         # depth state from a preceding renderer pass.
-        gl.glDisable(gl.GL_BLEND)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LEQUAL)
-        gl.glDepthMask(gl.GL_TRUE)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthFunc(gl.GL_LEQUAL)
+        gl_state.glDepthMask(gl.GL_TRUE)
         cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glDisable(gl.GL_CULL_FACE)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         dist_sq = self.frame.table.nearest_dist_sq(
             visible_slots, float(camera_pos.x), float(camera_pos.z))
         max_sq = self.frame.grass_max_distance * self.frame.grass_max_distance
@@ -480,17 +481,17 @@ class TerrainGL:
             # cannot be seen.
             lod_sq = self.frame.grass_lod_distance * self.frame.grass_lod_distance
             segments = self.frame.grass_segments if d < lod_sq else 1
-            gl.glUniform1i(u['uSegments'], segments)
-            gl.glBindVertexArray(int(self._grass_vao[slot]))
+            gl_state.glUniform1i(u['uSegments'], segments)
+            gl_state.glBindVertexArray(int(self._grass_vao[slot]))
             gl.glDrawArraysInstanced(
                 gl.GL_TRIANGLES, 0, grass_vertex_count(segments),
                 int(self._grass_count[slot]))
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         # Grass blades are double-sided. Put culling back the way it was
         # found -- the terrain pass runs with it off. Forcing it on leaked
         # into Qt's overlay painter, which then culled the SysMon panel.
         if cull_was:
-            gl.glEnable(gl.GL_CULL_FACE)
+            gl_state.glEnable(gl.GL_CULL_FACE)
 
     def _ensure_placeholder_cubemap(self) -> int:
         """Lazily create a 1x1 complete cube-map used for shadow sampler units
@@ -501,7 +502,7 @@ class TerrainGL:
         if self._placeholder_cubemap:
             return self._placeholder_cubemap
         tex = int(gl.glGenTextures(1))
-        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, tex)
+        gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, tex)
         black = (ctypes.c_ubyte * 4)(0, 0, 0, 255)
         for face in range(6):
             gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, gl.GL_RGBA,
@@ -511,7 +512,7 @@ class TerrainGL:
         gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
         gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
         gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
-        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
         self._placeholder_cubemap = tex
         return self._placeholder_cubemap
 
@@ -526,7 +527,7 @@ class TerrainGL:
             self._paint_page_layers = max(1, min(self.frame.paint_page_layers, limit))
         while len(self._paint_pages) <= page:
             tex = int(gl.glGenTextures(1))
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
             side = int(self.frame.paint_resolution)
             levels = 0
             for level in range(self.PAINT_MIP_LEVELS + 1):
@@ -639,7 +640,7 @@ class TerrainGL:
         page, layer = divmod(number, self._paint_page_layers)
         tex = self._ensure_paint_page(page)
         data = np.ascontiguousarray(paint, dtype=np.uint8)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
         gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
         side = int(self.frame.paint_resolution)
@@ -674,14 +675,14 @@ class TerrainGL:
         for slot in slots:
             slot = int(slot)
             if self._grass_vao[slot]:
-                gl.glDeleteVertexArrays(1, [int(self._grass_vao[slot])])
+                gl_state.glDeleteVertexArrays(1, [int(self._grass_vao[slot])])
             if self._grass_vbo[slot]:
                 gl.glDeleteBuffers(1, [int(self._grass_vbo[slot])])
             self._grass_vao[slot] = self._grass_vbo[slot] = 0
             self._grass_count[slot] = 0
             self._grass_version[slot] = 0
             if self._block_vao[slot]:
-                gl.glDeleteVertexArrays(1, [int(self._block_vao[slot])])
+                gl_state.glDeleteVertexArrays(1, [int(self._block_vao[slot])])
             if self._block_vbo[slot]:
                 gl.glDeleteBuffers(1, [int(self._block_vbo[slot])])
             self._block_vao[slot] = self._block_vbo[slot] = 0
@@ -707,7 +708,7 @@ class TerrainGL:
         if not self._block_vao[slot]:
             self._block_vao[slot] = int(gl.glGenVertexArrays(1))
             self._block_vbo[slot] = int(gl.glGenBuffers(1))
-        gl.glBindVertexArray(int(self._block_vao[slot]))
+        gl_state.glBindVertexArray(int(self._block_vao[slot]))
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, int(self._block_vbo[slot]))
         gl.glBufferData(gl.GL_ARRAY_BUFFER, max(data.nbytes, 4),
                         data if data.nbytes else None, gl.GL_STATIC_DRAW)
@@ -716,7 +717,7 @@ class TerrainGL:
             gl.glVertexAttribPointer(loc, size, gl.GL_FLOAT, gl.GL_FALSE, stride,
                                      ctypes.c_void_p(offset))
             gl.glEnableVertexAttribArray(loc)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self._block_count[slot] = len(data)
         self._block_version[slot] = version
 
@@ -734,7 +735,7 @@ class TerrainGL:
         if not self._grass_vao[slot]:
             self._grass_vao[slot] = int(gl.glGenVertexArrays(1))
             self._grass_vbo[slot] = int(gl.glGenBuffers(1))
-        gl.glBindVertexArray(int(self._grass_vao[slot]))
+        gl_state.glBindVertexArray(int(self._grass_vao[slot]))
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, int(self._grass_vbo[slot]))
         gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data, gl.GL_STATIC_DRAW)
         stride = 9 * 4
@@ -743,7 +744,7 @@ class TerrainGL:
                                      ctypes.c_void_p(offset))
             gl.glEnableVertexAttribArray(loc)
             gl.glVertexAttribDivisor(loc, 1)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self._grass_count[slot] = count
 
     def _stale(self, store, held, slots):
@@ -819,19 +820,19 @@ class TerrainGL:
             self._release_paint_layers()
             self._paint_epoch = frame.paint_epoch
 
-        gl.glUseProgram(prog)
+        gl_state.glUseProgram(prog)
         uniform_matrix4(u['projection'], glm.value_ptr(projection))
         uniform_matrix4(u['view'], glm.value_ptr(view))
-        gl.glActiveTexture(gl.GL_TEXTURE0); gl.glBindTexture(gl.GL_TEXTURE_2D, self.grass_tex); gl.glUniform1i(u['texGrass'], 0)
-        gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex);  gl.glUniform1i(u['texRock'],  1)
-        gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex);  gl.glUniform1i(u['texSand'],  2)
-        gl.glActiveTexture(gl.GL_TEXTURE3); gl.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex);  gl.glUniform1i(u['texSnow'],  3)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0); gl_state.glBindTexture(gl.GL_TEXTURE_2D, self.grass_tex); gl_state.glUniform1i(u['texGrass'], 0)
+        gl_state.glActiveTexture(gl.GL_TEXTURE1); gl_state.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex);  gl_state.glUniform1i(u['texRock'],  1)
+        gl_state.glActiveTexture(gl.GL_TEXTURE2); gl_state.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex);  gl_state.glUniform1i(u['texSand'],  2)
+        gl_state.glActiveTexture(gl.GL_TEXTURE3); gl_state.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex);  gl_state.glUniform1i(u['texSnow'],  3)
         height_texture_unit = shadow_unit_base + shaders.MAX_SHADOW_LIGHTS
         paint_texture_unit = height_texture_unit + 1
         self._upload_appearance_uniforms(u)
         loc = u.get('terrainPaintMap', -1)
         if loc != -1:
-            gl.glUniform1i(loc, paint_texture_unit)
+            gl_state.glUniform1i(loc, paint_texture_unit)
 
         # Textures off in flat mode, or while they are not loaded.
         textures_loaded = (self.grass_tex != 0 and self.rock_tex != 0
@@ -839,7 +840,7 @@ class TerrainGL:
         use_tex = (0 if frame.flat_mode or not textures_loaded
                    or getattr(self, 'untextured', False)
                    else (1 if frame.use_textures else 0))
-        gl.glUniform1i(u['use_textures'], use_tex)
+        gl_state.glUniform1i(u['use_textures'], use_tex)
 
         # Distance fog + global ambient (engine.shaders.FOG_GLSL): this
         # program has its own uniform table, so the renderer hands the
@@ -850,15 +851,15 @@ class TerrainGL:
                 if loc is None or loc == -1:
                     continue
                 if isinstance(value, int):
-                    gl.glUniform1i(loc, value)
+                    gl_state.glUniform1i(loc, value)
                 elif isinstance(value, float):
-                    gl.glUniform1f(loc, value)
+                    gl_state.glUniform1f(loc, value)
                 else:
-                    gl.glUniform3f(loc, *value)
+                    gl_state.glUniform3f(loc, *value)
 
         # The renderer has already selected the terrain light subset and
         # packed it into the shared std140 light UBO.
-        gl.glUniform1i(u['active_lights'], active_lights_count)
+        gl_state.glUniform1i(u['active_lights'], active_lights_count)
 
         # Every ``samplerCube shadowMaps[i]`` must point at its own reserved
         # unit, with a *complete* cube map bound there -- the real depth map,
@@ -872,24 +873,24 @@ class TerrainGL:
             if loc is None or loc == -1:
                 continue
             cm = shadow_cubemaps[i] if (i < len(shadow_cubemaps) and shadow_cubemaps[i]) else placeholder
-            gl.glActiveTexture(gl.GL_TEXTURE0 + shadow_unit_base + i)
-            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
-            gl.glUniform1i(loc, shadow_unit_base + i)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0 + shadow_unit_base + i)
+            gl_state.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
+            gl_state.glUniform1i(loc, shadow_unit_base + i)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
         # Each shadow slot's filter, from the Light that owns it (0: the
         # shader's default), as the other lit passes have it.
         loc = u.get('uShadowFilter[0]', -1)
         if loc is not None and loc != -1:
             values = (shadow_filter if shadow_filter is not None
                       else np.zeros((shaders.MAX_SHADOW_LIGHTS, 2), dtype=np.float32))
-            gl.glUniform2fv(loc, shaders.MAX_SHADOW_LIGHTS,
+            gl_state.glUniform2fv(loc, shaders.MAX_SHADOW_LIGHTS,
                             np.ascontiguousarray(values, dtype=np.float32))
         # The light-cookie array (engine.light_cookies) on its own unit, for
         # the same reason; the renderer binds the array there when a light
         # has a cookie, and nothing is sampled when none has.
         loc = u.get('fioCookies', -1)
         if loc is not None and loc != -1:
-            gl.glUniform1i(loc, shaders.COOKIE_TEXTURE_UNIT)
+            gl_state.glUniform1i(loc, shaders.COOKIE_TEXTURE_UNIT)
 
         lod_level_loc = u.get('lod_level', -1)
         slots = table.live_slots()
@@ -899,7 +900,7 @@ class TerrainGL:
         visible = table.visible(slots, frustum_planes)
         self.culled_chunks = int(len(slots) - np.count_nonzero(visible))
 
-        if frame.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
+        if frame.wireframe: gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         # The height grids live in texture units above the shadow cube-maps.
         unit = height_texture_unit
         drawn = slots[visible & table.built[slots]]
@@ -914,7 +915,7 @@ class TerrainGL:
         self.visible_chunks = int(len(drawn))
         #: The slots drawn this frame, in draw order (tests, Debug Tables).
         self.drawn_slots = drawn
-        if frame.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        if frame.wireframe: gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
 
         if frame.grass_enabled and self.grass_shader_program:
             built = slots[table.built[slots]]
@@ -936,13 +937,13 @@ class TerrainGL:
         self._free_slots(range(len(self._grass_vao)))
         for program in sorted(self._own_programs):
             try:
-                gl.glDeleteProgram(program)
+                gl_state.glDeleteProgram(program)
             except Exception:
                 pass
         self._own_programs.clear()
         if self.grass_shader_program:
             try:
-                gl.glDeleteProgram(self.grass_shader_program)
+                gl_state.glDeleteProgram(self.grass_shader_program)
             except Exception:
                 pass
         self.shader_program = self.block_program = self.grass_shader_program = 0
@@ -950,18 +951,18 @@ class TerrainGL:
         for pages in (self._paint_pages, self._height_pages):
             if pages:
                 try:
-                    gl.glDeleteTextures(len(pages), pages)
+                    gl_state.glDeleteTextures(len(pages), pages)
                 except Exception:
                     pass
         self._paint_pages, self._height_pages = [], []
         self._paint_page_layers = 0
         self._release_paint_layers()
         for vao, buffer in self._index_vaos.values():
-            gl.glDeleteVertexArrays(1, [vao])
+            gl_state.glDeleteVertexArrays(1, [vao])
             gl.glDeleteBuffers(1, [buffer])
         self._index_vaos = {}
         if self._placeholder_cubemap:
-            gl.glDeleteTextures(1, [self._placeholder_cubemap])
+            gl_state.glDeleteTextures(1, [self._placeholder_cubemap])
             self._placeholder_cubemap = 0
         self.grass_tex = self.rock_tex = self.sand_tex = self.snow_tex = 0
         self._sync_gl_columns_reset()

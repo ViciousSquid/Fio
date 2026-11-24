@@ -6,6 +6,7 @@ The distance colouring that follows is in ``distance.py``.
 
 import glm
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 
 from engine import render_table
 from ...core.diagnostics import timed_pass
@@ -27,11 +28,11 @@ class EdgesMixin:
         if len(brushes) == 0 or 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
+        gl_state.glUseProgram(shader)
         self._current_shader = shader
         uniform_matrix4(uniforms['projection'], glm.value_ptr(projection))
         uniform_matrix4(uniforms['view'], glm.value_ptr(view))
-        gl.glUniform1f(uniforms['alpha'], 1.0)
+        gl_state.glUniform1f(uniforms['alpha'], 1.0)
         model_loc, color_loc = uniforms['model'], uniforms['color']
         models, _normals = self._frame_transforms(table, brushes)
         bits = table.class_bits[brushes]
@@ -57,9 +58,9 @@ class EdgesMixin:
             vao, count = ((mesh.edge_vao, mesh.edge_count)
                           if mesh is not None and mesh.edge_count else (edge_vao, 24))
             if vao != bound_vao:
-                gl.glBindVertexArray(vao)
+                gl_state.glBindVertexArray(vao)
                 bound_vao = vao
             gl.glDrawArrays(gl.GL_LINES, 0, count)
             self.render_stats.draw_calls += 1
         self.render_stats.visible_brushes += len(brushes)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)

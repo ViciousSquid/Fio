@@ -590,6 +590,7 @@ class OBJ:
 
     def _build_gl_buffers(self, loader: OBJLoader):
         """Build OpenGL VAO/VBO from parsed OBJ data."""
+        from engine.renderer.core import gl_state
         global gl
         if gl is None:
             import OpenGL.GL as gl
@@ -651,7 +652,7 @@ class OBJ:
         self.vao = gl.glGenVertexArrays(1)
         self.vbo = gl.glGenBuffers(1)
         
-        gl.glBindVertexArray(self.vao)
+        gl_state.glBindVertexArray(self.vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, vertex_data.nbytes, vertex_data, gl.GL_STATIC_DRAW)
         
@@ -664,11 +665,12 @@ class OBJ:
         gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
         gl.glEnableVertexAttribArray(2)
         
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
     
     def cleanup(self):
         """Release OpenGL resources."""
+        from engine.renderer.core import gl_state
         global gl
         if (self.vbo or self.vao) and gl is None:
             import OpenGL.GL as gl
@@ -676,6 +678,6 @@ class OBJ:
             gl.glDeleteBuffers(1, [self.vbo])
             self.vbo = None
         if self.vao:
-            gl.glDeleteVertexArrays(1, [self.vao])
+            gl_state.glDeleteVertexArrays(1, [self.vao])
             self.vao = None
         self.is_loaded = False

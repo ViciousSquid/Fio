@@ -65,6 +65,7 @@ import weakref
 import glm
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 
 from engine import cell_cull
 from engine.cell_cull import (
@@ -234,12 +235,12 @@ class OcclusionMixin:
             gl.glBufferData(gl.GL_ARRAY_BUFFER, _PROBE_VERTS.nbytes,
                             _PROBE_VERTS, gl.GL_STATIC_DRAW)
             vao = int(gl.glGenVertexArrays(1))
-            gl.glBindVertexArray(vao)
+            gl_state.glBindVertexArray(vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._occlusion_vbo)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12,
                                      ctypes.c_void_p(0))
             gl.glEnableVertexAttribArray(0)
-            gl.glBindVertexArray(0)
+            gl_state.glBindVertexArray(0)
             self.vaos['occlusion_probe'] = vao
 
             # The query target is asked of the live context, not assumed:
@@ -604,20 +605,20 @@ class OcclusionMixin:
             return
 
         proj_view = projection * view
-        gl.glUseProgram(self._occlusion_program)
+        gl_state.glUseProgram(self._occlusion_program)
         uniform_matrix4(self._occlusion_projview_loc, glm.value_ptr(proj_view))
         # The probes change no pixel. Colour writes, depth writes and the
         # stencil test are off; both cube faces are drawn so the cull state
         # a brush pass left behind cannot matter; the depth test -- against
         # the frame's finished opaque depth -- is the whole point.
-        gl.glDisable(gl.GL_BLEND)
-        gl.glDisable(gl.GL_STENCIL_TEST)
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glDepthFunc(gl.GL_LESS)
-        gl.glDepthMask(gl.GL_FALSE)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glDisable(gl.GL_STENCIL_TEST)
+        gl_state.glDisable(gl.GL_CULL_FACE)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glDepthFunc(gl.GL_LESS)
+        gl_state.glDepthMask(gl.GL_FALSE)
         gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
-        gl.glBindVertexArray(self.vaos['occlusion_probe'])
+        gl_state.glBindVertexArray(self.vaos['occlusion_probe'])
         for i in order:
             coord = (int(group_cells[i, 0]), int(group_cells[i, 1]))
             if coord in self._occlusion_probes:
@@ -640,10 +641,10 @@ class OcclusionMixin:
                 self._occlusion_last_eye.copy())
         # Restore what the tail of render_scene expects to find: the very
         # next lines re-enable the depth mask and disable the depth test.
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glUseProgram(0)
+        gl_state.glDepthMask(gl.GL_TRUE)
+        gl_state.glUseProgram(0)
 
     def _pick_query_target(self, gl_module=None):
         """The strongest occlusion query target this context accepts.

@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent, QThread, pyqtSignal
 from PyQt5.QtGui import QOpenGLContext, QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
@@ -106,13 +107,13 @@ class ViewDebugDraw:
             self.view._debug_color_loc = gl.glGetUniformLocation(self.view.debug_shader, 'color')
             self.view.debug_vao = gl.glGenVertexArrays(1)
             self.view.debug_vbo = gl.glGenBuffers(1)
-            gl.glBindVertexArray(self.view.debug_vao)
+            gl_state.glBindVertexArray(self.view.debug_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.view.debug_vbo)
             gl.glBufferData(gl.GL_ARRAY_BUFFER, 1024 * 1024, None, gl.GL_DYNAMIC_DRAW)
             gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
             gl.glEnableVertexAttribArray(0)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-            gl.glBindVertexArray(0)
+            gl_state.glBindVertexArray(0)
         except Exception as e:
             print(f"Debug Renderer Init Failed: {e}")
 
@@ -222,7 +223,7 @@ class ViewDebugDraw:
         )
         # render_scene leaves depth testing disabled; restore that state after
         # this explicit post-scene billboard pass.
-        gl.glDisable(gl.GL_DEPTH_TEST)
+        gl_state.glDisable(gl.GL_DEPTH_TEST)
 
     def _render_projectiles(self, projectiles, proj_matrix, view_matrix):
         if not len(projectiles):
@@ -234,22 +235,22 @@ class ViewDebugDraw:
         from engine.monster_constants import MONSTER_PROJECTILE_SPRITE_SIZE
         # Every projectile shares one texture and size, so the lot is one
         # instanced draw of the published position array.
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        gl_state.glEnable(gl.GL_BLEND)
+        gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         self.view.renderer.draw_billboards(
             proj_matrix, view_matrix, projectiles, MONSTER_PROJECTILE_SPRITE_SIZE,
             tex_id)
-        gl.glDisable(gl.GL_BLEND)
+        gl_state.glDisable(gl.GL_BLEND)
 
     def _render_monster_debug_rays(self, rays, proj_matrix, view_matrix):
         if not rays or not self.view.debug_shader:
             return
-        gl.glUseProgram(self.view.debug_shader)
+        gl_state.glUseProgram(self.view.debug_shader)
         proj_ptr = glm.value_ptr(proj_matrix)
         view_ptr = glm.value_ptr(view_matrix)
         gl.glUniformMatrix4fv(self.view._debug_proj_loc, 1, gl.GL_FALSE, proj_ptr)
         gl.glUniformMatrix4fv(self.view._debug_view_loc, 1, gl.GL_FALSE, view_ptr)
-        gl.glBindVertexArray(self.view.debug_vao)
+        gl_state.glBindVertexArray(self.view.debug_vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.view.debug_vbo)
 
         # PERF: group rays by color and upload+draw each group in one call
@@ -264,13 +265,13 @@ class ViewDebugDraw:
         for pts, color in ((green_pts, (0.0, 1.0, 0.0)), (red_pts, (1.0, 0.0, 0.0))):
             if not pts:
                 continue
-            gl.glUniform3f(self.view._debug_color_loc, *color)
+            gl_state.glUniform3f(self.view._debug_color_loc, *color)
             data = np.array(pts, dtype=np.float32)
             gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data, gl.GL_DYNAMIC_DRAW)
             gl.glDrawArrays(gl.GL_LINES, 0, len(pts) // 3)
 
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     #: ``hitboxes 1``: the outline colour of a monster's hit sphere.
     HITBOX_COLOR = (1.0, 0.08, 0.72)          # bright pink
@@ -302,22 +303,22 @@ class ViewDebugDraw:
         if not len(radii):
             return
         data = self.hitbox_lines(centres, radii)
-        gl.glUseProgram(self.view.debug_shader)
+        gl_state.glUseProgram(self.view.debug_shader)
         gl.glUniformMatrix4fv(self.view._debug_proj_loc, 1, gl.GL_FALSE,
                               glm.value_ptr(proj_matrix))
         gl.glUniformMatrix4fv(self.view._debug_view_loc, 1, gl.GL_FALSE,
                               glm.value_ptr(view_matrix))
-        gl.glUniform3f(self.view._debug_color_loc, *self.HITBOX_COLOR)
-        gl.glBindVertexArray(self.view.debug_vao)
+        gl_state.glUniform3f(self.view._debug_color_loc, *self.HITBOX_COLOR)
+        gl_state.glBindVertexArray(self.view.debug_vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.view.debug_vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data, gl.GL_DYNAMIC_DRAW)
         depth = gl.glIsEnabled(gl.GL_DEPTH_TEST)
-        gl.glDisable(gl.GL_DEPTH_TEST)        # the sprite must not hide it
+        gl_state.glDisable(gl.GL_DEPTH_TEST)        # the sprite must not hide it
         gl.glDrawArrays(gl.GL_LINES, 0, len(data))
         if depth:
-            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl_state.glEnable(gl.GL_DEPTH_TEST)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def _render_spatial_grid(self, proj_matrix, view_matrix):
         if not self.view.debug_shader or not self.view.logic_thread:
@@ -325,13 +326,13 @@ class ViewDebugDraw:
         grid = self.view.logic_thread.session_runtime.spatial_grid
         if grid is None:
             return
-        gl.glUseProgram(self.view.debug_shader)
+        gl_state.glUseProgram(self.view.debug_shader)
         proj_ptr = glm.value_ptr(proj_matrix)
         view_ptr = glm.value_ptr(view_matrix)
         gl.glUniformMatrix4fv(self.view._debug_proj_loc, 1, gl.GL_FALSE, proj_ptr)
         gl.glUniformMatrix4fv(self.view._debug_view_loc, 1, gl.GL_FALSE, view_ptr)
-        gl.glUniform3f(self.view._debug_color_loc, 0.0, 0.8, 1.0)
-        gl.glBindVertexArray(self.view.debug_vao)
+        gl_state.glUniform3f(self.view._debug_color_loc, 0.0, 0.8, 1.0)
+        gl_state.glBindVertexArray(self.view.debug_vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.view.debug_vbo)
         cs = grid.cell_size
         draw_y = 1.0
@@ -366,7 +367,7 @@ class ViewDebugDraw:
             gl.glDrawArrays(gl.GL_LINES, 0, len(pts) // 3)
 
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, 0)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
 
     def show_pos_window(self):
         """Open or raise the live camera-position floating window."""

@@ -9,6 +9,7 @@ import weakref
 
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 from ..core.raw_calls import buffer_orphan, buffer_sub_data, vertex_attrib_pointer
 
 from engine import change_detection, render_table
@@ -521,7 +522,7 @@ class InstancingMixin:
         if vao is None:
             if len(vaos) >= self.RUN_VAOS_PER_STREAM:
                 spare = [name for row, name in vaos.items() if row]
-                gl.glDeleteVertexArrays(len(spare), spare)
+                gl_state.glDeleteVertexArrays(len(spare), spare)
                 vaos.clear()
                 vaos[0] = stream.vao
                 if not base:
@@ -538,7 +539,7 @@ class InstancingMixin:
         have every ordinary cube draw read an instance buffer it does not use.
         """
         vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
+        gl_state.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._cube_vbo)
         for location, size, offset in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
             vertex_attrib_pointer(location, size, gl.GL_FLOAT, gl.GL_FALSE, 32, offset)
@@ -551,7 +552,7 @@ class InstancingMixin:
                                   origin + (location - 3) * 16)
             gl.glEnableVertexAttribArray(location)
             gl.glVertexAttribDivisor(location, 1)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         return vao
 
     def _release_brush_streams(self):
@@ -560,7 +561,7 @@ class InstancingMixin:
         for stream in self._brush_streams.values():
             if stream.run_vaos:
                 names = list(stream.run_vaos.values())
-                gl.glDeleteVertexArrays(len(names), names)
+                gl_state.glDeleteVertexArrays(len(names), names)
                 stream.run_vaos.clear()
             if stream.vbo:
                 gl.glDeleteBuffers(1, [stream.vbo])
@@ -609,7 +610,7 @@ class InstancingMixin:
             return self._sprite_instance_vao
         self._ensure_sprite_instance_buffer(1)
         vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
+        gl_state.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
         gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
@@ -622,7 +623,7 @@ class InstancingMixin:
                                      stride, ctypes.c_void_p(offset))
             gl.glEnableVertexAttribArray(location)
             gl.glVertexAttribDivisor(location, 1)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self._sprite_instance_vao = vao
         return vao
 
@@ -672,7 +673,7 @@ class InstancingMixin:
             return self._effect_instance_vao
         self._ensure_effect_instance_buffer(1)
         vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
+        gl_state.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
         gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
@@ -688,7 +689,7 @@ class InstancingMixin:
             )
             gl.glEnableVertexAttribArray(location)
             gl.glVertexAttribDivisor(location, 1)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self._effect_instance_vao = vao
         return vao
 
@@ -722,7 +723,7 @@ class InstancingMixin:
             return self._particle_instance_vao
         self._ensure_particle_instance_buffer(1)
         vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
+        gl_state.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
         gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
         gl.glEnableVertexAttribArray(0)
@@ -735,7 +736,7 @@ class InstancingMixin:
             )
             gl.glEnableVertexAttribArray(location)
             gl.glVertexAttribDivisor(location, PARTICLES_PER_EMITTER)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         self._particle_instance_vao = vao
         return vao
 
@@ -814,11 +815,11 @@ class InstancingMixin:
             return vao
         if len(vaos) >= self.MODEL_RUN_VAOS:
             names = list(vaos.values())
-            gl.glDeleteVertexArrays(len(names), names)
+            gl_state.glDeleteVertexArrays(len(names), names)
             vaos.clear()
             stream.plan = None              # it names the arrays just deleted
         vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
+        gl_state.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, obj.vbo)
         for location, size, offset in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
             vertex_attrib_pointer(location, size, gl.GL_FLOAT, gl.GL_FALSE, 32, offset)
@@ -837,7 +838,7 @@ class InstancingMixin:
         vertex_attrib_pointer(10, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, origin + 112)
         gl.glEnableVertexAttribArray(10)
         gl.glVertexAttribDivisor(10, 1)
-        gl.glBindVertexArray(0)
+        gl_state.glBindVertexArray(0)
         vaos[key] = vao
         return vao
 
@@ -847,7 +848,7 @@ class InstancingMixin:
         for stream in streams.values():
             if stream.run_vaos:
                 names = list(stream.run_vaos.values())
-                gl.glDeleteVertexArrays(len(names), names)
+                gl_state.glDeleteVertexArrays(len(names), names)
                 stream.run_vaos.clear()
             stream.plan = None
             if stream.vbo:

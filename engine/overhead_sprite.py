@@ -193,6 +193,7 @@ class OverheadSpriteRenderer:
 
     # -- setup --------------------------------------------------------------
     def _init_gl(self) -> bool:
+        from engine.renderer.core import gl_state
         try:
             import numpy as np
             import OpenGL.GL as gl
@@ -226,12 +227,12 @@ class OverheadSpriteRenderer:
                              -0.5, -0.5, 0.5, 0.5, -0.5, 0.5], dtype=np.float32)
             self._vao = gl.glGenVertexArrays(1)
             self._vbo = gl.glGenBuffers(1)
-            gl.glBindVertexArray(self._vao)
+            gl_state.glBindVertexArray(self._vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._vbo)
             gl.glBufferData(gl.GL_ARRAY_BUFFER, quad.nbytes, quad, gl.GL_STATIC_DRAW)
             gl.glEnableVertexAttribArray(0)
             gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-            gl.glBindVertexArray(0)
+            gl_state.glBindVertexArray(0)
 
             for key, path in self.frame_files.items():
                 self._textures[key] = self._load_texture(path)
@@ -240,6 +241,7 @@ class OverheadSpriteRenderer:
             return False
 
     def _load_texture(self, path) -> int:
+        from engine.renderer.core import gl_state
         try:
             import numpy as np
             import OpenGL.GL as gl
@@ -251,14 +253,14 @@ class OverheadSpriteRenderer:
             img = Image.open(asset_source(path) or path).convert("RGBA")
             data = np.array(img, dtype=np.uint8)
             tex = gl.glGenTextures(1)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
             gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height,
                             0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
             return int(tex)
         except Exception:
             return 0
@@ -266,6 +268,7 @@ class OverheadSpriteRenderer:
     # -- per-frame draw -----------------------------------------------------
     def draw(self, projection, view, pos, facing: float, frame_key: str) -> None:
         """Draw *frame_key* at ground *pos*, turned to *facing* (radians)."""
+        from engine.renderer.core import gl_state
         if self._ok is False:
             return
         if self._ok is None:
@@ -286,18 +289,18 @@ class OverheadSpriteRenderer:
             m = glm.scale(m, glm.vec3(self.size, 1.0, self.size))
             mvp = projection * view * m
 
-            gl.glUseProgram(self._prog)
+            gl_state.glUseProgram(self._prog)
             gl.glUniformMatrix4fv(self._mvp_loc, 1, gl.GL_FALSE, glm.value_ptr(mvp))
-            gl.glActiveTexture(gl.GL_TEXTURE0)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
-            gl.glUniform1i(self._tex_loc, 0)
+            gl_state.glActiveTexture(gl.GL_TEXTURE0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex)
+            gl_state.glUniform1i(self._tex_loc, 0)
 
-            gl.glEnable(gl.GL_BLEND)
-            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-            gl.glDisable(gl.GL_CULL_FACE)
-            gl.glBindVertexArray(self._vao)
+            gl_state.glEnable(gl.GL_BLEND)
+            gl_state.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+            gl_state.glDisable(gl.GL_CULL_FACE)
+            gl_state.glBindVertexArray(self._vao)
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6)
-            gl.glBindVertexArray(0)
-            gl.glUseProgram(0)
+            gl_state.glBindVertexArray(0)
+            gl_state.glUseProgram(0)
         except Exception:
             self._ok = False

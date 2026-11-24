@@ -74,6 +74,8 @@ import os
 import numpy as np
 import OpenGL.GL as gl
 
+from . import gl_state
+
 #: Uniform kinds this module uploads: name -> (entry point, takes a
 #: ``transpose`` argument, float32 elements per row).
 _KINDS = {
@@ -156,6 +158,7 @@ def _wrapped(name, has_transpose, rows):
         def upload(location, index):
             if not 0 <= index < count:
                 raise IndexError("row %r of %d" % (index, count))
+            gl_state.touch(location)
             wrapper(location, 1, rows[index])
     return upload
 
@@ -195,6 +198,7 @@ def uniform_rows(kind, rows):
         def upload(location, index, _rows=rows):
             if not 0 <= index < count:
                 raise IndexError("row %r of %d" % (index, count))
+            gl_state.touch(location)
             fn(location, 1, base + index * stride)
     return upload
 
@@ -214,6 +218,7 @@ def _verifying(name, has_transpose, width, fn, rows, base, stride):
         if has_transpose:
             fn(location, 1, 0, base + index * stride)
         else:
+            gl_state.touch(location)
             fn(location, 1, base + index * stride)
         if verdict is None and location >= 0:
             try:

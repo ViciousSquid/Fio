@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import numpy as np
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 from PIL import Image
 
 
@@ -143,7 +144,7 @@ class SpriteLayers:
             self._layer_by_gl[int(tid)] = start + offset
         self.count = total
 
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self.texture)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self.texture)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
         try:
             for layer, tid in refill:
@@ -154,7 +155,7 @@ class SpriteLayers:
             for offset, tid in enumerate(new_ids):
                 self._upload(start + offset, images[int(tid)])
         finally:
-            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
             # Back to the GL default. The context is shared with Qt's text
             # rendering, whose glyph uploads assume 4-byte rows: left at 1,
             # every glyph not a multiple of 4 wide came out sheared.
@@ -174,7 +175,7 @@ class SpriteLayers:
     def _read_texture(tex_id):
         """Level 0 of a 2D texture as an RGBA ``PIL.Image``, or ``None``."""
         try:
-            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
             w = int(gl.glGetTexLevelParameteriv(
                 gl.GL_TEXTURE_2D, 0, gl.GL_TEXTURE_WIDTH))
             h = int(gl.glGetTexLevelParameteriv(
@@ -188,7 +189,7 @@ class SpriteLayers:
             return None
         finally:
             gl.glPixelStorei(gl.GL_PACK_ALIGNMENT, 4)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
         if raw is None or len(raw) < w * h * 4:
             return None
         return Image.frombytes('RGBA', (w, h), bytes(raw[:w * h * 4]))
@@ -203,7 +204,7 @@ class SpriteLayers:
         self.texture = tex
         self.size = int(size)
         self.capacity = int(capacity)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
         edge = self.size
         for level in range(self._levels()):
             gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, level, gl.GL_RGBA8,
@@ -218,9 +219,9 @@ class SpriteLayers:
         gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MIN_FILTER,
                            gl.GL_LINEAR_MIPMAP_LINEAR)
         gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
         if old:
-            gl.glDeleteTextures([old])
+            gl_state.glDeleteTextures([old])
 
     def _upload(self, layer, image):
         """Resample *image* into *layer* and upload its whole mip chain."""
@@ -247,7 +248,7 @@ class SpriteLayers:
     def cleanup(self):
         try:
             if self.texture:
-                gl.glDeleteTextures([self.texture])
+                gl_state.glDeleteTextures([self.texture])
         except Exception:
             pass                   # teardown without a context is not an error
         self.texture = 0

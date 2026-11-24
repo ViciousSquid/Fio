@@ -10,6 +10,7 @@ orange up close, then yellow, green and cyan, to blue far away.
 
 import glm
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 
 from engine.constants import RENDER_MODE_LIT
 
@@ -96,24 +97,24 @@ class DistanceMixin:
         if not self._capture_scene_depth():
             return False
         program, u = self.shaders['distance'], self.uniforms['distance']
-        gl.glUseProgram(program)
+        gl_state.glUseProgram(program)
         self._current_shader = program
-        gl.glActiveTexture(gl.GL_TEXTURE0 + self._water_depth_texture_unit)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
-        gl.glUniform1i(u['uDepth'], self._water_depth_texture_unit)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0 + self._water_depth_texture_unit)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
+        gl_state.glUniform1i(u['uDepth'], self._water_depth_texture_unit)
         # Held in a name: value_ptr does not keep its matrix alive.
         inverse = glm.inverse(projection * view)
         uniform_matrix4(u['uInvViewProj'], glm.value_ptr(inverse))
-        gl.glUniform3f(u['uEye'], *self._camera_xyz(camera_pos))
-        gl.glUniform1f(u['uRange'], DISTANCE_RANGE)
+        gl_state.glUniform3f(u['uEye'], *self._camera_xyz(camera_pos))
+        gl_state.glUniform1f(u['uRange'], DISTANCE_RANGE)
         gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-        gl.glDisable(gl.GL_DEPTH_TEST)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        gl.glBindVertexArray(self.vaos['distance'])
+        gl_state.glDisable(gl.GL_DEPTH_TEST)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl_state.glBindVertexArray(self.vaos['distance'])
         gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3)
         self.render_stats.draw_calls += 1
-        gl.glBindVertexArray(0)
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl_state.glBindVertexArray(0)
+        gl_state.glEnable(gl.GL_DEPTH_TEST)
+        gl_state.glActiveTexture(gl.GL_TEXTURE0)
         return True

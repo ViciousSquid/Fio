@@ -12,6 +12,7 @@ import time
 
 import numpy as np
 import OpenGL.GL as gl
+from . import gl_state
 from OpenGL.GL.shaders import compileProgram, compileShader
 from PyQt5.QtCore import QByteArray, QBuffer, QIODevice
 from engine.asset_archives import asset_bytes, asset_exists, asset_source
@@ -213,7 +214,7 @@ class ResourcesMixin:
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
             self._texture_dimensions[tex_cache_name] = (1, 1)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
             gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE,
                            (gl.GLubyte * 4)(255, 255, 255, 255))
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
@@ -226,7 +227,7 @@ class ResourcesMixin:
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
             self._texture_dimensions[tex_cache_name] = (2, 2)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
             gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 2, 2, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE,
                            (gl.GLubyte * 16)(255, 0, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 0, 255, 255))
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
@@ -262,7 +263,7 @@ class ResourcesMixin:
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
             self._texture_dimensions[tex_cache_name] = (img.width, img.height)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
@@ -307,13 +308,13 @@ class ResourcesMixin:
                 continue
             anim['shown'] = index
             width, height = anim['size']
-            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
             gl.glTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, width, height,
                                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, anim['frames'][index])
             gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
             changed = True
         if changed:
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, 0)
 
     def _load_3d_texture(self, filepath, size=32):
         data = asset_bytes(filepath)
@@ -332,7 +333,7 @@ class ResourcesMixin:
         texture_id = 0
         try:
             texture_id = gl.glGenTextures(1)
-            gl.glBindTexture(gl.GL_TEXTURE_3D, texture_id)
+            gl_state.glBindTexture(gl.GL_TEXTURE_3D, texture_id)
             for param in [(gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT), (gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT),
                           (gl.GL_TEXTURE_WRAP_R, gl.GL_REPEAT), (gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR),
                           (gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)]:
@@ -343,7 +344,7 @@ class ResourcesMixin:
         except Exception as exc:
             if texture_id:
                 try:
-                    gl.glDeleteTextures([texture_id])
+                    gl_state.glDeleteTextures([texture_id])
                 except Exception:
                     pass
             print(f"{_RENDERER_PREFIX} Could not upload 3D texture '{filepath}': {exc}")
@@ -398,7 +399,7 @@ class ResourcesMixin:
 
         tex_id = gl.glGenTextures(1)
         self.texture_manager[cache_key] = tex_id
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+        gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
         gl.glTexParameteri(
             gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE
         )
@@ -783,7 +784,7 @@ class ResourcesMixin:
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
             tex_id = gl.glGenTextures(1)
             self.texture_manager[tex_cache_name] = tex_id
-            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl_state.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
             gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)

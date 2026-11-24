@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent, QThread, pyqtSignal
 from PyQt5.QtGui import QOpenGLContext, QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
 import OpenGL.GL as gl
+from engine.renderer.core import gl_state
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
@@ -1024,7 +1025,7 @@ class QtGameView(QOpenGLWidget):
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self.defaultFramebufferObject())
             gl.glViewport(0, 0, width, height)
             gl.glScissor(0, 0, width, height)
-            gl.glDisable(gl.GL_SCISSOR_TEST)
+            gl_state.glDisable(gl.GL_SCISSOR_TEST)
         finally:
             self.doneCurrent()
 
@@ -1560,18 +1561,18 @@ class QtGameView(QOpenGLWidget):
             _asp = _half / _h if _h > 0 else 1.0
             _split_proj = perspective_projection(self.camera.fov, _asp, 0.1, _far)
 
-            gl.glDisable(gl.GL_SCISSOR_TEST)
-            gl.glDepthMask(gl.GL_TRUE)
+            gl_state.glDisable(gl.GL_SCISSOR_TEST)
+            gl_state.glDepthMask(gl.GL_TRUE)
             
             gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
 
-            gl.glEnable(gl.GL_SCISSOR_TEST)
+            gl_state.glEnable(gl.GL_SCISSOR_TEST)
             gl.glScissor(0, 0, _half, _h)
             gl.glViewport(0, 0, _half, _h)
-            gl.glDepthMask(gl.GL_TRUE)
-            gl.glDepthFunc(gl.GL_LESS)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glDisable(gl.GL_STENCIL_TEST)
+            gl_state.glDepthMask(gl.GL_TRUE)
+            gl_state.glDepthFunc(gl.GL_LESS)
+            gl_state.glDisable(gl.GL_BLEND)
+            gl_state.glDisable(gl.GL_STENCIL_TEST)
 
             self._publish_terrain(_split_proj, self.view_matrix, camera_pos)
             self.renderer.render_scene(
@@ -1603,10 +1604,10 @@ class QtGameView(QOpenGLWidget):
 
             gl.glScissor(_half, 0, _half, _h)
             gl.glViewport(_half, 0, _half, _h)
-            gl.glDepthMask(gl.GL_TRUE)
-            gl.glDepthFunc(gl.GL_LESS)
-            gl.glDisable(gl.GL_BLEND)
-            gl.glDisable(gl.GL_STENCIL_TEST)
+            gl_state.glDepthMask(gl.GL_TRUE)
+            gl_state.glDepthFunc(gl.GL_LESS)
+            gl_state.glDisable(gl.GL_BLEND)
+            gl_state.glDisable(gl.GL_STENCIL_TEST)
 
             _p2_view = render_state.player2_view_matrix
             _p2_cam_pos = render_state.player2_pos
@@ -1644,7 +1645,7 @@ class QtGameView(QOpenGLWidget):
                 )
 
 
-            gl.glDisable(gl.GL_SCISSOR_TEST)
+            gl_state.glDisable(gl.GL_SCISSOR_TEST)
             gl.glViewport(0, 0, _w, _h)
         else:
             self._publish_terrain(self.projection_matrix, self.view_matrix, camera_pos)
@@ -1757,11 +1758,11 @@ class QtGameView(QOpenGLWidget):
         # starts from the widget's 2D framebuffer, not that native state.
         # Normalize the native state while native painting is still active;
         # endNativePainting() then hands the context back to Qt cleanly.
-        gl.glDisable(gl.GL_SCISSOR_TEST)
-        gl.glDisable(gl.GL_DEPTH_TEST)
-        gl.glDisable(gl.GL_STENCIL_TEST)
-        gl.glDisable(gl.GL_BLEND)
-        gl.glDisable(gl.GL_CULL_FACE)
+        gl_state.glDisable(gl.GL_SCISSOR_TEST)
+        gl_state.glDisable(gl.GL_DEPTH_TEST)
+        gl_state.glDisable(gl.GL_STENCIL_TEST)
+        gl_state.glDisable(gl.GL_BLEND)
+        gl_state.glDisable(gl.GL_CULL_FACE)
         gl.glViewport(0, 0, max(1, int(self.width())), max(1, int(self.height())))
         painter.endNativePainting()
         self._native_painting = False
