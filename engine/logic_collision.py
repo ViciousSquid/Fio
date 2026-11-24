@@ -280,6 +280,7 @@ class LogicCollision:
         self._dirty = False
         self.model_collision_enabled = True
         self._model_collision_brushes = []
+        self.forget_model_files()
         self._physics_body_brushes = []
         self._collision_brushes_cache = []
         self._collision_rows = None
@@ -384,6 +385,8 @@ class LogicCollision:
         logic = self.logic
         model_collision_enabled = self.model_collision_enabled
         brushes = []
+        if not logic.session_runtime.play_mode:
+            self.forget_model_files()       # the editor: a file may have changed
 
         physics_on = bool(getattr(logic.session_runtime, 'physics_enabled', True))
         explosions = getattr(logic, 'explosion_runtime', None)
@@ -501,9 +504,7 @@ class LogicCollision:
             # Mesh: the model's own triangles. A model that cannot give any
             # (an unreadable file, an unsupported format) falls back to the
             # box below.
-            mesh_tris = self.compute_model_collision_mesh(
-                model_path, pos, scale, rot
-            )
+            mesh_tris = self._placed_mesh(thing, model_path, pos, scale, rot)
             if mesh_tris and collision_shape == 'mesh':
                 brushes.append({
                     'pos': pos,
@@ -521,6 +522,11 @@ class LogicCollision:
                     '_mesh_triangles': mesh_tris,
                     '_mesh_bounds': self.compute_mesh_bounds(mesh_tris),
                 })
+                built, self._built_mesh = self._built_mesh, None
+                if built is not None and built[0] is mesh_tris:
+                    # The arrays the list was made from, where
+                    # brush_placement keeps a mesh proxy's.
+                    brushes[-1]['_mesh_arrays'] = built
                 continue
 
             # Fallback for Automatic/Mesh when the model has no CPU collision
@@ -550,18 +556,51 @@ class LogicCollision:
         return brushes
 
 
-    def compute_model_collision_mesh(self, model_path, world_pos, scale, rotation):
-        """Load model and return world-space triangles for collision.
+    def forget_model_files(self):
+        """Drop what was read from model files (:meth:`_model_file_mesh`,
+        :meth:`compute_model_bounds`). They are kept for a Play session, in
+        which a model file does not change; outside one, each build reads
+        them afresh."""
+        self._model_file_meshes = {}
+        self._model_file_bounds = {}
+        self._built_mesh = None
+        self._placed_meshes = {}
 
-        Uses GLBLoader (CPU-only, no OpenGL calls) so this is safe to call from
-        any thread regardless of whether a GL context is current.  The old path
-        used GLB which called glGenVertexArrays/glGenBuffers and would silently
-        fail when the GL context was not active on this thread.
+    def _placed_mesh(self, thing, model_path, pos, scale, rot):
+        """:meth:`compute_model_collision_mesh` for *thing*, kept while it
+        stays where it is: the rebuild that follows an entity coming or going
+        (:meth:`sync_bodies` -- a barrel exploding, a plugin's spawn) makes
+        new proxies for every model, but only what moved needs new triangles.
         """
-        logic = self.logic
-        if not model_path:
-            return None
+        placed = (model_path, tuple(pos), tuple(scale), tuple(rot))
+        kept = self._placed_meshes.get(id(thing))
+        if kept is not None and kept[0] is thing and kept[1] == placed:
+            self._built_mesh = kept[3]
+            return kept[2]
+        mesh_tris = self.compute_model_collision_mesh(model_path, pos, scale, rot)
+        built = self._built_mesh
+        if built is None or built[0] is not mesh_tris:
+            built = None
+        self._placed_meshes[id(thing)] = (thing, placed, mesh_tris, built)
+        return mesh_tris
 
+    def _model_file_mesh(self, model_path):
+        """A model file's collision geometry in its own space:
+        ``(vertices (n, 3) float64, triangles (m, 3) int64)``, or None.
+
+        Read and parsed once per model file, not once per Prop that uses it:
+        forty chairs placed from the Asset Browser are one file. Uses the
+        loaders' CPU side only (no OpenGL calls), so it is safe on the logic
+        thread.
+        """
+        cache = self._model_file_meshes
+        if model_path in cache:
+            return cache[model_path]
+        mesh = cache[model_path] = self._read_model_file_mesh(model_path)
+        return mesh
+
+    def _read_model_file_mesh(self, model_path):
+        logic = self.logic
         from engine.asset_archives import asset_exists
         full_path = os.path.join('assets', 'models', model_path)
         if not asset_exists(full_path):
@@ -574,85 +613,101 @@ class LogicCollision:
         if ext not in ('.glb', '.obj'):
             return None
 
-        try:
-            from .model_source import load_model
-            if ext == '.obj':
-                # CPU geometry only: the OpenGL-backed OBJ model is not made
-                # on the logic thread. The same origin repair the drawn model
-                # and its bounds get (compute_model_bounds), then each face
-                # as a fan of triangles.
-                from .obj_loader import OBJLoader
-                loader = OBJLoader()
-                if package:
-                    loader = load_model(model_path, package)
-                if loader is None or (not package and not loader.load(full_path)):
-                    debug_log("Collision", f"OBJLoader failed to load {model_path}")
-                    return None
-                source = np.asarray(loader.vertices, dtype=np.float32)
-                if source.size == 0:
-                    return None
-                source_min, source_max = source.min(axis=0), source.max(axis=0)
-                centre = (source_min + source_max) * 0.5
-                threshold = np.maximum((source_max - source_min) * 2.0, 2.0)
-                source = source - np.where(np.abs(centre) > threshold, centre, 0.0)
-                all_verts = [tuple(map(float, v)) for v in source]
-                all_tris = []
-                for face in loader.faces:
-                    corners = [c[0] for c in face['vertices']]
-                    for k in range(1, len(corners) - 1):
-                        all_tris.append((corners[0], corners[k], corners[k + 1]))
-            else:
-                # GLBLoader is pure file I/O + JSON parsing — zero OpenGL calls.
-                from .glb_loader import GLBLoader
-
-                loader = GLBLoader()
-                loader._filepath_hint = full_path
-                if package:
-                    loader = load_model(model_path, package)
-                if loader is None or (not package and not loader.load(full_path)):
-                    debug_log("Collision", f"GLBLoader failed to load {model_path}")
-                    return None
-
-                all_verts = loader.get_flattened_vertices()   # list of (x, y, z)
-                all_tris  = loader.get_flattened_triangles()  # list of (i0, i1, i2)
-
-            if not all_verts or not all_tris:
-                debug_log("Collision", f"No geometry in {model_path}")
+        from .model_source import load_model
+        if ext == '.obj':
+            # CPU geometry only: the OpenGL-backed OBJ model is not made
+            # on the logic thread. The same origin repair the drawn model
+            # and its bounds get (compute_model_bounds), then each face
+            # as a fan of triangles.
+            from .obj_loader import OBJLoader
+            loader = OBJLoader()
+            if package:
+                loader = load_model(model_path, package)
+            if loader is None or (not package and not loader.load(full_path)):
+                debug_log("Collision", f"OBJLoader failed to load {model_path}")
                 return None
+            source = np.asarray(loader.vertices, dtype=np.float32)
+            if source.size == 0:
+                return None
+            source_min, source_max = source.min(axis=0), source.max(axis=0)
+            centre = (source_min + source_max) * 0.5
+            threshold = np.maximum((source_max - source_min) * 2.0, 2.0)
+            all_verts = source - np.where(np.abs(centre) > threshold, centre, 0.0)
+            all_tris = []
+            for face in loader.faces:
+                corners = [c[0] for c in face['vertices']]
+                for k in range(1, len(corners) - 1):
+                    all_tris.append((corners[0], corners[k], corners[k + 1]))
+        else:
+            # GLBLoader is pure file I/O + JSON parsing — zero OpenGL calls.
+            from .glb_loader import GLBLoader
+
+            loader = GLBLoader()
+            loader._filepath_hint = full_path
+            if package:
+                loader = load_model(model_path, package)
+            if loader is None or (not package and not loader.load(full_path)):
+                debug_log("Collision", f"GLBLoader failed to load {model_path}")
+                return None
+
+            all_verts = loader.get_flattened_vertices()   # list of (x, y, z)
+            all_tris  = loader.get_flattened_triangles()  # list of (i0, i1, i2)
+
+        if len(all_verts) == 0 or len(all_tris) == 0:
+            debug_log("Collision", f"No geometry in {model_path}")
+            return None
+        vertices = np.asarray(all_verts, dtype=np.float64).reshape(-1, 3)
+        triangles = np.asarray(all_tris, dtype=np.int64).reshape(-1, 3)
+        # A triangle naming a vertex that is not there is no surface.
+        triangles = triangles[((triangles >= 0) & (triangles < len(vertices))).all(axis=1)]
+        return vertices, triangles
+
+    def compute_model_collision_mesh(self, model_path, world_pos, scale, rotation):
+        """A model's world-space triangles for collision:
+        ``[((v0, v1, v2), normal)]``, or None when the file gives none.
+
+        The file's geometry comes from :meth:`_model_file_mesh`; here it is
+        put where this Prop is (the renderer's own transform) and each
+        triangle is given its face normal, in bulk.
+        """
+        if not model_path:
+            return None
+        try:
+            mesh = self._model_file_mesh(model_path)
+            if mesh is None:
+                return None
+            vertices, triangles = mesh
 
             # Model space to world space with the renderer's own transform.
             basis = model_basis(rotation, scale)
-            source = np.asarray(all_verts, dtype=np.float64).reshape(-1, 3)
-            world = source @ basis.T + np.asarray(world_pos[:3], dtype=np.float64)
-            world_verts = [tuple(map(float, v)) for v in world]
-            vertex_count = len(world_verts)
+            world = vertices @ basis.T + np.asarray(world_pos[:3], dtype=np.float64)
+            corners = world[triangles]                              # (m, 3, 3)
 
-            world_tris = []
-            for i0, i1, i2 in all_tris:
-                if (i0 >= vertex_count or i1 >= vertex_count or i2 >= vertex_count
-                        or min(i0, i1, i2) < 0):
-                    continue
-                w0 = world_verts[i0]
-                w1 = world_verts[i1]
-                w2 = world_verts[i2]
-
-                # Compute face normal from world-space edge vectors
-                e1 = (w1[0]-w0[0], w1[1]-w0[1], w1[2]-w0[2])
-                e2 = (w2[0]-w0[0], w2[1]-w0[1], w2[2]-w0[2])
-                nx = e1[1]*e2[2] - e1[2]*e2[1]
-                ny = e1[2]*e2[0] - e1[0]*e2[2]
-                nz = e1[0]*e2[1] - e1[1]*e2[0]
-                length = math.sqrt(nx*nx + ny*ny + nz*nz)
-                if not math.isfinite(length) or length <= 1e-8:
-                    # Zero-area faces cannot define collision surfaces.
-                    # Do not publish a degenerate triangle with a fake normal.
-                    continue
-                w_normal = (nx/length, ny/length, nz/length)
-
-                world_tris.append(((w0, w1, w2), w_normal))
+            # Face normals from the world-space edge vectors.
+            e1 = corners[:, 1] - corners[:, 0]
+            e2 = corners[:, 2] - corners[:, 0]
+            nx = e1[:, 1] * e2[:, 2] - e1[:, 2] * e2[:, 1]
+            ny = e1[:, 2] * e2[:, 0] - e1[:, 0] * e2[:, 2]
+            nz = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
+            with np.errstate(over='ignore', invalid='ignore'):
+                length = np.sqrt(nx * nx + ny * ny + nz * nz)
+                # Zero-area faces cannot define collision surfaces. Do not
+                # publish a degenerate triangle with a fake normal.
+                sound = np.isfinite(length) & (length > 1e-8)
+            if not sound.any():
+                return None
+            length = length[sound]
+            normals = np.stack((nx[sound] / length, ny[sound] / length,
+                                nz[sound] / length), axis=1)
+            corners = corners[sound]
+            # The list every collision pass walks, made in two conversions
+            # (as a turned mesh's is, brush_placement._turned_mesh), and the
+            # arrays it came from, kept for the proxy built from it.
+            world_tris = list(zip(corners.tolist(), normals.tolist()))
+            self._built_mesh = (world_tris, corners, normals)
 
             debug_log("Collision", f"Built {len(world_tris)} mesh-collision tris for {model_path}")
-            return world_tris if world_tris else None
+            return world_tris
 
         except Exception as e:
             debug_log("Collision", f"Failed to build mesh collision for {model_path}: {e}")
@@ -660,23 +715,30 @@ class LogicCollision:
 
 
     def compute_mesh_bounds(self, mesh_tris):
-        logic = self.logic
         """Compute AABB from mesh triangles for broad-phase culling."""
         if not mesh_tris:
             return None
-        all_verts = []
-        for (v0, v1, v2), _ in mesh_tris:
-            all_verts.extend([v0, v1, v2])
-        min_v = [min(v[i] for v in all_verts) for i in range(3)]
-        max_v = [max(v[i] for v in all_verts) for i in range(3)]
-        return (min_v, max_v)
+        built = self._built_mesh
+        if built is not None and built[0] is mesh_tris:
+            points = built[1].reshape(-1, 3)
+        else:
+            points = np.asarray([tri for tri, _normal in mesh_tris],
+                                dtype=np.float64).reshape(-1, 3)
+        return (points.min(axis=0).tolist(), points.max(axis=0).tolist())
 
 
     def compute_model_bounds(self, model_path):
-        logic = self.logic
-        """Compute axis-aligned bounds from a model file. Returns (min, max) or None."""
+        """Axis-aligned bounds of a model file: ``(min, max)`` or None. Read
+        once per file (:meth:`forget_model_files`)."""
         if not model_path:
             return None
+        cache = self._model_file_bounds
+        if model_path not in cache:
+            cache[model_path] = self._read_model_bounds(model_path)
+        return cache[model_path]
+
+    def _read_model_bounds(self, model_path):
+        logic = self.logic
 
         from engine.asset_archives import asset_exists
         full_path = os.path.join('assets', 'models', model_path)
