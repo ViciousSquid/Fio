@@ -287,10 +287,26 @@ def test_exposure_follows_the_view_from_under_a_roof_to_under_the_sky():
     assert hd_graphics.classic_exposure() > 0.0
 
 
-def test_the_host_swaps_classic_and_hd_high_live(fio_session):
+def test_the_host_swaps_classic_and_hd_high_live(fio_session, monkeypatch):
     """Settings > Display > Renderer and ``r_renderer`` both come down to
     QtGameView.switch_renderer: there and back, in the editor and in Play,
-    and Classic draws what it drew before the trip."""
+    and Classic draws what it drew before the trip.
+
+    Hold the host's render clock still: the frame comparison is about renderer
+    resource handoff, not animation accumulated while HD_High is constructed.
+    """
+    import time
+    import types
+    import engine.qt_game_view as qt_game_view
+
+    frozen = types.SimpleNamespace(**{
+        name: getattr(time, name) for name in dir(time)
+        if not name.startswith("__")
+    })
+    now = time.perf_counter()
+    frozen.perf_counter = lambda: now
+    monkeypatch.setattr(qt_game_view, "time", frozen)
+
     from editor.things import Light, PlayerStart
     from tests.helpers.worlds import box_brush, level_data, make_thing, room
     spawn = make_thing(PlayerStart, "spawn", (0.0, 40.0, 0.0), angle=0.0)
@@ -300,7 +316,7 @@ def test_the_host_swaps_classic_and_hd_high_live(fio_session):
     session = fio_session(level_data(brushes=room(size=2048.0, height=512.0) + [crate],
                                      things=[spawn, lamp]))
     session.view.sysmon.set_active(False)
-    # Whichever renderer the shipped settings start with: from Classic.
+    # Begin on the original renderer, then switch both ways explicitly.
     assert session.view.switch_renderer("Forward")
     session.publish()
     session.paint()
