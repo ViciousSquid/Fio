@@ -30,7 +30,7 @@ PORTAL_GIZMO_HANDLE_PIXELS = 12.0
 PORTAL_GIZMO_PICK_PIXELS = 10.0
 # I/O System imports for drawing connections
 try:
-    from editor.io_system import get_connections
+    from editor.io_system import get_connections, io_revision
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
@@ -169,6 +169,8 @@ class View2D(QWidget):
         # The brushes' bounds in one array, for draw_brushes' cull
         # (_brush_cull_index).
         self._brush_cull = None
+        # The I/O links' sources and targets (_link_index).
+        self._link_cache = None
 
         # ---- Arrow-key nudge undo coalescing ----
         # A rapid burst of nudges (tapping or holding an arrow key) should be a
@@ -271,6 +273,7 @@ class View2D(QWidget):
         self.animation_timer.stop()
         self._base_layer = None             # not kept while out of sight
         self._brush_cull = None
+        self._link_cache = None
 
     def reset_state(self):
         # A drag in flight owns the views: update_views() reaches every 2D view
@@ -1781,6 +1784,81 @@ class View2D(QWidget):
 
         return t0 <= t1
 
+    def _link_index(self):
+        """``(brush_sources, thing_sources, by_id, by_name)`` for the I/O links:
+        each unfiltered object with outputs and its connection list, and the
+        unfiltered objects by id (the last of an id) and by name (the first
+        of a name) for resolving their targets -- objects, not positions, so
+        a target dragged in place is drawn where it is now.
+
+        Finding them looks at every object in the map and asks the view
+        filters about each, and the links are drawn on every frame painted
+        over the kept scene (the camera moving, the arrows travelling), when
+        only a handful of objects have outputs. So the answer is kept while
+        nothing it depends on can have changed: the world epoch every editor
+        transaction moves, the I/O revision every connection change and
+        rename moves, the view filters' version, and the two row lists
+        (held, so a replaced list is seen, and versioned, so a spawn or a
+        removal in play is too) -- the signals _brush_cull_index and the
+        scene hierarchy already rely on.
+        """
+        state = self.editor.state
+        brushes, things = state.brushes, state.things
+        key = (getattr(state, 'world_epoch', None),
+               io_revision() if IO_AVAILABLE else None,
+               getattr(state.view_filters, 'version', None),
+               getattr(brushes, 'row_version', None), len(brushes),
+               getattr(things, 'row_version', None), len(things))
+        cached = self._link_cache
+        if (cached is not None and cached[0] == key
+                and cached[1] is brushes and cached[2] is things):
+            return cached[3]
+
+        # The objects with outputs first: a look at each object's connection
+        # list is cheap, where the view filters' test is not, and the target
+        # lookup below -- which filters every object in the map -- is built
+        # only when there is a link to draw.
+        brush_sources = []
+        thing_sources = []
+        if IO_AVAILABLE:
+            for brush in brushes:
+                io_conns = get_connections(brush)
+                if io_conns and not self._filtered(brush):
+                    brush_sources.append((brush, io_conns))
+            for thing in things:
+                io_conns = get_connections(thing)
+                if io_conns and not self._filtered(thing):
+                    thing_sources.append((thing, io_conns))
+
+        # Resolve targets by stable id first. Names remain the fallback for
+        # older maps that predate target_id.
+        by_id = {}
+        by_name = {}
+        if brush_sources or thing_sources:
+            for b in brushes:
+                if self._filtered(b):
+                    continue
+                b_id = b.get('id')
+                b_name = b.get('name')
+                if b_id:
+                    by_id[b_id] = b
+                if b_name and b_name not in by_name:
+                    by_name[b_name] = b
+            for t in things:
+                if self._filtered(t):
+                    continue
+                props = getattr(t, 'properties', {})
+                t_id = props.get('id')
+                t_name = props.get('name', '')
+                if t_id:
+                    by_id[t_id] = t
+                if t_name and t_name not in by_name:
+                    by_name[t_name] = t
+
+        index = (brush_sources, thing_sources, by_id, by_name)
+        self._link_cache = (key, brushes, things, index)
+        return index
+
     def draw_logic_connections(self, painter, visible_bounds):
         """
         Draws I/O connections between entities.
@@ -1793,55 +1871,20 @@ class View2D(QWidget):
         axis1_idx = ax_map[ax1]
         axis2_idx = ax_map[ax2]
         
-        # The objects with outputs first: a look at each object's connection
-        # list is cheap, where the view filters' test is not, and the target
-        # lookup below -- which filters every object in the map -- is built
-        # only when there is a link to draw. This runs on every frame drawn
-        # over the kept scene (the camera moving, the arrows travelling).
-        brush_sources = []
-        thing_sources = []
-        if IO_AVAILABLE:
-            for brush in self.editor.state.brushes:
-                io_conns = get_connections(brush)
-                if io_conns and not self._filtered(brush):
-                    brush_sources.append((brush, io_conns))
-            for thing in self.editor.state.things:
-                io_conns = get_connections(thing)
-                if io_conns and not self._filtered(thing):
-                    thing_sources.append((thing, io_conns))
+        brush_sources, thing_sources, by_id, by_name = self._link_index()
 
-        # Resolve targets by stable id first. Names remain the fallback for
-        # older maps that predate target_id.
-        pos_by_id = {}
-        pos_by_name = {}
-        if brush_sources or thing_sources:
-            for b in self.editor.state.brushes:
-                if self._filtered(b):
-                    continue
-                b_id = b.get('id')
-                b_name = b.get('name')
-                if b_id:
-                    pos_by_id[b_id] = b['pos']
-                if b_name and b_name not in pos_by_name:
-                    pos_by_name[b_name] = b['pos']
-            for t in self.editor.state.things:
-                if self._filtered(t):
-                    continue
-                props = getattr(t, 'properties', {})
-                t_id = props.get('id')
-                t_name = props.get('name', '')
-                if t_id:
-                    pos_by_id[t_id] = t.pos
-                if t_name and t_name not in pos_by_name:
-                    pos_by_name[t_name] = t.pos
+        def position(obj):
+            # Where the target is now: a drag moves it in place.
+            return obj['pos'] if isinstance(obj, dict) else obj.pos
 
         def get_target_pos(conn):
             target_id = getattr(conn, 'target_id', '') or ''
             if target_id:
-                target = pos_by_id.get(target_id)
+                target = by_id.get(target_id)
                 if target is not None:
-                    return target
-            return pos_by_name.get(getattr(conn, 'target_name', ''))
+                    return position(target)
+            target = by_name.get(getattr(conn, 'target_name', ''))
+            return None if target is None else position(target)
 
         def entity_id(entity):
             if isinstance(entity, dict):
