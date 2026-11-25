@@ -1226,8 +1226,17 @@ class EditorState:
                 if isinstance(entry, dict)
             ]
 
+        stream = self.editor_stream
+        streaming = stream is not None and not stream.suspended
+        # Streamed, the checkpoint's brushes are the stream's records, which
+        # the resident brushes are merged into below: serialised once, for
+        # that, rather than once more for an entry the stream's replaces.
+        # Either way before the selection is recorded, which needs the ids
+        # serialising gives new brushes.
+        brushes = (self._serialize_brushes() if streaming
+                   else self._serialize_brushes_for_undo())
         checkpoint = {
-            'brushes': self._serialize_brushes_for_undo(),
+            'brushes': brushes,
             'things': [t.to_dict() for t in self.things],
             'selection': self._selection_identifiers(),
             'terrain_csg_subtractions': terrain_csg,
@@ -1236,10 +1245,9 @@ class EditorState:
             'terrain_texture_paint_base': terrain_paint_base,
             'items': self.item_definitions.to_level_data(),
         }
-        stream = self.editor_stream
-        if stream is not None and not stream.suspended:
+        if streaming:
             # Distant cells are part of the authored world, and of its history.
-            stream.merge(self._serialize_brushes(), checkpoint['things'])
+            stream.merge(brushes, checkpoint['things'])
             checkpoint.update(stream.all_data())
             checkpoint['editor_camera'] = stream.position
             checkpoint['editor_whole_world'] = stream.whole_world
