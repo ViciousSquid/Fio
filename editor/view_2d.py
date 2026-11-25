@@ -2219,6 +2219,26 @@ class View2D(QWidget):
             picked = np.union1d(picked, np.asarray(extra, dtype=np.intp))
         return [brushes[i] for i in picked.tolist()]
 
+    def _brush_rows_at(self, world_pos, axis1_idx, axis2_idx):
+        """The rows of the brushes that may hold *world_pos* in this view, in
+        map order: every brush get_object_at's exact test can find there (a
+        box holds its edges; one with its corners either way round is
+        normalised), the rows the cull index does not place, and the brushes
+        a tool may be writing in place -- the brush cull's contract above."""
+        brushes = self.editor.state.brushes
+        _key, bounds, always, groups, rows = self._brush_cull_index(brushes)
+        x, y = world_pos.x(), world_pos.y()
+        a, b = bounds[:, axis1_idx], bounds[:, axis1_idx + 3]
+        c, d = bounds[:, axis2_idx], bounds[:, axis2_idx + 3]
+        hit = ((np.minimum(a, b) <= x) & (x <= np.maximum(a, b))
+               & (np.minimum(c, d) <= y) & (y <= np.maximum(c, d)))
+        hit |= np.isnan(bounds).any(axis=1)
+        picked = np.flatnonzero(hit)
+        extra = always + self._edited_rows(brushes, groups, rows)
+        if extra:
+            picked = np.union1d(picked, np.asarray(extra, dtype=np.intp))
+        return picked.tolist()
+
     def draw_brushes(self, painter, visible_bounds):
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
@@ -5108,7 +5128,10 @@ class View2D(QWidget):
                 else:
                     candidates.append(thing)
         
-        for brush in reversed(self.editor.state.brushes):
+        brushes = self.editor.state.brushes
+        i1, i2 = ax_map[ax1], ax_map[ax2]
+        for row in reversed(self._brush_rows_at(world_pos, i1, i2)):
+            brush = brushes[row]
             if self._hidden(brush):
                 continue
 
@@ -5118,7 +5141,6 @@ class View2D(QWidget):
             # Derived bounds (brush_placement): an angled brush's planes, a
             # previewed mover where it is drawn.
             b = brush_placement.world_bounds(brush)
-            i1, i2 = ax_map[ax1], ax_map[ax2]
             brush_rect = QRectF(QPointF(b[i1], b[i2]),
                                 QPointF(b[i1 + 3], b[i2 + 3])).normalized()
             
