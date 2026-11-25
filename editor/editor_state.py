@@ -16,6 +16,7 @@ import threading
 from collections import deque
 from .things import PlayerStart, Thing
 from editor.things import update_all_counters_from_entities
+from engine import gc_policy
 from engine import player_starts as start_rules
 from engine.row_list import row_list
 
@@ -1268,9 +1269,12 @@ class EditorState:
         # Keep the redo branch we are about to drop, so an operation that turns
         # out to change nothing can put it back (see discard_last_checkpoint).
         self._discarded_redo = list(self.redo_stack)
-        self.undo_stack.append(self._history_entry())
-        self.redo_stack.clear()
-        self._enforce_history_budget()
+        # The checkpoint serialises the whole world: no collection walking
+        # it part way through (engine/gc_policy.py).
+        with gc_policy.paused():
+            self.undo_stack.append(self._history_entry())
+            self.redo_stack.clear()
+            self._enforce_history_budget()
 
     def discard_last_checkpoint(self):
         """Undo a :meth:`save_state` that turned out to guard no change.

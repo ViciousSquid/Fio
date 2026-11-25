@@ -3794,19 +3794,23 @@ class MainWindow(QMainWindow):
         if self._end_gesture():
             return                  # Ctrl+Z mid-drag takes the drag back
         self.stop_mover_preview()   # its brush may not be in the scene after
-        if self.state.undo():
-            self._resync_components_after_history()
-            self.mark_as_modified() # Undo changes state
-            self.update_all_ui()
+        # Undo rebuilds the world from its checkpoint: no collection walking
+        # the rest of it part way through (engine/gc_policy.py).
+        with gc_policy.paused():
+            if self.state.undo():
+                self._resync_components_after_history()
+                self.mark_as_modified() # Undo changes state
+                self.update_all_ui()
 
     def redo(self):
         if self._end_gesture():
             return
         self.stop_mover_preview()
-        if self.state.redo():
-            self._resync_components_after_history()
-            self.mark_as_modified() # Redo changes state
-            self.update_all_ui()
+        with gc_policy.paused():
+            if self.state.redo():
+                self._resync_components_after_history()
+                self.mark_as_modified() # Redo changes state
+                self.update_all_ui()
 
     def _resync_components_after_history(self):
         """Re-point everything holding an object reference after an undo/redo.
