@@ -5637,7 +5637,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -5672,7 +5678,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -5707,7 +5719,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -5742,7 +5760,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -5777,7 +5801,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -5812,7 +5842,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -5847,7 +5883,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -5922,7 +5964,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -5957,7 +6005,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -5992,7 +6046,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -6027,7 +6087,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -6168,7 +6234,14 @@
                 "friction": 0.55,
                 "linear_damping": 0.08,
                 "angular_damping": 0.12,
-                "topples": false
+                "topples": false,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -6422,7 +6495,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -6457,7 +6536,13 @@
                 "hidden": false,
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -6529,7 +6614,14 @@
                 "collect_key_name": "blue_key",
                 "collect_item": "gun1",
                 "collect_custom_sprite": "",
-                "topples": true
+                "topples": true,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -6601,7 +6693,14 @@
                 "collect_key_name": "blue_key",
                 "collect_item": "gun1",
                 "collect_custom_sprite": "",
-                "topples": true
+                "topples": true,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -6673,7 +6772,14 @@
                 "collect_key_name": "blue_key",
                 "collect_item": "gun1",
                 "collect_custom_sprite": "",
-                "topples": true
+                "topples": true,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -6795,7 +6901,14 @@
                 "friction": 0.55,
                 "linear_damping": 0.08,
                 "angular_damping": 0.12,
-                "topples": false
+                "topples": false,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -6867,7 +6980,14 @@
                 "friction": 0.55,
                 "linear_damping": 0.08,
                 "angular_damping": 0.12,
-                "topples": false
+                "topples": false,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -7209,7 +7329,14 @@
                     1,
                     1
                 ],
-                "topples": false
+                "topples": false,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -7280,7 +7407,14 @@
                     1,
                     1
                 ],
-                "topples": false
+                "topples": false,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -7351,7 +7485,14 @@
                     1,
                     1
                 ],
-                "topples": false
+                "topples": false,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -7385,7 +7526,13 @@
                 ],
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -7458,7 +7605,14 @@
                 ],
                 "rolls": true,
                 "bounciness": 0.5,
-                "topples": false
+                "topples": false,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -7564,7 +7718,13 @@
                 ],
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -7750,7 +7910,13 @@
                 ],
                 "cookie_enabled": false,
                 "cookie_texture": "",
-                "cookie_shadow_floor": 0.15
+                "cookie_shadow_floor": 0.15,
+                "shadow_map_size": 0,
+                "shadow_softness": 1.25,
+                "shadow_bias": 1.0,
+                "path_target": "",
+                "path_speed": 64.0,
+                "path_start_on": true
             },
             "io_connections": []
         },
@@ -7822,7 +7988,14 @@
                 "friction": 0.55,
                 "linear_damping": 0.08,
                 "angular_damping": 0.12,
-                "topples": false
+                "topples": false,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -7880,8 +8053,8 @@
                     0.0,
                     0.0
                 ],
-                "physics_enabled": false,
-                "no_collision": true,
+                "physics_enabled": true,
+                "no_collision": false,
                 "collision_shape": "aabb",
                 "gravity": true,
                 "friction": 0.55,
@@ -7893,7 +8066,14 @@
                     1,
                     1
                 ],
-                "topples": false
+                "topples": true,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -7951,8 +8131,8 @@
                     0.0,
                     0.0
                 ],
-                "physics_enabled": false,
-                "no_collision": true,
+                "physics_enabled": true,
+                "no_collision": false,
                 "collision_shape": "aabb",
                 "gravity": true,
                 "friction": 0.55,
@@ -7964,7 +8144,14 @@
                     1,
                     1
                 ],
-                "topples": false
+                "topples": true,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -8022,9 +8209,9 @@
                     0.0,
                     0.0
                 ],
-                "physics_enabled": false,
-                "no_collision": true,
-                "collision_shape": "aabb",
+                "physics_enabled": true,
+                "no_collision": false,
+                "collision_shape": "mesh",
                 "gravity": true,
                 "friction": 0.55,
                 "linear_damping": 0.08,
@@ -8035,7 +8222,14 @@
                     1,
                     1
                 ],
-                "topples": false
+                "topples": true,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -8093,8 +8287,8 @@
                     0.0,
                     0.0
                 ],
-                "physics_enabled": false,
-                "no_collision": true,
+                "physics_enabled": true,
+                "no_collision": false,
                 "collision_shape": "aabb",
                 "gravity": true,
                 "friction": 0.55,
@@ -8106,7 +8300,14 @@
                     1,
                     1
                 ],
-                "topples": false
+                "topples": true,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         },
@@ -8164,8 +8365,8 @@
                     0.0,
                     0.0
                 ],
-                "physics_enabled": false,
-                "no_collision": true,
+                "physics_enabled": true,
+                "no_collision": false,
                 "collision_shape": "aabb",
                 "gravity": true,
                 "friction": 0.55,
@@ -8177,7 +8378,14 @@
                     1,
                     1
                 ],
-                "topples": false
+                "topples": true,
+                "rotate_enabled": false,
+                "rotate_mode": "continuous",
+                "rotate_axis": "auto",
+                "rotate_speed": 90.0,
+                "rotate_angle": 90.0,
+                "rotate_ease": 0.6,
+                "rotate_autostart": false
             },
             "io_connections": []
         }
