@@ -16,6 +16,7 @@ import threading
 from collections import deque
 from .things import PlayerStart, Thing
 from editor.things import update_all_counters_from_entities
+from engine import gc_policy
 from engine import player_starts as start_rules
 from engine.row_list import row_list
 
@@ -1225,8 +1226,17 @@ class EditorState:
                 if isinstance(entry, dict)
             ]
 
+        stream = self.editor_stream
+        streaming = stream is not None and not stream.suspended
+        # Streamed, the checkpoint's brushes are the stream's records, which
+        # the resident brushes are merged into below: serialised once, for
+        # that, rather than once more for an entry the stream's replaces.
+        # Either way before the selection is recorded, which needs the ids
+        # serialising gives new brushes.
+        brushes = (self._serialize_brushes() if streaming
+                   else self._serialize_brushes_for_undo())
         checkpoint = {
-            'brushes': self._serialize_brushes_for_undo(),
+            'brushes': brushes,
             'things': [t.to_dict() for t in self.things],
             'selection': self._selection_identifiers(),
             'terrain_csg_subtractions': terrain_csg,
@@ -1235,10 +1245,9 @@ class EditorState:
             'terrain_texture_paint_base': terrain_paint_base,
             'items': self.item_definitions.to_level_data(),
         }
-        stream = self.editor_stream
-        if stream is not None and not stream.suspended:
+        if streaming:
             # Distant cells are part of the authored world, and of its history.
-            stream.merge(self._serialize_brushes(), checkpoint['things'])
+            stream.merge(brushes, checkpoint['things'])
             checkpoint.update(stream.all_data())
             checkpoint['editor_camera'] = stream.position
             checkpoint['editor_whole_world'] = stream.whole_world
@@ -1268,9 +1277,12 @@ class EditorState:
         # Keep the redo branch we are about to drop, so an operation that turns
         # out to change nothing can put it back (see discard_last_checkpoint).
         self._discarded_redo = list(self.redo_stack)
-        self.undo_stack.append(self._history_entry())
-        self.redo_stack.clear()
-        self._enforce_history_budget()
+        # The checkpoint serialises the whole world: no collection walking
+        # it part way through (engine/gc_policy.py).
+        with gc_policy.paused():
+            self.undo_stack.append(self._history_entry())
+            self.redo_stack.clear()
+            self._enforce_history_budget()
 
     def discard_last_checkpoint(self):
         """Undo a :meth:`save_state` that turned out to guard no change.

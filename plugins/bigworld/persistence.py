@@ -197,7 +197,7 @@ def _unpark_props(props: dict) -> None:
     _canonicalise_false(props)
 
 
-def normalize_streaming_state(level: dict) -> dict:
+def normalize_streaming_state(level: dict, *, deep: bool = True) -> dict:
     """A copy of a serialized level with Big World streaming state resolved away.
 
     While a cell is parked its objects carry ``hidden``/``disabled`` set to True
@@ -206,16 +206,32 @@ def normalize_streaming_state(level: dict) -> dict:
     drops the transient markers (and ``bw_active``). Without it, every currently
     unloaded object would diff as a spurious change. Non-destructive: the live
     objects are untouched.
+
+    Only top-level keys of each record (and of a thing's ``properties``) are
+    changed, so *deep* False -- a shallow copy of each record -- is enough for
+    a level just serialized for the purpose, and skips deep-copying it all. Its
+    records still share nested values (a thing's ``pos``) with the live objects,
+    so whatever is kept from them must be copied off them; a level that must
+    stay detached as a whole (the base a delta is taken against) takes the deep
+    copy.
     """
     out: Dict[str, list] = {"things": [], "brushes": []}
     for t in level.get("things", []) or []:
-        t2 = copy.deepcopy(t)
+        if deep:
+            t2 = copy.deepcopy(t)
+        else:
+            t2 = dict(t)
+            if isinstance(t2.get("properties"), dict):
+                t2["properties"] = dict(t2["properties"])
         props = t2.get("properties")
         if isinstance(props, dict):
             _unpark_props(props)
         out["things"].append(t2)
     for b in level.get("brushes", []) or []:
-        b2 = copy.deepcopy(b)
+        if deep:
+            b2 = copy.deepcopy(b)
+        else:
+            b2 = dict(b) if isinstance(b, dict) else b
         if isinstance(b2, dict):
             if _HID_MARK in b2:
                 b2["hidden"] = b2.get(_HID_MARK)

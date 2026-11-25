@@ -14,7 +14,13 @@ made since. Frozen objects are still freed when nothing refers to them; a
 reference cycle among them waits for the next settle, which unfreezes
 first; :func:`release` (a window closing) unfreezes, so what it owned can
 be collected.
+
+:func:`paused` only holds the collector off for an editor history step (an
+undo, a redo, a checkpoint), which builds a world's worth of records in one
+go, and decides nothing about collecting or freezing.
 """
+
+import contextlib
 
 import gc
 import time
@@ -33,6 +39,27 @@ def settle() -> float:
     gc.freeze()
     last_ms = (time.perf_counter() - started) * 1000.0
     return last_ms
+
+
+@contextlib.contextmanager
+def paused():
+    """Pause the cyclic collector for one editor history step (nests safely).
+
+    An undo, a redo or an undo checkpoint builds a whole world's worth of
+    records at once -- JSON text, brush dicts, Things -- and the allocation
+    counts it runs up start collections part way through, which walk every
+    tracked object made since the last settle: after an undo, the whole world
+    it rebuilt. Nothing is collected, frozen or unfrozen afterwards: what the
+    step left behind waits for the next collection the counts start, as any
+    garbage does.
+    """
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
 
 
 def release() -> None:

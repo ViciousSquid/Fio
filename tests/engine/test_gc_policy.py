@@ -55,3 +55,38 @@ def test_release_makes_a_frozen_world_collectable():
     gc_policy.release()
     gc.collect()
     assert probe() is None
+
+
+def test_paused_holds_the_collector_off_and_nests():
+    # An editor history step: the collector is off for it, put back as it
+    # was afterwards (even on an error), and nothing is collected or frozen.
+    assert gc.isenabled()
+    garbage = weakref.ref(_cycle())
+    with gc_policy.paused():
+        assert not gc.isenabled()
+        with gc_policy.paused():
+            assert not gc.isenabled()
+        assert not gc.isenabled()              # the inner one leaves it off
+    assert gc.isenabled()
+    assert garbage() is not None               # no collection of its own
+    assert gc.get_freeze_count() == 0
+    try:
+        with gc_policy.paused():
+            raise RuntimeError("the step failed")
+    except RuntimeError:
+        pass
+    assert gc.isenabled()
+    gc.collect()
+    assert garbage() is None
+
+
+def test_an_undo_checkpoint_is_taken_with_the_collector_paused(monkeypatch):
+    from editor.editor_state import EditorState
+    state = EditorState()
+    seen = []
+    real = state._history_entry
+    monkeypatch.setattr(state, '_history_entry',
+                        lambda: (seen.append(gc.isenabled()), real())[1])
+    state.save_state()
+    assert seen == [False]
+    assert gc.isenabled()

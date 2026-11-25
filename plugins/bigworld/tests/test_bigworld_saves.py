@@ -139,6 +139,26 @@ def test_unloaded_cell_change_survives_in_registry():
     assert b_changed == {"B-mon"}
 
 
+def test_a_committed_cell_is_detached_from_the_live_world():
+    """What a cell's unload commits is a copy: the world moving on afterwards
+    (a body dragged, a flag set) must not rewrite the registry behind it --
+    the commit normalises the cell shallowly and copies only what changed."""
+    things, brushes = make_world()
+    logic = make_logic(things, brushes, A_POS)
+    s = new_session(logic)
+    s.start(player_pos=A_POS)
+    things[0].properties["dead"] = True
+    things[0].pos[0] += 10.0
+    brushes[0]["hidden"] = True
+    s.tick(player_pos=B_POS)                         # Cell A committed on unload
+    committed = copy.deepcopy(s.registry["0,0"])
+    things[0].pos[0] += 500.0
+    things[0].properties["dead"] = False
+    things[0].properties["loot"] = ["coin"]
+    brushes[0]["hidden"] = False
+    assert s.registry["0,0"] == committed
+
+
 def test_light_change_committed_on_unload():
     """A light lives in the manager's separate cell.lights list; a change to it
     must still enter the registry when its cell unloads (not only at save)."""

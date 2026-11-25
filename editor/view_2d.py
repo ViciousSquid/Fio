@@ -30,7 +30,7 @@ PORTAL_GIZMO_HANDLE_PIXELS = 12.0
 PORTAL_GIZMO_PICK_PIXELS = 10.0
 # I/O System imports for drawing connections
 try:
-    from editor.io_system import get_connections
+    from editor.io_system import get_connections, io_revision
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
@@ -113,6 +113,8 @@ class View2D(QWidget):
         self.drag_group = []
         self.drag_primary = None
         self._object_drag_undo_saved = False
+        # Whether the brush resize under way has taken its undo checkpoint.
+        self._brush_resize_undo_saved = False
 
         # --- Select tool: rubber-band marquee state ---
         # marquee_start/current are world-space (axis1, axis2) points; marquee
@@ -169,6 +171,10 @@ class View2D(QWidget):
         # The brushes' bounds in one array, for draw_brushes' cull
         # (_brush_cull_index).
         self._brush_cull = None
+        # The I/O links' sources and targets (_link_index).
+        self._link_cache = None
+        # The things draw_things always tests (_thing_cull_always).
+        self._thing_cull = None
 
         # ---- Arrow-key nudge undo coalescing ----
         # A rapid burst of nudges (tapping or holding an arrow key) should be a
@@ -271,6 +277,8 @@ class View2D(QWidget):
         self.animation_timer.stop()
         self._base_layer = None             # not kept while out of sight
         self._brush_cull = None
+        self._link_cache = None
+        self._thing_cull = None
 
     def reset_state(self):
         # A drag in flight owns the views: update_views() reaches every 2D view
@@ -646,7 +654,13 @@ class View2D(QWidget):
             'Display', 'locked_not_selectable_2d', fallback=False)
         hits = []
 
-        for brush in self.editor.state.brushes:
+        # Only the brushes whose box may meet the marquee are tested (a
+        # brush it encloses meets it too); the test below decides, in map
+        # order, as it did for every brush in the map on each mouse move.
+        brushes = self.editor.state.brushes
+        for row in self._brush_rows_touching(r.left(), r.top(), r.right(), r.bottom(),
+                                             i1, i2):
+            brush = brushes[row]
             if self._hidden(brush):
                 continue
             if locked_out and brush.get('lock', False):
@@ -1781,6 +1795,81 @@ class View2D(QWidget):
 
         return t0 <= t1
 
+    def _link_index(self):
+        """``(brush_sources, thing_sources, by_id, by_name)`` for the I/O links:
+        each unfiltered object with outputs and its connection list, and the
+        unfiltered objects by id (the last of an id) and by name (the first
+        of a name) for resolving their targets -- objects, not positions, so
+        a target dragged in place is drawn where it is now.
+
+        Finding them looks at every object in the map and asks the view
+        filters about each, and the links are drawn on every frame painted
+        over the kept scene (the camera moving, the arrows travelling), when
+        only a handful of objects have outputs. So the answer is kept while
+        nothing it depends on can have changed: the world epoch every editor
+        transaction moves, the I/O revision every connection change and
+        rename moves, the view filters' version, and the two row lists
+        (held, so a replaced list is seen, and versioned, so a spawn or a
+        removal in play is too) -- the signals _brush_cull_index and the
+        scene hierarchy already rely on.
+        """
+        state = self.editor.state
+        brushes, things = state.brushes, state.things
+        key = (getattr(state, 'world_epoch', None),
+               io_revision() if IO_AVAILABLE else None,
+               getattr(state.view_filters, 'version', None),
+               getattr(brushes, 'row_version', None), len(brushes),
+               getattr(things, 'row_version', None), len(things))
+        cached = self._link_cache
+        if (cached is not None and cached[0] == key
+                and cached[1] is brushes and cached[2] is things):
+            return cached[3]
+
+        # The objects with outputs first: a look at each object's connection
+        # list is cheap, where the view filters' test is not, and the target
+        # lookup below -- which filters every object in the map -- is built
+        # only when there is a link to draw.
+        brush_sources = []
+        thing_sources = []
+        if IO_AVAILABLE:
+            for brush in brushes:
+                io_conns = get_connections(brush)
+                if io_conns and not self._filtered(brush):
+                    brush_sources.append((brush, io_conns))
+            for thing in things:
+                io_conns = get_connections(thing)
+                if io_conns and not self._filtered(thing):
+                    thing_sources.append((thing, io_conns))
+
+        # Resolve targets by stable id first. Names remain the fallback for
+        # older maps that predate target_id.
+        by_id = {}
+        by_name = {}
+        if brush_sources or thing_sources:
+            for b in brushes:
+                if self._filtered(b):
+                    continue
+                b_id = b.get('id')
+                b_name = b.get('name')
+                if b_id:
+                    by_id[b_id] = b
+                if b_name and b_name not in by_name:
+                    by_name[b_name] = b
+            for t in things:
+                if self._filtered(t):
+                    continue
+                props = getattr(t, 'properties', {})
+                t_id = props.get('id')
+                t_name = props.get('name', '')
+                if t_id:
+                    by_id[t_id] = t
+                if t_name and t_name not in by_name:
+                    by_name[t_name] = t
+
+        index = (brush_sources, thing_sources, by_id, by_name)
+        self._link_cache = (key, brushes, things, index)
+        return index
+
     def draw_logic_connections(self, painter, visible_bounds):
         """
         Draws I/O connections between entities.
@@ -1793,55 +1882,20 @@ class View2D(QWidget):
         axis1_idx = ax_map[ax1]
         axis2_idx = ax_map[ax2]
         
-        # The objects with outputs first: a look at each object's connection
-        # list is cheap, where the view filters' test is not, and the target
-        # lookup below -- which filters every object in the map -- is built
-        # only when there is a link to draw. This runs on every frame drawn
-        # over the kept scene (the camera moving, the arrows travelling).
-        brush_sources = []
-        thing_sources = []
-        if IO_AVAILABLE:
-            for brush in self.editor.state.brushes:
-                io_conns = get_connections(brush)
-                if io_conns and not self._filtered(brush):
-                    brush_sources.append((brush, io_conns))
-            for thing in self.editor.state.things:
-                io_conns = get_connections(thing)
-                if io_conns and not self._filtered(thing):
-                    thing_sources.append((thing, io_conns))
+        brush_sources, thing_sources, by_id, by_name = self._link_index()
 
-        # Resolve targets by stable id first. Names remain the fallback for
-        # older maps that predate target_id.
-        pos_by_id = {}
-        pos_by_name = {}
-        if brush_sources or thing_sources:
-            for b in self.editor.state.brushes:
-                if self._filtered(b):
-                    continue
-                b_id = b.get('id')
-                b_name = b.get('name')
-                if b_id:
-                    pos_by_id[b_id] = b['pos']
-                if b_name and b_name not in pos_by_name:
-                    pos_by_name[b_name] = b['pos']
-            for t in self.editor.state.things:
-                if self._filtered(t):
-                    continue
-                props = getattr(t, 'properties', {})
-                t_id = props.get('id')
-                t_name = props.get('name', '')
-                if t_id:
-                    pos_by_id[t_id] = t.pos
-                if t_name and t_name not in pos_by_name:
-                    pos_by_name[t_name] = t.pos
+        def position(obj):
+            # Where the target is now: a drag moves it in place.
+            return obj['pos'] if isinstance(obj, dict) else obj.pos
 
         def get_target_pos(conn):
             target_id = getattr(conn, 'target_id', '') or ''
             if target_id:
-                target = pos_by_id.get(target_id)
+                target = by_id.get(target_id)
                 if target is not None:
-                    return target
-            return pos_by_name.get(getattr(conn, 'target_name', ''))
+                    return position(target)
+            target = by_name.get(getattr(conn, 'target_name', ''))
+            return None if target is None else position(target)
 
         def entity_id(entity):
             if isinstance(entity, dict):
@@ -2175,6 +2229,27 @@ class View2D(QWidget):
         if extra:
             picked = np.union1d(picked, np.asarray(extra, dtype=np.intp))
         return [brushes[i] for i in picked.tolist()]
+
+    def _brush_rows_touching(self, left, top, right, bottom, axis1_idx, axis2_idx):
+        """The rows of the brushes whose box may meet the world rectangle
+        *left*..*right*, *top*..*bottom* in this view, in map order: every brush
+        an exact test of a click (a point: *left* == *right*) or a marquee can
+        find there -- touching counts, and a box with its corners either way
+        round is normalised -- the rows the cull index does not place, and the
+        brushes a tool may be writing in place (the brush cull's contract
+        above)."""
+        brushes = self.editor.state.brushes
+        _key, bounds, always, groups, rows = self._brush_cull_index(brushes)
+        a, b = bounds[:, axis1_idx], bounds[:, axis1_idx + 3]
+        c, d = bounds[:, axis2_idx], bounds[:, axis2_idx + 3]
+        hit = ((np.minimum(a, b) <= right) & (np.maximum(a, b) >= left)
+               & (np.minimum(c, d) <= bottom) & (np.maximum(c, d) >= top))
+        hit |= np.isnan(bounds).any(axis=1)
+        picked = np.flatnonzero(hit)
+        extra = always + self._edited_rows(brushes, groups, rows)
+        if extra:
+            picked = np.union1d(picked, np.asarray(extra, dtype=np.intp))
+        return picked.tolist()
 
     def draw_brushes(self, painter, visible_bounds):
         ax1, ax2 = self.get_axes()
@@ -2582,6 +2657,59 @@ class View2D(QWidget):
         return QRectF(center.x() - width / 2, center.y() - height / 2,
                       width, height)
 
+    def _thing_cull_always(self, things):
+        """The rows of the things draw_things tests whatever their position:
+        those whose reach is not the plain sprite margin -- anything with a
+        radius (a Light, a Speaker: a torch's flickers every tick), a
+        PlayerStart's sign, a model (its reach is known once it has loaded)
+        -- kept while the world's epoch and row set stand, plus the selection,
+        which a tool may be editing in place."""
+        state = self.editor.state
+        key = (getattr(state, 'world_epoch', None), id(things),
+               getattr(things, 'row_version', None), len(things))
+        cull = self._thing_cull
+        if cull is None or cull[0] != key or cull[1] is not things:
+            always = [i for i, thing in enumerate(things)
+                      if hasattr(thing, 'get_radius') or isinstance(thing, PlayerStart)
+                      or entity_model_path(thing)]
+            rows = {id(thing): i for i, thing in enumerate(things)}
+            cull = self._thing_cull = (key, things, always, rows)
+        _key, _things, always, rows = cull
+        edited = [rows[id(obj)] for obj in state.selected_objects
+                  if rows.get(id(obj)) is not None and things[rows[id(obj)]] is obj]
+        return always + edited if edited else always
+
+    def _things_in_view(self, visible_bounds, axis1_idx, axis2_idx):
+        """The things that may be in view, in map (drawing) order: every
+        thing is_thing_visible passes, and a few more.
+
+        A thing that draws only its sprite reaches the plain margin (32 pixels)
+        from its origin, so where it is now decides it: the positions are read
+        afresh each time (a drag or play moves things with no edit), and one
+        vectorised test, touching counting, picks those that may be in view.
+        The rest are always tested (_thing_cull_always)."""
+        things = self.editor.state.things
+        n = len(things)
+        if not n:
+            return []
+        always = self._thing_cull_always(things)
+        try:
+            xy = np.fromiter((v for thing in things
+                              for v in (thing.pos[axis1_idx], thing.pos[axis2_idx])),
+                             dtype=np.float64, count=2 * n).reshape(n, 2)
+        except (TypeError, ValueError, IndexError, AttributeError):
+            return list(things)             # tested one by one, as before
+        margin = 32.0 / self.zoom_factor if self.zoom_factor > 0 else 32.0
+        hit = ((xy[:, 0] + margin >= visible_bounds.left())
+               & (xy[:, 0] - margin <= visible_bounds.right())
+               & (xy[:, 1] + margin >= visible_bounds.top())
+               & (xy[:, 1] - margin <= visible_bounds.bottom()))
+        hit |= np.isnan(xy).any(axis=1)
+        picked = np.flatnonzero(hit)
+        if always:
+            picked = np.union1d(picked, np.asarray(always, dtype=np.intp))
+        return [things[i] for i in picked.tolist()]
+
     def draw_things(self, painter, visible_bounds):
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
@@ -2593,7 +2721,7 @@ class View2D(QWidget):
         selected = SelectionLookup(self.editor.state.selected_objects)
         primary = self.editor.primary_selection()
         
-        for thing in self.editor.state.things:
+        for thing in self._things_in_view(visible_bounds, axis1_idx, axis2_idx):
             # Skip hidden things
             if self._hidden(thing):
                 continue
@@ -4254,7 +4382,20 @@ class View2D(QWidget):
                     self.last_3d_update_time = current_time
         
         elif self.is_resizing_brush:
-            self.resize_brush(world_pos)
+            if self._brush_resize_undo_saved:
+                self.resize_brush(world_pos)
+            else:
+                # One undo step for the whole resize, taken before its first
+                # change, as a drag's is; a step that changes nothing (the
+                # snap held) leaves no checkpoint behind.
+                brush = self.editor.primary_selection()
+                before = (list(brush['pos']), list(brush['size']))
+                self.main_window.save_state()
+                self.resize_brush(world_pos)
+                if (list(brush['pos']), list(brush['size'])) == before:
+                    self.editor.state.discard_last_checkpoint()
+                else:
+                    self._brush_resize_undo_saved = True
             # Apply same throttle to brush resizing for consistency
             current_time = time.time()
             if current_time - self.last_3d_update_time > 0.016:
@@ -4351,7 +4492,9 @@ class View2D(QWidget):
                             if self.manip_mode == 'rotate' else
                             "Group handles: SCALE (drag a handle to resize)")
                         action_taken = False   # nothing moved; don't stack an undo
-            if self.is_resizing_brush: self.is_resizing_brush = False
+            if self.is_resizing_brush:
+                self.is_resizing_brush = False
+                self._brush_resize_undo_saved = False
 
             # Handle connection completion
             if self.is_connecting:
@@ -4408,7 +4551,17 @@ class View2D(QWidget):
                     self.editor.set_selected_objects([new_brush])
             
             if action_taken:
-                self.main_window.save_state()
+                # The gesture's one undo checkpoint was taken as it began (a
+                # drag's or a resize's first change, before a drawn brush):
+                # what changed in place since is announced as the gizmo does,
+                # with no second checkpoint of the result -- which made the
+                # first Ctrl+Z after a drag do nothing.
+                self.editor.state.mark_world_changed(
+                    tuple(self.editor.state.selected_objects))
+                components = self.main_window.components
+                if components is not None:
+                    components.invalidate()
+                self.main_window.mark_as_modified()
         self.update()
 
     def contextMenuEvent(self, event):
@@ -5065,7 +5218,11 @@ class View2D(QWidget):
                 else:
                     candidates.append(thing)
         
-        for brush in reversed(self.editor.state.brushes):
+        brushes = self.editor.state.brushes
+        i1, i2 = ax_map[ax1], ax_map[ax2]
+        x, y = world_pos.x(), world_pos.y()
+        for row in reversed(self._brush_rows_touching(x, y, x, y, i1, i2)):
+            brush = brushes[row]
             if self._hidden(brush):
                 continue
 
@@ -5075,7 +5232,6 @@ class View2D(QWidget):
             # Derived bounds (brush_placement): an angled brush's planes, a
             # previewed mover where it is drawn.
             b = brush_placement.world_bounds(brush)
-            i1, i2 = ax_map[ax1], ax_map[ax2]
             brush_rect = QRectF(QPointF(b[i1], b[i2]),
                                 QPointF(b[i1 + 3], b[i2 + 3])).normalized()
             

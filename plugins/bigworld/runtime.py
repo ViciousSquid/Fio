@@ -35,6 +35,7 @@ list/tuple (player build); both are read by index.
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import Optional
 
@@ -932,12 +933,20 @@ class BigWorldSession:
         self.registry.pop(key, None)
         if cell is None:
             return
-        live = normalize_streaming_state(self._cell_live_level(cell))
+        # Serialized just now, so a shallow normalise does (it rewrites only
+        # top-level keys, on copies). The records still share values with
+        # the world's objects -- a thing's pos is its live list -- so what the
+        # registry keeps is copied off them: only the changed records, where
+        # copying the whole cell first copied everything a cell holds to keep
+        # the one or two that differ (usually none).
+        live = normalize_streaming_state(self._cell_live_level(cell), deep=False)
         sub = build_cell_delta_registry(
             self._base_subset(live), live, self.manager.cell_size)
         for k, entry in sub.items():
             if entry.get("things") or entry.get("brushes"):
-                self.registry[k] = entry
+                # Each record copied on its own, as the deep normalise did.
+                self.registry[k] = {kind: [copy.deepcopy(record) for record in records]
+                                    for kind, records in entry.items()}
 
     def _base_subset(self, live: dict) -> dict:
         """The base records that share an id with *live*'s.

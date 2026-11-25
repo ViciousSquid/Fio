@@ -90,3 +90,57 @@ def test_connection_link_visibility_toggle_updates_shared_state(main_window):
 
     main_window.set_connection_links_enabled(True)
     assert main_window.show_logic_links is True
+
+
+def _linked_pair():
+    source = {
+        'id': 'source', 'name': 'button', 'pos': [-50.0, 0.0, 0.0],
+        '_io_connections': [OutputConnection(
+            output_name='OnTrigger', target_name='door', input_name='Fire')],
+    }
+    target = {'id': 'door-id', 'name': 'door', 'pos': [50.0, 0.0, 0.0]}
+    return source, target
+
+
+def _draw_links(view):
+    painter = _Painter()
+    view.draw_logic_connections(painter, QRectF(-100.0, -100.0, 200.0, 200.0))
+    painter.end()
+    return painter.lines
+
+
+def test_links_are_looked_up_once_while_nothing_they_depend_on_changes(
+        main_window, monkeypatch):
+    # Finding the links filters every object in the map; it is done again
+    # only when the world, the connections, the filters or the rows move,
+    # and a target dragged in place is still drawn where it is now.
+    from editor import io_system
+    source, target = _linked_pair()
+    main_window.state.brushes[:] = [source, target]
+    view = main_window.view_top
+    view.view_type = 'top'
+    asked = []
+    real = view._filtered
+    monkeypatch.setattr(view, '_filtered', lambda obj: (asked.append(obj), real(obj))[1])
+
+    first = _draw_links(view)
+    assert len(first) == 1 and asked
+    asked.clear()
+    assert _draw_links(view) == first
+    assert not asked                                   # kept
+
+    target['pos'][0] += 30.0                           # a drag, in place
+    moved = _draw_links(view)
+    assert not asked and moved != first
+    view._link_cache = None
+    assert _draw_links(view) == moved                  # as a fresh lookup draws it
+    asked.clear()
+
+    for change in (lambda: io_system.bump_io_revision(),
+                   lambda: main_window.state.mark_world_changed(),
+                   lambda: main_window.state.view_filters.set_cordon(enabled=False),
+                   lambda: main_window.state.brushes.append({'id': 'x', 'pos': [0, 0, 0]})):
+        change()
+        _draw_links(view)
+        assert asked, change
+        asked.clear()
