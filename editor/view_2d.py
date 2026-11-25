@@ -171,6 +171,8 @@ class View2D(QWidget):
         self._brush_cull = None
         # The I/O links' sources and targets (_link_index).
         self._link_cache = None
+        # The things draw_things always tests (_thing_cull_always).
+        self._thing_cull = None
 
         # ---- Arrow-key nudge undo coalescing ----
         # A rapid burst of nudges (tapping or holding an arrow key) should be a
@@ -274,6 +276,7 @@ class View2D(QWidget):
         self._base_layer = None             # not kept while out of sight
         self._brush_cull = None
         self._link_cache = None
+        self._thing_cull = None
 
     def reset_state(self):
         # A drag in flight owns the views: update_views() reaches every 2D view
@@ -2652,6 +2655,59 @@ class View2D(QWidget):
         return QRectF(center.x() - width / 2, center.y() - height / 2,
                       width, height)
 
+    def _thing_cull_always(self, things):
+        """The rows of the things draw_things tests whatever their position:
+        those whose reach is not the plain sprite margin -- anything with a
+        radius (a Light, a Speaker: a torch's flickers every tick), a
+        PlayerStart's sign, a model (its reach is known once it has loaded)
+        -- kept while the world's epoch and row set stand, plus the selection,
+        which a tool may be editing in place."""
+        state = self.editor.state
+        key = (getattr(state, 'world_epoch', None), id(things),
+               getattr(things, 'row_version', None), len(things))
+        cull = self._thing_cull
+        if cull is None or cull[0] != key or cull[1] is not things:
+            always = [i for i, thing in enumerate(things)
+                      if hasattr(thing, 'get_radius') or isinstance(thing, PlayerStart)
+                      or entity_model_path(thing)]
+            rows = {id(thing): i for i, thing in enumerate(things)}
+            cull = self._thing_cull = (key, things, always, rows)
+        _key, _things, always, rows = cull
+        edited = [rows[id(obj)] for obj in state.selected_objects
+                  if rows.get(id(obj)) is not None and things[rows[id(obj)]] is obj]
+        return always + edited if edited else always
+
+    def _things_in_view(self, visible_bounds, axis1_idx, axis2_idx):
+        """The things that may be in view, in map (drawing) order: every
+        thing is_thing_visible passes, and a few more.
+
+        A thing that draws only its sprite reaches the plain margin (32 pixels)
+        from its origin, so where it is now decides it: the positions are read
+        afresh each time (a drag or play moves things with no edit), and one
+        vectorised test, touching counting, picks those that may be in view.
+        The rest are always tested (_thing_cull_always)."""
+        things = self.editor.state.things
+        n = len(things)
+        if not n:
+            return []
+        always = self._thing_cull_always(things)
+        try:
+            xy = np.fromiter((v for thing in things
+                              for v in (thing.pos[axis1_idx], thing.pos[axis2_idx])),
+                             dtype=np.float64, count=2 * n).reshape(n, 2)
+        except (TypeError, ValueError, IndexError, AttributeError):
+            return list(things)             # tested one by one, as before
+        margin = 32.0 / self.zoom_factor if self.zoom_factor > 0 else 32.0
+        hit = ((xy[:, 0] + margin >= visible_bounds.left())
+               & (xy[:, 0] - margin <= visible_bounds.right())
+               & (xy[:, 1] + margin >= visible_bounds.top())
+               & (xy[:, 1] - margin <= visible_bounds.bottom()))
+        hit |= np.isnan(xy).any(axis=1)
+        picked = np.flatnonzero(hit)
+        if always:
+            picked = np.union1d(picked, np.asarray(always, dtype=np.intp))
+        return [things[i] for i in picked.tolist()]
+
     def draw_things(self, painter, visible_bounds):
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
@@ -2663,7 +2719,7 @@ class View2D(QWidget):
         selected = SelectionLookup(self.editor.state.selected_objects)
         primary = self.editor.primary_selection()
         
-        for thing in self.editor.state.things:
+        for thing in self._things_in_view(visible_bounds, axis1_idx, axis2_idx):
             # Skip hidden things
             if self._hidden(thing):
                 continue

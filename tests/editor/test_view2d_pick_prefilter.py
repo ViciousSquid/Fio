@@ -90,3 +90,58 @@ def test_a_marquee_selects_what_testing_every_brush_selected(main_window, monkey
         slow = selections()
     assert any(slow)
     assert [[id(o) for o in a] for a in fast] == [[id(o) for o in b] for b in slow]
+
+
+def _painted(view):
+    from PyQt5.QtGui import QImage, QPainter
+    image = QImage(view.width(), view.height(), QImage.Format_ARGB32)
+    image.fill(0)
+    painter = QPainter(image)
+    view.draw_things(painter, view.get_visible_world_bounds())
+    painter.end()
+    return bytes(image.constBits().asarray(image.sizeInBytes()))
+
+
+def test_draw_things_draws_what_testing_every_thing_drew(main_window, monkeypatch):
+    """draw_things picks the things that may be in view by where they are
+    now; whatever it draws is what testing every thing drew -- moved with no
+    edit (as play moves them), a light's radius changed, zoomed and panned."""
+    from editor.things import Light, Monster, PlayerStart, Speaker
+    from tests.helpers.worlds import make_thing
+    rng = random.Random(3)
+    things = [make_thing(Monster, f"mon{i}", (rng.uniform(-900, 900), 0, rng.uniform(-900, 900)))
+              for i in range(80)]
+    lamp = make_thing(Light, "lamp", (700.0, 64.0, 0.0), radius=150.0)
+    things += [lamp, make_thing(Speaker, "speaker", (-650.0, 0.0, 300.0)),
+               make_thing(PlayerStart, "start", (0.0, 0.0, -700.0))]
+    main_window.state.brushes[:] = []
+    main_window.state.things[:] = things
+    view = main_window.view_top
+    view.view_type = 'top'
+    view.resize(320, 240)
+
+    def frames():
+        out = []
+        for zoom in (0.1, 0.4, 1.5):
+            for pan in ((0.0, 0.0), (650.0, 0.0), (-500.0, 400.0)):
+                view.zoom_factor = zoom
+                view.pan_offset = QPointF(*pan)
+                out.append(_painted(view))
+        return out
+
+    def every_thing(*args):
+        return list(view.editor.state.things)
+
+    def compare():
+        fast = frames()
+        with monkeypatch.context() as m:
+            m.setattr(view, "_things_in_view", every_thing)
+            slow = frames()
+        assert any(any(frame) for frame in slow)       # things were drawn
+        assert fast == slow
+
+    compare()
+    for thing in things[:40]:
+        thing.pos[0] += 333.0                          # moved, no edit
+    lamp.properties["radius"] = 900.0                  # a torch flickering
+    compare()
