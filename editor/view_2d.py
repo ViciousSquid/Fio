@@ -113,6 +113,8 @@ class View2D(QWidget):
         self.drag_group = []
         self.drag_primary = None
         self._object_drag_undo_saved = False
+        # Whether the brush resize under way has taken its undo checkpoint.
+        self._brush_resize_undo_saved = False
 
         # --- Select tool: rubber-band marquee state ---
         # marquee_start/current are world-space (axis1, axis2) points; marquee
@@ -4380,7 +4382,20 @@ class View2D(QWidget):
                     self.last_3d_update_time = current_time
         
         elif self.is_resizing_brush:
-            self.resize_brush(world_pos)
+            if self._brush_resize_undo_saved:
+                self.resize_brush(world_pos)
+            else:
+                # One undo step for the whole resize, taken before its first
+                # change, as a drag's is; a step that changes nothing (the
+                # snap held) leaves no checkpoint behind.
+                brush = self.editor.primary_selection()
+                before = (list(brush['pos']), list(brush['size']))
+                self.main_window.save_state()
+                self.resize_brush(world_pos)
+                if (list(brush['pos']), list(brush['size'])) == before:
+                    self.editor.state.discard_last_checkpoint()
+                else:
+                    self._brush_resize_undo_saved = True
             # Apply same throttle to brush resizing for consistency
             current_time = time.time()
             if current_time - self.last_3d_update_time > 0.016:
@@ -4477,7 +4492,9 @@ class View2D(QWidget):
                             if self.manip_mode == 'rotate' else
                             "Group handles: SCALE (drag a handle to resize)")
                         action_taken = False   # nothing moved; don't stack an undo
-            if self.is_resizing_brush: self.is_resizing_brush = False
+            if self.is_resizing_brush:
+                self.is_resizing_brush = False
+                self._brush_resize_undo_saved = False
 
             # Handle connection completion
             if self.is_connecting:
@@ -4534,7 +4551,17 @@ class View2D(QWidget):
                     self.editor.set_selected_objects([new_brush])
             
             if action_taken:
-                self.main_window.save_state()
+                # The gesture's one undo checkpoint was taken as it began (a
+                # drag's or a resize's first change, before a drawn brush):
+                # what changed in place since is announced as the gizmo does,
+                # with no second checkpoint of the result -- which made the
+                # first Ctrl+Z after a drag do nothing.
+                self.editor.state.mark_world_changed(
+                    tuple(self.editor.state.selected_objects))
+                components = self.main_window.components
+                if components is not None:
+                    components.invalidate()
+                self.main_window.mark_as_modified()
         self.update()
 
     def contextMenuEvent(self, event):
