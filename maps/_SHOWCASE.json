@@ -1661,11 +1661,11 @@
                 0.95,
                 1
             ],
-            "glass_opacity": 0.3,
-            "glass_distortion": 0.97,
-            "glass_refraction": 2.5,
-            "glass_roughness": 0,
-            "glass_fresnel": 0.84,
+            "glass_opacity": 0.61,
+            "glass_distortion": 0.16,
+            "glass_refraction": 2.33,
+            "glass_roughness": 0.8,
+            "glass_fresnel": 0.39,
             "is_trigger": false,
             "id": "dfff1036-5229-4e1b-9172-1f7a8ff39786",
             "hidden": false
@@ -1977,7 +1977,67 @@
             },
             "texture_tiling": true,
             "id": "90c4e0ce-ba59-4321-bfd3-8019be6f5017",
-            "hidden": false
+            "hidden": false,
+            "uv_scale": {
+                "east": [
+                    2.0,
+                    2.0
+                ],
+                "west": [
+                    2.0,
+                    2.0
+                ],
+                "top": [
+                    2.0,
+                    2.0
+                ],
+                "down": [
+                    2.0,
+                    2.0
+                ],
+                "north": [
+                    2.0,
+                    2.0
+                ],
+                "south": [
+                    2.0,
+                    2.0
+                ]
+            },
+            "uv_shift": {
+                "east": [
+                    0.0,
+                    0.0
+                ],
+                "west": [
+                    0.0,
+                    0.0
+                ],
+                "top": [
+                    0.0,
+                    0.0
+                ],
+                "down": [
+                    0.0,
+                    0.0
+                ],
+                "north": [
+                    0.0,
+                    0.0
+                ],
+                "south": [
+                    0.0,
+                    0.0
+                ]
+            },
+            "uv_angle": {
+                "east": 0.0,
+                "west": 0.0,
+                "top": 0.0,
+                "down": 0.0,
+                "north": 0.0,
+                "south": 0.0
+            }
         },
         {
             "pos": [
@@ -8386,6 +8446,82 @@
                 "rotate_angle": 90.0,
                 "rotate_ease": 0.6,
                 "rotate_autostart": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                -639.9822268679923,
+                281.98161481433175,
+                -993.9198681221848
+            ],
+            "properties": {
+                "texture": "compscreen02_256.jpg",
+                "width": 128.0,
+                "height": 128.0,
+                "depth": 32.0,
+                "yaw": -179.36262587372906,
+                "pitch": 2.8286740266372514,
+                "roll": 0.0,
+                "opacity": 1.0,
+                "type": "decal",
+                "io_enabled": true,
+                "name": "Decal_9",
+                "id": "59dea01f-09df-4cd5-914e-c22d2de8d141",
+                "mirrored": false,
+                "tint": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "text": "",
+                "font": "Fio UI",
+                "text_colour": "Black",
+                "text_scale": 1.0,
+                "text_offset_x": 0.0,
+                "text_offset_y": 0.0,
+                "emissive": true,
+                "emissive_intensity": 6.0,
+                "emissive_radius": 512.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "decal",
+            "pos": [
+                -496.0,
+                272.0,
+                -496.0
+            ],
+            "properties": {
+                "texture": "compscreen03.jpg",
+                "width": 128.0,
+                "height": 128.0,
+                "depth": 32.0,
+                "yaw": -90.60140067218056,
+                "pitch": -0.0,
+                "roll": 0.0,
+                "opacity": 1.0,
+                "type": "decal",
+                "io_enabled": true,
+                "name": "Decal_10",
+                "id": "be707eda-a68c-496e-bb8f-4ca7830ec350",
+                "mirrored": false,
+                "tint": [
+                    1.0,
+                    1.0,
+                    1.0
+                ],
+                "text": "",
+                "font": "Fio UI",
+                "text_colour": "Black",
+                "text_scale": 1.0,
+                "text_offset_x": 0.0,
+                "text_offset_y": 0.0,
+                "emissive": true,
+                "emissive_intensity": 5.0,
+                "emissive_radius": 512.0
             },
             "io_connections": []
         }
