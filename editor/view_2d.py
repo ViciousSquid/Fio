@@ -649,7 +649,13 @@ class View2D(QWidget):
             'Display', 'locked_not_selectable_2d', fallback=False)
         hits = []
 
-        for brush in self.editor.state.brushes:
+        # Only the brushes whose box may meet the marquee are tested (a
+        # brush it encloses meets it too); the test below decides, in map
+        # order, as it did for every brush in the map on each mouse move.
+        brushes = self.editor.state.brushes
+        for row in self._brush_rows_touching(r.left(), r.top(), r.right(), r.bottom(),
+                                             i1, i2):
+            brush = brushes[row]
             if self._hidden(brush):
                 continue
             if locked_out and brush.get('lock', False):
@@ -2219,19 +2225,20 @@ class View2D(QWidget):
             picked = np.union1d(picked, np.asarray(extra, dtype=np.intp))
         return [brushes[i] for i in picked.tolist()]
 
-    def _brush_rows_at(self, world_pos, axis1_idx, axis2_idx):
-        """The rows of the brushes that may hold *world_pos* in this view, in
-        map order: every brush get_object_at's exact test can find there (a
-        box holds its edges; one with its corners either way round is
-        normalised), the rows the cull index does not place, and the brushes
-        a tool may be writing in place -- the brush cull's contract above."""
+    def _brush_rows_touching(self, left, top, right, bottom, axis1_idx, axis2_idx):
+        """The rows of the brushes whose box may meet the world rectangle
+        *left*..*right*, *top*..*bottom* in this view, in map order: every brush
+        an exact test of a click (a point: *left* == *right*) or a marquee can
+        find there -- touching counts, and a box with its corners either way
+        round is normalised -- the rows the cull index does not place, and the
+        brushes a tool may be writing in place (the brush cull's contract
+        above)."""
         brushes = self.editor.state.brushes
         _key, bounds, always, groups, rows = self._brush_cull_index(brushes)
-        x, y = world_pos.x(), world_pos.y()
         a, b = bounds[:, axis1_idx], bounds[:, axis1_idx + 3]
         c, d = bounds[:, axis2_idx], bounds[:, axis2_idx + 3]
-        hit = ((np.minimum(a, b) <= x) & (x <= np.maximum(a, b))
-               & (np.minimum(c, d) <= y) & (y <= np.maximum(c, d)))
+        hit = ((np.minimum(a, b) <= right) & (np.maximum(a, b) >= left)
+               & (np.minimum(c, d) <= bottom) & (np.maximum(c, d) >= top))
         hit |= np.isnan(bounds).any(axis=1)
         picked = np.flatnonzero(hit)
         extra = always + self._edited_rows(brushes, groups, rows)
@@ -5130,7 +5137,8 @@ class View2D(QWidget):
         
         brushes = self.editor.state.brushes
         i1, i2 = ax_map[ax1], ax_map[ax2]
-        for row in reversed(self._brush_rows_at(world_pos, i1, i2)):
+        x, y = world_pos.x(), world_pos.y()
+        for row in reversed(self._brush_rows_touching(x, y, x, y, i1, i2)):
             brush = brushes[row]
             if self._hidden(brush):
                 continue

@@ -1,8 +1,9 @@
-"""A click in a 2D view tests only the brushes that may hold the point.
+"""A click or a marquee in a 2D view tests only the brushes that may meet it.
 
-get_object_at asked every brush in the map for its derived bounds on every
-click. The brush cull's bounds array (View2D._brush_cull_index) now picks
-the brushes that may hold the point, and the exact test decides as before:
+get_object_at and the marquee's _objects_in_rect asked every brush in the
+map for its derived bounds on every click and every mouse move. The brush
+cull's bounds array (View2D._brush_cull_index) now picks the brushes that
+may meet the point or rectangle, and the exact test decides as before:
 whatever is picked, and in which order, is what testing every brush gave.
 """
 
@@ -20,7 +21,7 @@ pytestmark = pytest.mark.qt
 
 
 def _every_row(view):
-    return lambda world_pos, i1, i2: list(range(len(view.editor.state.brushes)))
+    return lambda *args: list(range(len(view.editor.state.brushes)))
 
 
 def test_a_click_picks_what_testing_every_brush_picked(main_window, monkeypatch):
@@ -51,7 +52,7 @@ def test_a_click_picks_what_testing_every_brush_picked(main_window, monkeypatch)
     fast_moved = picks()
 
     with monkeypatch.context() as m:
-        m.setattr(view, "_brush_rows_at", _every_row(view))
+        m.setattr(view, "_brush_rows_touching", _every_row(view))
         moved['pos'][0] -= 200.0
         main_window.state.selected_objects = []
         slow = picks()
@@ -62,3 +63,30 @@ def test_a_click_picks_what_testing_every_brush_picked(main_window, monkeypatch)
     assert any(p is not None for p in slow)
     assert all(a is b for a, b in zip(fast, slow)) and len(fast) == len(slow)
     assert all(a is b for a, b in zip(fast_moved, slow_moved))
+
+
+def test_a_marquee_selects_what_testing_every_brush_selected(main_window, monkeypatch):
+    from PyQt5.QtCore import QRectF
+    rng = random.Random(11)
+    brushes = [box_brush(f"m{i}", (rng.uniform(-600, 600), 0, rng.uniform(-600, 600)),
+                         (rng.choice([0.0, 16.0, 64.0, 300.0]), 64.0,
+                          rng.choice([0.0, 16.0, 64.0, 300.0])))
+               for i in range(150)]
+    brushes.append(box_brush("touching", (100, 0, 0), (100, 64, 100)))  # x 50..150
+    main_window.state.brushes[:] = brushes
+    main_window.state.things[:] = []
+    view = main_window.view_top
+    view.view_type = 'top'
+    rects = [QRectF(rng.uniform(-700, 700), rng.uniform(-700, 700),
+                    rng.uniform(-400, 400), rng.uniform(-400, 400)) for _ in range(60)]
+    rects += [QRectF(150, -10, 50, 20), QRectF(0, 0, 0, 0), QRectF(50, -50, 100, 100)]
+
+    def selections():
+        return [view._objects_in_rect(r, enclose=e) for r in rects for e in (False, True)]
+
+    fast = selections()
+    with monkeypatch.context() as m:
+        m.setattr(view, "_brush_rows_touching", _every_row(view))
+        slow = selections()
+    assert any(slow)
+    assert [[id(o) for o in a] for a in fast] == [[id(o) for o in b] for b in slow]
