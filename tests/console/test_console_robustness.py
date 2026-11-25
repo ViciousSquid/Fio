@@ -112,3 +112,18 @@ def test_a_hand_edited_binding_with_a_bare_percent_still_loads(main_window, tmp_
     fresh = type("Fresh", (), {"config": config, "key_bindings": {}})()
     type(main_window).load_key_bindings(fresh)
     assert fresh.key_bindings == {"F8": "message 50% off"}
+
+
+def test_a_big_world_save_is_loaded_without_building_a_base_level(main_window, monkeypatch):
+    """A Big World save is restored from its own per-cell registry, never
+    diffed against the map: the base level (the whole map read and
+    normalised) is built only for a save that can use it."""
+    handler = main_window.console_handler
+    built = []
+    monkeypatch.setattr(handler, "_base_level",
+                        lambda: built.append(1) or {"brushes": [], "things": []})
+    assert handler._base_level_for_save("unused", {"world_mode": "bigworld"}) is None
+    assert not built
+    assert handler._base_level_for_save("unused", {"save_mode": "delta"}) == {
+        "brushes": [], "things": []}
+    assert built == [1]

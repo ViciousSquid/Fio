@@ -2796,6 +2796,23 @@ class ConsoleCommandHandler:
             pass
         return 'full'
 
+    def _base_level_for_save(self, path, data=None):
+        """The base level a load of the save at *path* diffs against: None
+        for a Big World save, which is restored from its own per-cell
+        registry and never compared with the map
+        (``savegame.restore_auto``) -- building it reads and normalises the
+        whole map, over a second on the shipped overworld. *data* is the
+        save when the caller has it already."""
+        from engine import savegame
+        if data is None:
+            try:
+                data = savegame.read(path)
+            except Exception:
+                data = None                 # the load reports it
+        if isinstance(data, dict) and data.get('world_mode') == savegame.WORLD_MODE_BIGWORLD:
+            return None
+        return self._base_level()
+
     def _base_level(self):
         """The normalized *original* map document, for delta diffing.
 
@@ -2870,7 +2887,7 @@ class ConsoleCommandHandler:
                 debug_log("Error", "load: no active play session.")
                 return
             ok, msg = lt.session_runtime.load_session(path, map_name=self._current_map_name(),
-                                       base_level=self._base_level())
+                                       base_level=self._base_level_for_save(path))
             debug_log("Info" if ok else "Error", msg)
             if ok:
                 self.main_window.show_toast(f"Loaded: {os.path.basename(path)}", level='success')
@@ -2926,7 +2943,7 @@ class ConsoleCommandHandler:
             debug_log("Error", "load: no active play session after entering play.")
             return
         ok, msg = lt.session_runtime.load_session(path, map_name=self._current_map_name(),
-                                  base_level=self._base_level())
+                                  base_level=self._base_level_for_save(path, data))
         if not ok and 'different base map' in (msg or ''):
             # Genuinely ambiguous: a delta whose base map we couldn't reconcile.
             # This is the one case where automatic recovery isn't safe — ask.
